@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Node / TypeScript
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# AWS
+.aws/
+*.pem
+*_accessKeys.csv
+*accessKeys*
+
+# Secrets — never commit
+*.key
+*secret*
+*credential*
+*private_key*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+tests/fixtures/
+tests/tmp/
