@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+itsdangerous>=2.1
+cryptography>=42.0
+web3>=6.15
+boto3>=1.34
