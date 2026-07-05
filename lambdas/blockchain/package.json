@@ -1,0 +1,22 @@
+{
+  "name": "@xinsere/blockchain",
+  "version": "0.1.0",
+  "description": "Xinsere blockchain permission service — grant/revoke/verify/audit on Polygon (Amoy) via the XinserePermissions contract",
+  "type": "module",
+  "main": "src/handler.ts",
+  "scripts": {
+    "test": "tsx test/chain.ts",
+    "test:smoke": "tsx test/chain.ts --read-only",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.632.0",
+    "ethers": "^6.13.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "dotenv": "^16.4.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}

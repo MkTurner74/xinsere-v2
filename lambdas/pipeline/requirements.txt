@@ -1,0 +1,5 @@
+# Core crypto — required for the pipeline and local backends (offline tests).
+cryptography>=42.0
+
+# AWS backends only (S3 / KMS / DynamoDB). Not needed to run the local test matrix.
+boto3>=1.34
