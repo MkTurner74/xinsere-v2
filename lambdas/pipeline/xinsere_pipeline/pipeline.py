@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -63,6 +64,7 @@ class PipelineService:
         *,
         fragment_count: int = DEFAULT_FRAGMENT_COUNT,
         route_mode: str = ROUTE_MODULAR,
+        max_workers: int | None = None,
     ) -> None:
         if fragment_count not in ALLOWED_FRAGMENT_COUNTS:
             raise ValueError(
@@ -73,6 +75,10 @@ class PipelineService:
         self._index = index_store
         self._n = fragment_count
         self._mode = route_mode
+        # Fragments are processed concurrently — AES-GCM and disk/S3 I/O both
+        # release the GIL, so threads give real parallelism. One worker per
+        # fragment, capped by CPU count.
+        self._workers = max_workers or min(fragment_count, os.cpu_count() or 4)
 
     # --- Store ---------------------------------------------------------------
 
@@ -93,25 +99,17 @@ class PipelineService:
         buckets = self._objects.buckets()
         jitter = int.from_bytes(os.urandom(2), "big")  # per-file routing jitter
 
-        for seq, frag in enumerate(fragments):
-            data_key, wrapped = self._keys.generate_data_key()
-            nonce = os.urandom(NONCE_BYTES)
-            ciphertext = AESGCM(data_key).encrypt(nonce, frag, None)
-            # Fragment id carries a UUID + sequence only — no link to the file.
-            fragment_id = f"{uuid.uuid4().hex}_{seq}"
-            bucket = fragmenter.route(seq, buckets, mode=self._mode, jitter=jitter)
+        # Encrypt + scatter every fragment concurrently; .result() order matches
+        # submit order, so records stay in sequence. Any worker error propagates.
+        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+            futures = [
+                pool.submit(self._encrypt_and_store, file_id, seq, frag, buckets, jitter)
+                for seq, frag in enumerate(fragments)
+            ]
+            records = [f.result() for f in futures]
 
-            self._objects.put(bucket, fragment_id, ciphertext)
-            self._index.put_fragment(
-                FragmentRecord(
-                    file_id=file_id,
-                    sequence=seq,
-                    fragment_id=fragment_id,
-                    bucket=bucket,
-                    wrapped_key=wrapped,
-                    nonce=nonce,
-                )
-            )
+        for rec in records:
+            self._index.put_fragment(rec)
 
         self._index.put_file(
             FileRecord(
@@ -125,6 +123,19 @@ class PipelineService:
             )
         )
         return StoreResult(file_id, file_sha, self._n, _now_iso())
+
+    def _encrypt_and_store(self, file_id, seq, frag, buckets, jitter) -> FragmentRecord:
+        """Worker: fresh key -> AES-256-GCM encrypt -> write to a bucket."""
+        data_key, wrapped = self._keys.generate_data_key()
+        nonce = os.urandom(NONCE_BYTES)
+        ciphertext = AESGCM(data_key).encrypt(nonce, frag, None)
+        fragment_id = f"{uuid.uuid4().hex}_{seq}"  # UUID + seq only; no file link
+        bucket = fragmenter.route(seq, buckets, mode=self._mode, jitter=jitter)
+        self._objects.put(bucket, fragment_id, ciphertext)
+        return FragmentRecord(
+            file_id=file_id, sequence=seq, fragment_id=fragment_id,
+            bucket=bucket, wrapped_key=wrapped, nonce=nonce,
+        )
 
     # --- Retrieve ------------------------------------------------------------
 
@@ -141,27 +152,30 @@ class PipelineService:
                 f"expected {file_rec.fragment_count} fragments, found {len(frags)}"
             )
 
-        plaintext_fragments: list[bytes] = []
-        for fr in frags:
-            try:
-                ciphertext = self._objects.get(fr.bucket, fr.fragment_id)
-            except (KeyError, FileNotFoundError) as exc:
-                raise XinsereIntegrityError(
-                    f"fragment object missing: seq {fr.sequence}"
-                ) from exc
-            try:
-                data_key = self._keys.decrypt_data_key(fr.wrapped_key)
-                plaintext_fragments.append(AESGCM(data_key).decrypt(fr.nonce, ciphertext, None))
-            except InvalidTag as exc:
-                raise XinsereIntegrityError(
-                    f"fragment key/ciphertext failed authentication (tampered?): seq {fr.sequence}"
-                ) from exc
+        # Read + decrypt every fragment concurrently; map() preserves order and
+        # re-raises any worker error (missing fragment, tamper) to the caller.
+        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+            plaintext_fragments = list(pool.map(self._read_and_decrypt, frags))
 
         content = fragmenter.join(plaintext_fragments)
         if _sha256_hex(content) != file_rec.file_sha256:
             raise XinsereIntegrityError("reassembled file failed SHA-256 check")
 
         return RetrieveResult(content, file_rec.content_type, file_rec.file_sha256)
+
+    def _read_and_decrypt(self, fr: FragmentRecord) -> bytes:
+        """Worker: read a fragment -> unwrap key -> AES-256-GCM decrypt."""
+        try:
+            ciphertext = self._objects.get(fr.bucket, fr.fragment_id)
+        except (KeyError, FileNotFoundError) as exc:
+            raise XinsereIntegrityError(f"fragment object missing: seq {fr.sequence}") from exc
+        try:
+            data_key = self._keys.decrypt_data_key(fr.wrapped_key)
+            return AESGCM(data_key).decrypt(fr.nonce, ciphertext, None)
+        except InvalidTag as exc:
+            raise XinsereIntegrityError(
+                f"fragment key/ciphertext failed authentication (tampered?): seq {fr.sequence}"
+            ) from exc
 
     # --- Existence / lifecycle ----------------------------------------------
 
