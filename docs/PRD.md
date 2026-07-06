@@ -44,9 +44,12 @@ The DPD core is built and tested. Reference implementation lives in this repo
   isolation, MCP server, forensic watermarking.
 
 ### Next in dev (priority order)
-1. **Finish security cleanup (Phase 0).** `AKIAQ3EGU6BLQUWCCQGV` deactivated
-   2026-07-05; **two keys remain** (`AKIARX7FHY4OVVELQM4Z`, `AKIARX7FHY4OQKZ2FLDY`)
-   — deactivate/delete + scrub from git history.
+1. **Finish security cleanup (Phase 0).** `AKIAQ3EGU6BLQUWCCQGV` (Mark's acct
+   058264449111) deactivated 2026-07-05. The other two (`AKIARX7FHY4OVVELQM4Z`,
+   `AKIARX7FHY4OQKZ2FLDY`) belong to **Max's account 120202970909** (0 events in
+   Mark's acct) — **Max must** deactivate/delete + scrub the POC repo/history.
+   *Optional demo add:* wire on-chain permission **expiry** (contract already
+   supports `expiryTime`; demo hardcodes 0) — end-dated grants, no revoke needed.
 2. **Deploy the hosted demo (v2).** Pick host, set signer secret — lets J&J self-serve.
 3. **Add revoke to the demo.** Contract supports it; surface grant *and* revoke so
    the demo shows access being cut off on-chain.
