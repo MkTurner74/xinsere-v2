@@ -59,6 +59,27 @@ The DPD core is built and tested. Reference implementation lives in this repo
 6. **Deeper patent differentiators:** fail-closed revocation cache, federated
    identity (OIDC/SAML), size-based large-file routing, forensic watermarking.
 
+### Planned capability: temporal access windows (timed shares & embargo release)
+
+Permissions carry a time window `[active_from, expiry]`, enforced on-chain against
+the block timestamp:
+
+- **Expiry / end date — already in the contract.** `verify()` returns false once
+  `block.timestamp > expiryTime` (0 = no expiry); an expired grant self-denies with
+  no revoke transaction. (Demo currently passes 0; wiring a date picker is small.)
+- **Activation / start time (`not_before`) — to add.** Requires an `active_from`
+  field on the `PermissionRecord` struct and a `block.timestamp >= active_from`
+  check in `verify()`, then a contract redeploy (immutable).
+
+**Why it matters — synchronized embargo release.** Pre-stage N encrypted documents
+and pre-grant access to M recipients, every grant carrying the same `active_from =
+T_release`. The fragments sit fully distributed but cryptographically inaccessible;
+at `T_release` all M recipients gain access to all N documents **simultaneously**,
+with no action at release time and no possibility of early access — enforced by the
+ledger, not by the operator withholding data. Target use cases: film/media releases,
+press embargoes, financial/regulatory disclosures, simultaneous multi-party reveals.
+(Covered by CIP patent Embodiment 10 / Claims 60–64.)
+
 ---
 
 ## Why redesign
