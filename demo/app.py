@@ -23,7 +23,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import supa
 from chain import CHAIN
-from store import get_pipeline, XinsereIntegrityError
+from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
+                   read_staged, delete_staged, MAX_INLINE_BYTES)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION_SECRET = os.environ.get("XINSERE_SESSION_SECRET", "xinsere-demo-dev-secret")
@@ -226,6 +227,55 @@ async def upload(request: Request):
                                 content_type=f.content_type or "application/octet-stream")
         created.append(node_view(node, uid, token, pmap))
     return {"created": created, "count": len(created)}
+
+
+# --- direct-to-S3 upload (no 4.5 MB function cap) ---------------------------
+
+@app.post("/api/upload-url")
+async def upload_url(request: Request, parent: str = Form(...)):
+    """Issue a presigned PUT so the browser uploads the raw file straight to the
+    staging bucket. Only this tiny request touches the function."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    parent_node = supa.get_node(token, parent)
+    if not parent_node or parent_node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="Upload only into your own folders")
+    key, url = presign_put(uid)
+    return {"key": key, "url": url, "method": "PUT"}
+
+
+@app.post("/api/finalize-upload")
+async def finalize_upload(request: Request, key: str = Form(...), name: str = Form(...),
+                          parent: str = Form(...), path: str = Form(""),
+                          content_type: str = Form("application/octet-stream")):
+    """Pull the staged file, run it through the pipeline, index it, drop the staging
+    copy. `path` (optional) carries a relative path for folder uploads."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    if not key.startswith(f"staging/{uid}/"):
+        raise HTTPException(status_code=403, detail="Not your staged upload")
+    parent_node = supa.get_node(token, parent)
+    if not parent_node or parent_node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="Upload only into your own folders")
+    try:
+        size = staged_size(key)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Staged file not found — the upload may have failed")
+    if size > MAX_INLINE_BYTES:
+        delete_staged(key)
+        raise HTTPException(status_code=413,
+                            detail=f"File too large to process here ({size} bytes); limit is {MAX_INLINE_BYTES}")
+    rel = (path or name).replace("\\", "/")
+    subdir = os.path.dirname(rel)
+    fname = os.path.basename(rel) or name
+    target = supa.ensure_path(token, subdir, parent, uid) if subdir else parent
+    content = read_staged(key)
+    res = get_pipeline().store(content, content_type, label=fname)
+    node = supa.insert_file(token, fname, target, uid, file_id=res.file_id,
+                            sha256=res.file_sha256, size=len(content),
+                            frags=res.fragment_count, content_type=content_type)
+    delete_staged(key)
+    return node_view(node, uid, token, _profiles_map(token))
 
 
 # --- share / download -------------------------------------------------------

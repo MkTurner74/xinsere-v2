@@ -8,6 +8,12 @@
       "Resource": "arn:aws:s3:::xinsere-dev-frag-*/*"
     },
     {
+      "Sid": "S3Staging",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::xinsere-dev-staging/*"
+    },
+    {
       "Sid": "KmsEnvelope",
       "Effect": "Allow",
       "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
