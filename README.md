@@ -52,7 +52,10 @@ Full architecture: [docs/PRD.md](docs/PRD.md)
 
 ## Status
 
-**Pre-build.** Phase 0 (security cleanup) in progress. See [docs/PRD.md](docs/PRD.md) for build plan and testing matrix.
+**In build (2026-07-06).** DPD core built + tested: contract live on Polygon Amoy,
+blockchain permission service (14/14), file-fragment pipeline (18/18), and a working
+demo (`demo/`) with real accounts + on-chain-gated share/download. See the
+**Implementation Status** and **Next in dev** sections of [docs/PRD.md](docs/PRD.md).
 
 ---
 

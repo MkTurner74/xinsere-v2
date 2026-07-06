@@ -1,9 +1,60 @@
 # Xinsere — Product Redesign
 ## Serverless API + MCP Service, Botverse Edition
 
-**Version:** 0.2 — Draft  
-**Date:** 2026-05-14  
-**Status:** Architecture design — pre-build
+**Version:** 0.3  
+**Date:** 2026-05-14 (implementation status added 2026-07-06)  
+**Status:** In build — core DPD pipeline, blockchain permissions, and a working demo are implemented and tested. See Implementation Status below.
+
+---
+
+## Implementation Status — 2026-07-06
+
+The DPD core is built and tested. Reference implementation lives in this repo
+(`lambdas/`, `demo/`); a working end-to-end demo runs today.
+
+### Built & tested
+- **Smart contract** — `XinserePermissions` deployed to **Polygon Amoy** testnet:
+  `0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD`. grant / revoke / verify / audit +
+  immutable events. (Mumbai was decommissioned; switched to Amoy.)
+- **Blockchain permission service** — `lambdas/blockchain` (Node/TS + ethers).
+  Wallet from Secrets Manager; Amoy ≥25 gwei gas floor. **Chain test 14/14.**
+- **File-fragment pipeline** — `lambdas/pipeline` (Python). Strip metadata →
+  SHA-256 → split N → per-fragment **AES-256-GCM** → scatter → index. **Pluggable
+  backends** (local for test; S3/KMS/DynamoDB written, untested pending infra).
+  **Parallelized** (ThreadPoolExecutor over fragments). **Test matrix 18/18.**
+- **End-to-end integrity** — whole-file SHA-256 checked pre-encryption and
+  post-reassembly (bit-perfect or fail-closed); per-fragment GCM tamper detection.
+- **Working demo** — `demo/` (FastAPI). File-explorer UI, drag-drop upload,
+  folders, **real accounts** (signup/login), share → **real on-chain grant**,
+  download gated by on-chain **verify()**. Deploy-ready (Dockerfile + render.yaml).
+- **Benchmarks** — `demo/benchmark.py`. Pipeline ~360–450 MB/s (to 1 GB); Amoy
+  read ~0.7 s, write ~1.2 s. See `projects/Xinsere/benchmark-results.md` (Docs repo).
+
+### Divergences from the target architecture (design intent, not yet built)
+- **Storage:** demo uses local pipeline backends, not S3/KMS/DynamoDB (P0 infra,
+  AWS-team-owned). AWS backends are written but untested.
+- **Network:** Amoy testnet, not Polygon PoS mainnet.
+- **Auth:** demo uses email/password, not federated OIDC/SAML.
+- **Permissions:** demo verifies direct-from-chain; the fail-closed local cache
+  (Emb. 4 of the CIP) is not built.
+- **Parallelism:** real, but large-file gains need the parallel-S3 path (single
+  local disk is I/O-bound). Fragment count fixed/selectable (3/5/7/11/16), not
+  adaptive.
+- Not built: size-based Lambda/Fargate routing, malware scan, multi-tenant CMK
+  isolation, MCP server, forensic watermarking.
+
+### Next in dev (priority order)
+1. **Finish security cleanup (Phase 0).** `AKIAQ3EGU6BLQUWCCQGV` deactivated
+   2026-07-05; **two keys remain** (`AKIARX7FHY4OVVELQM4Z`, `AKIARX7FHY4OQKZ2FLDY`)
+   — deactivate/delete + scrub from git history.
+2. **Deploy the hosted demo (v2).** Pick host, set signer secret — lets J&J self-serve.
+3. **Add revoke to the demo.** Contract supports it; surface grant *and* revoke so
+   the demo shows access being cut off on-chain.
+4. **Wire AWS backends** (S3/KMS/DynamoDB) once P0 infra exists → real parallel-S3
+   throughput + multi-tenant CMK isolation.
+5. **MCP server** (`@xinsere/mcp`) — the AI-agent product surface (see mcp-spec).
+6. **Deeper patent differentiators:** fail-closed revocation cache, federated
+   identity (OIDC/SAML), size-based large-file routing, forensic watermarking.
 
 ---
 
