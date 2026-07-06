@@ -26,7 +26,6 @@ CHAIN_ID = int(os.environ.get("XINSERE_CHAIN_ID", "80002"))
 CONTRACT = os.environ.get("XINSERE_CONTRACT_ADDRESS", "0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD")
 SECRET_ID = os.environ.get("XINSERE_SECRET_ID", "xinsere/blockchain/polygon-mumbai/private-key")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-TENANT_SALT = os.environ.get("XINSERE_TENANT_SALT", "dev-tenant-salt-change-me")
 PRIORITY_GWEI = int(os.environ.get("XINSERE_PRIORITY_FEE_GWEI", "30"))
 MAXFEE_GWEI = int(os.environ.get("XINSERE_MAX_FEE_GWEI", "50"))
 
@@ -43,8 +42,26 @@ def file_hash(file_id: str) -> bytes:
     return hashlib.sha256(file_id.encode()).digest()
 
 
+def _tenant_salt() -> str:
+    """The HMAC salt for grantee hashing. Env override wins; otherwise the
+    canonical value from the tenant secret (so grants verify cross-service).
+    QC note: confirm the Node blockchain service encodes this salt the same way
+    (UTF-8 string vs hex bytes) — a mismatch would break cross-service verify()."""
+    env = os.environ.get("XINSERE_TENANT_SALT")
+    if env:
+        return env
+    try:
+        from xinsere_pipeline.tenant import load_tenant_config
+        salt = load_tenant_config().get("hmac_party_id_salt")
+        if salt:
+            return salt
+    except Exception:
+        pass
+    return "dev-tenant-salt-change-me"  # local-only fallback
+
+
 def grantee_hash(grantee_id: str) -> bytes:
-    return hmac.new(TENANT_SALT.encode(), grantee_id.encode(), hashlib.sha256).digest()
+    return hmac.new(_tenant_salt().encode(), grantee_id.encode(), hashlib.sha256).digest()
 
 
 def _load_key() -> str:

@@ -30,28 +30,83 @@ class KmsKeyManager(KeyManager):
         return self._kms.decrypt(CiphertextBlob=wrapped_key)["Plaintext"]
 
 
+# Bucket-name segment -> AWS region. Fragment buckets are named
+# `xinsere-dev-frag-<seg>-NN`; the segment encodes the region so we can pick the
+# right regional S3 client without a metadata call. Unknown buckets fall back to
+# GetBucketLocation.
+_SEGMENT_REGION = {
+    "use1": "us-east-1", "use2": "us-east-2",
+    "usw1": "us-west-1", "usw2": "us-west-2",
+    "cac1": "ca-central-1",
+}
+
+
 class S3ObjectStore(ObjectStore):
-    def __init__(self, bucket_names: list[str], s3_client=None) -> None:
+    """Multi-bucket S3 store spanning several AWS regions.
+
+    A single-region S3 client cannot PUT to a bucket in another region without a
+    redirect/signing error, and the Xinsere fragment buckets are deliberately
+    scattered across regions. So we keep one client per region and route each
+    bucket to its own regional client. Region is inferred from the bucket-name
+    segment (fast, no API call); anything unrecognized is resolved once via
+    GetBucketLocation and cached.
+    """
+
+    def __init__(self, bucket_names: list[str], client_factory=None,
+                 default_region: str = "us-east-1") -> None:
         self._names = list(bucket_names)
-        self._s3 = s3_client or boto3.client("s3")
+        self._default_region = default_region
+        # client_factory(region) -> boto3 s3 client; overridable for tests.
+        self._factory = client_factory or (lambda region: boto3.client("s3", region_name=region))
+        self._clients: dict[str, object] = {}   # region -> client
+        self._bucket_region: dict[str, str] = {}  # bucket -> region (cache)
 
     def buckets(self) -> list[str]:
         return list(self._names)
 
+    def _region_for(self, bucket: str) -> str:
+        cached = self._bucket_region.get(bucket)
+        if cached:
+            return cached
+        region = None
+        parts = bucket.split("-")
+        for seg in parts:
+            if seg in _SEGMENT_REGION:
+                region = _SEGMENT_REGION[seg]
+                break
+        if region is None:
+            # Authoritative fallback. us-east-1 reports LocationConstraint=None.
+            loc = self._client(self._default_region).get_bucket_location(
+                Bucket=bucket).get("LocationConstraint")
+            region = loc or "us-east-1"
+        self._bucket_region[bucket] = region
+        return region
+
+    def _client(self, region: str):
+        client = self._clients.get(region)
+        if client is None:
+            client = self._factory(region)
+            self._clients[region] = client
+        return client
+
+    def _for(self, bucket: str):
+        return self._client(self._region_for(bucket))
+
     def put(self, bucket: str, key: str, data: bytes) -> None:
-        # SSE-KMS enforced at the bucket level (P0-08); no plaintext at rest.
-        self._s3.put_object(Bucket=bucket, Key=key, Body=data)
+        # Buckets enforce SSE (SSE-S3/AES256) at rest; fragment payloads are also
+        # already client-side envelope-encrypted (AES-256-GCM) before they arrive.
+        self._for(bucket).put_object(Bucket=bucket, Key=key, Body=data)
 
     def get(self, bucket: str, key: str) -> bytes:
         try:
-            return self._s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+            return self._for(bucket).get_object(Bucket=bucket, Key=key)["Body"].read()
         except ClientError as exc:
             if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
                 raise FileNotFoundError(f"s3://{bucket}/{key}") from exc
             raise
 
     def delete(self, bucket: str, key: str) -> None:
-        self._s3.delete_object(Bucket=bucket, Key=key)
+        self._for(bucket).delete_object(Bucket=bucket, Key=key)
 
 
 class DynamoIndexStore(IndexStore):
