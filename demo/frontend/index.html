@@ -86,6 +86,8 @@
   .tile .nm{font-size:0.88rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .tile .mt{font-size:0.72rem;color:var(--muted);margin-top:4px;font-variant-numeric:tabular-nums;}
   .tile .secured{color:var(--mint);}
+  .tile .sha{font-size:0.66rem;color:var(--faint);margin-top:6px;font-family:"JetBrains Mono",ui-monospace,"Consolas",monospace;letter-spacing:-0.02em;}
+  .tile .sha b{color:var(--mint);font-weight:600;}
   .tile .acts{display:flex;gap:6px;margin-top:12px;}
   .tile .acts .mini{font-size:0.74rem;font-weight:600;padding:6px 10px;border-radius:8px;border:1px solid var(--edge-strong);background:transparent;color:var(--word);}
   .tile .acts .mini:hover{background:var(--panel-2);}
@@ -291,16 +293,11 @@ function renderGrid(children, canManage){
       if(canManage && n.owner===ME.id) t.appendChild(shareBtnRow(n));
     } else {
       t.innerHTML=`<div class="ic">${iconFor(n.name)}</div><div class="nm" title="${n.name}">${n.name}</div>
-        <div class="mt"><span class="secured">● Secured</span> · ${n.frags} frags · ${fmtSize(n.size)}</div>`;
+        <div class="mt"><span class="secured">● Secured</span> · ${n.frags} frags · ${fmtSize(n.size)}</div>
+        ${n.sha256?`<div class="sha" title="SHA-256 taken before encryption; re-checked on download">SHA-256 ${n.sha256.slice(0,12)}…</div>`:""}`;
       const acts=document.createElement("div"); acts.className="acts";
       const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-      dl.onclick=async ()=>{
-        toast("Checking permission on-chain…");
-        const r=await api("/api/verify/"+n.id); const v=await r.json();
-        if(!v.allowed){ toast("Blockchain: no active grant for you ✗"); return; }
-        toast(v.source==="owner" ? "Reassembling & verifying…" : "Blockchain verified ✓ — reassembling…");
-        window.location="/api/download/"+n.id;
-      };
+      dl.onclick=()=>downloadFile(n);
       acts.appendChild(dl);
       if(canManage && n.owner===ME.id){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); }
       t.appendChild(acts);
@@ -320,6 +317,22 @@ function sharedAvatars(n){ const s=document.createElement("div"); s.className="s
   if(tx){ const full=tx.startsWith("0x")?tx:"0x"+tx; const p=document.createElement("a"); p.className="proof";
     p.href="https://amoy.polygonscan.com/tx/"+full; p.target="_blank"; p.rel="noopener";
     p.textContent="on-chain proof · "+full.slice(0,12)+"…"; p.title="View this grant on PolygonScan"; s.appendChild(p);} return s; }
+
+/* ---- download (on-chain check -> fetch -> verify bit-perfect) ---- */
+async function downloadFile(n){
+  toast("Checking permission on-chain…");
+  const rv=await api("/api/verify/"+n.id); const v=await rv.json();
+  if(!v.allowed){ toast("Blockchain: no active grant for you ✗"); return; }
+  toast(v.source==="owner" ? "Reassembling & verifying…" : "Blockchain verified ✓ — reassembling…");
+  const r=await api("/api/download/"+n.id);
+  if(!r.ok){ let m="Download failed"; try{ m=(await r.json()).error||m; }catch(e){} toast("✗ "+m); return; }
+  const sha=r.headers.get("X-Content-SHA256")||"";
+  const blob=await r.blob();
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download=n.name; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast("✓ Bit-perfect — SHA-256 verified"+(sha?" · "+sha.slice(0,10)+"…":""));
+}
 
 /* ---- create / upload ---- */
 $("#new-folder").addEventListener("click", async ()=>{

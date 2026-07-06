@@ -17,9 +17,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
-from demo_store import STORE
+from demo_store import STORE  # sets up the pipeline import path
 from auth import USERS_DB
 from chain import CHAIN
+from xinsere_pipeline import XinsereIntegrityError
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION_SECRET = os.environ.get("XINSERE_SESSION_SECRET", "xinsere-demo-dev-secret")
@@ -55,7 +56,8 @@ def node_view(node: dict, viewer: str) -> dict:
     }
     if node["type"] == "file":
         v.update(size=node.get("size", 0), frags=node.get("frags", 7),
-                 content_type=node.get("content_type", "application/octet-stream"))
+                 content_type=node.get("content_type", "application/octet-stream"),
+                 sha256=node.get("sha", ""))
     if node["owner"] == viewer:
         shares = STORE.shares_for_node(node["id"])
         v["shared_with"] = [
@@ -235,11 +237,22 @@ async def download(request: Request, node_id: str):
         has, _granted_at = CHAIN.verify(node["file_id"], user)
         if not has:
             raise HTTPException(status_code=403, detail="No active on-chain grant for you")
-    content, content_type = STORE.retrieve(node)  # reassembled + SHA-256 verified
+    # retrieve() recomputes the whole-file SHA-256 and raises if the reassembled
+    # bytes are not bit-perfect. We surface that as a clean 422 instead of a 500,
+    # and expose the verified hash so the client can display the guarantee.
+    try:
+        content, content_type = STORE.retrieve(node)
+    except XinsereIntegrityError as exc:
+        raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
     return StreamingResponse(
         io.BytesIO(content),
         media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{node["name"]}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{node["name"]}"',
+            "X-Content-SHA256": node.get("sha", ""),
+            "X-Integrity": "verified-bit-perfect",
+            "Access-Control-Expose-Headers": "X-Content-SHA256, X-Integrity",
+        },
     )
 
 
