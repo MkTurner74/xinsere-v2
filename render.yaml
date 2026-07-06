@@ -1,0 +1,27 @@
+# Render blueprint for the Xinsere hosted demo.
+# Push to GitHub, then in Render: New > Blueprint > pick this repo.
+services:
+  - type: web
+    name: xinsere-demo
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # persistent disk requires a paid instance
+    healthCheckPath: /
+    disk:
+      name: xinsere-data   # users.db + encrypted fragments + index
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: XINSERE_DATA_DIR
+        value: /data
+      - key: XINSERE_SESSION_SECRET
+        generateValue: true          # random per deploy
+      - key: AWS_REGION
+        value: us-east-1
+      # The Amoy signer key for on-chain grants. Set this in the Render dashboard
+      # (Environment > Secret). Use the burned testnet wallet, NOT a mainnet key.
+      - key: XINSERE_PRIVATE_KEY
+        sync: false
+      # Network defaults are baked into the code; override here only if needed.
+      # - key: XINSERE_RPC_URL
+      #   value: https://rpc-amoy.polygon.technology

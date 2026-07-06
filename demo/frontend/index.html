@@ -35,8 +35,10 @@
   .field input{width:100%;margin-top:5px;padding:11px 13px;border-radius:10px;background:rgba(0,0,0,0.28);
     border:1px solid var(--edge);color:var(--text);font:inherit;}
   .field input:focus{outline:2px solid var(--violet);border-color:transparent;}
-  .login-hint{font-size:0.74rem;color:var(--faint);margin-top:14px;line-height:1.5;}
+  .login-hint{font-size:0.74rem;color:var(--faint);margin-top:14px;line-height:1.6;}
   .login-err{color:var(--coral);font-size:0.8rem;min-height:1.1em;margin-top:8px;}
+  .linkbtn{background:none;border:0;color:var(--word);font:inherit;font-size:0.74rem;cursor:pointer;padding:0;text-decoration:underline;}
+  .linkbtn:hover{color:var(--text);}
 
   .btn{font-size:0.85rem;font-weight:600;border-radius:10px;padding:10px 16px;border:1px solid transparent;transition:filter .15s,background .15s;color:#fff;background:linear-gradient(135deg,var(--violet-br),var(--violet));box-shadow:0 6px 18px -8px var(--violet);}
   .btn:hover{filter:brightness(1.08);}
@@ -137,16 +139,29 @@
 
 <!-- LOGIN -->
 <div id="login">
-  <form class="login-card" id="login-form">
+  <div class="login-card">
     <span id="login-mark"></span>
     <div class="word">Xinsere</div>
     <p>Secure files. Shared with proof.</p>
-    <div class="field"><label>Username</label><input id="u" autocomplete="username" value="mark"></div>
-    <div class="field"><label>Password</label><input id="p" type="password" autocomplete="current-password" value="xinsere"></div>
-    <button class="btn full" type="submit">Sign in</button>
+
+    <form id="login-form">
+      <div class="field"><label>Email or username</label><input id="u" autocomplete="username" placeholder="you@company.com" value="mark"></div>
+      <div class="field"><label>Password</label><input id="p" type="password" autocomplete="current-password" value="xinsere"></div>
+      <button class="btn full" type="submit">Sign in</button>
+      <div class="login-hint">New here? <button type="button" class="linkbtn" id="to-signup">Create an account</button><br>
+        Demo users: <b>mark</b> · <b>jeremy</b> · <b>joshua</b> — password <b>xinsere</b></div>
+    </form>
+
+    <form id="signup-form" class="hidden">
+      <div class="field"><label>Your name</label><input id="s-name" autocomplete="name" placeholder="Ada Lovelace"></div>
+      <div class="field"><label>Email</label><input id="s-email" autocomplete="email" placeholder="you@company.com"></div>
+      <div class="field"><label>Password</label><input id="s-pass" type="password" autocomplete="new-password" placeholder="at least 6 characters"></div>
+      <button class="btn full" type="submit">Create account</button>
+      <div class="login-hint">Have an account? <button type="button" class="linkbtn" id="to-login">Sign in</button></div>
+    </form>
+
     <div class="login-err" id="login-err"></div>
-    <div class="login-hint">Demo users: <b>mark</b> · <b>jeremy</b> · <b>joshua</b> — password <b>xinsere</b></div>
-  </form>
+  </div>
 </div>
 
 <!-- APP -->
@@ -204,11 +219,21 @@ function toast(msg){ $("#toast-msg").textContent=msg; const t=$("#toast"); t.cla
   clearTimeout(window._tt); window._tt=setTimeout(()=>t.classList.remove("show"),2800); }
 
 /* ---- auth ---- */
+$("#to-signup").addEventListener("click", ()=>{ $("#login-form").classList.add("hidden"); $("#signup-form").classList.remove("hidden"); $("#login-err").textContent=""; });
+$("#to-login").addEventListener("click", ()=>{ $("#signup-form").classList.add("hidden"); $("#login-form").classList.remove("hidden"); $("#login-err").textContent=""; });
+
 $("#login-form").addEventListener("submit", async (e)=>{
   e.preventDefault();
-  const fd=new FormData(); fd.append("username",$("#u").value); fd.append("password",$("#p").value);
+  const fd=new FormData(); fd.append("identifier",$("#u").value); fd.append("password",$("#p").value);
   const r=await api("/api/login",{method:"POST",body:fd});
   if(!r.ok){ $("#login-err").textContent=(await r.json()).error||"Sign-in failed"; return; }
+  await boot();
+});
+$("#signup-form").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  const fd=new FormData(); fd.append("name",$("#s-name").value); fd.append("email",$("#s-email").value); fd.append("password",$("#s-pass").value);
+  const r=await api("/api/signup",{method:"POST",body:fd});
+  if(!r.ok){ $("#login-err").textContent=(await r.json()).error||"Sign-up failed"; return; }
   await boot();
 });
 $("#logout").addEventListener("click", async ()=>{ await api("/api/logout",{method:"POST"}); location.reload(); });
@@ -263,7 +288,7 @@ function renderGrid(children, canManage){
     if(n.type==="folder"){
       t.innerHTML=`<div class="ic">📁</div><div class="nm">${n.name}</div><div class="mt">Folder</div>`;
       t.onclick=()=>openFolder(n.id);
-      if(canManage && n.owner===ME.username) t.appendChild(shareBtnRow(n));
+      if(canManage && n.owner===ME.id) t.appendChild(shareBtnRow(n));
     } else {
       t.innerHTML=`<div class="ic">${iconFor(n.name)}</div><div class="nm" title="${n.name}">${n.name}</div>
         <div class="mt"><span class="secured">● Secured</span> · ${n.frags} frags · ${fmtSize(n.size)}</div>`;
@@ -277,9 +302,9 @@ function renderGrid(children, canManage){
         window.location="/api/download/"+n.id;
       };
       acts.appendChild(dl);
-      if(canManage && n.owner===ME.username){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); }
+      if(canManage && n.owner===ME.id){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); }
       t.appendChild(acts);
-      if(n.owner!==ME.username){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
+      if(n.owner!==ME.id){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
       if(n.shared_with && n.shared_with.length){ t.appendChild(sharedAvatars(n)); }
     }
     g.appendChild(t);
@@ -333,11 +358,11 @@ function openShare(node){
     <div class="people"></div><button class="btn-ghost btn full x">Done</button></div>`;
   const holder=bg.querySelector(".people");
   OTHERS.forEach(u=>{
-    const already=(node.shared_with||[]).some(s=>s.username===u.username);
+    const already=(node.shared_with||[]).some(s=>s.id===u.id);
     const b=document.createElement("button"); b.className="person"; b.disabled=already;
     b.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name}</span>`+(already?`<span class="st">shared ✓</span>`:``);
     b.onclick=async ()=>{
-      const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",u.username);
+      const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",u.id);
       b.disabled=true; toast("Recording grant on-chain (Amoy)… a few seconds");
       const r=await api("/api/share",{method:"POST",body:fd});
       if(r.ok){ const d=await r.json(); toast(`Shared with ${u.name.split(" ")[0]} · on-chain proof ${d.tx.slice(0,14)}…`); document.body.removeChild(bg); openFolder(CURRENT); }

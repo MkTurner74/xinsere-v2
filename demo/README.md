@@ -28,8 +28,12 @@ cd demo
 .\run.ps1        # creates venv, installs deps, starts on :8000
 ```
 
-Open http://127.0.0.1:8000 — sign in as **mark** / **jeremy** / **joshua**
-(password **xinsere**).
+Open http://127.0.0.1:8000 — **sign up** for a real account, or sign in as a
+seeded demo user **mark** / **jeremy** / **joshua** (password **xinsere**).
+
+**Real accounts (v2):** signup + login with email/password (SQLite, hashed) —
+see `auth.py`. To host it publicly so others can use it with their own logins,
+see **DEPLOY.md** (Render / Fly / Docker).
 
 **Prereq:** be signed in to the Xinsere AWS account (`aws sts get-caller-identity`
 → `058264449111`). On-chain grants read the signer key from Secrets Manager, and

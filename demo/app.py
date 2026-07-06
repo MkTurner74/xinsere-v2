@@ -17,33 +17,40 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
-from demo_store import STORE, USERS
+from demo_store import STORE
+from auth import USERS_DB
 from chain import CHAIN
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+SESSION_SECRET = os.environ.get("XINSERE_SESSION_SECRET", "xinsere-demo-dev-secret")
 app = FastAPI(title="Xinsere Demo")
-app.add_middleware(SessionMiddleware, secret_key="xinsere-demo-not-secret", max_age=60 * 60 * 8)
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=60 * 60 * 8)
 
 
 # --- helpers ----------------------------------------------------------------
 
 def current_user(request: Request) -> str:
-    user = request.session.get("user")
-    if not user or user not in USERS:
+    """Return the signed-in user's id, or 401."""
+    uid = request.session.get("user")
+    if not uid or USERS_DB.get(uid) is None:
         raise HTTPException(status_code=401, detail="Not signed in")
-    return user
+    return uid
 
 
-def user_public(username: str) -> dict:
-    u = USERS[username]
-    return {"username": username, "name": u["name"], "initials": u["initials"], "grad": u["grad"]}
+def user_public(user_id: str) -> dict:
+    u = USERS_DB.get(user_id)
+    if u:
+        return USERS_DB.public(u)
+    return {"id": user_id, "name": user_id, "email": "", "initials": "?",
+            "grad": ["#8A6BFF", "#5B3DF5"]}
 
 
 def node_view(node: dict, viewer: str) -> dict:
     """Serialize a node with viewer-relevant share/ownership info."""
+    owner = USERS_DB.get(node["owner"])
     v = {
         "id": node["id"], "type": node["type"], "name": node["name"],
-        "owner": node["owner"], "owner_name": USERS[node["owner"]]["name"],
+        "owner": node["owner"], "owner_name": owner["name"] if owner else node["owner"],
         "created_at": node.get("created_at"),
     }
     if node["type"] == "file":
@@ -52,7 +59,8 @@ def node_view(node: dict, viewer: str) -> dict:
     if node["owner"] == viewer:
         shares = STORE.shares_for_node(node["id"])
         v["shared_with"] = [
-            {**user_public(s["grantee"]), "tx": s["tx"]} for s in shares if s["grantee"] in USERS
+            {**user_public(s["grantee"]), "tx": s["tx"]}
+            for s in shares if USERS_DB.get(s["grantee"])
         ]
     return v
 
@@ -68,12 +76,25 @@ def index() -> HTMLResponse:
 # --- auth -------------------------------------------------------------------
 
 @app.post("/api/login")
-async def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    u = USERS.get(username.lower().strip())
-    if not u or u["password"] != password:
-        raise HTTPException(status_code=401, detail="Wrong username or password")
-    request.session["user"] = username.lower().strip()
-    return {"ok": True, "user": user_public(username.lower().strip())}
+async def login(request: Request, identifier: str = Form(...), password: str = Form(...)):
+    u = USERS_DB.verify(identifier, password)
+    if not u:
+        raise HTTPException(status_code=401, detail="Wrong email/username or password")
+    request.session["user"] = u["id"]
+    STORE.ensure_root(u["id"])
+    return {"ok": True, "user": USERS_DB.public(u)}
+
+
+@app.post("/api/signup")
+async def signup(request: Request, email: str = Form(...), password: str = Form(...),
+                 name: str = Form(...)):
+    try:
+        u = USERS_DB.create_user(email, password, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    request.session["user"] = u["id"]
+    STORE.ensure_root(u["id"])
+    return {"ok": True, "user": USERS_DB.public(u)}
 
 
 @app.post("/api/logout")
@@ -85,7 +106,7 @@ async def logout(request: Request):
 @app.get("/api/me")
 async def me(request: Request):
     user = current_user(request)
-    others = [user_public(u) for u in USERS if u != user]
+    others = [USERS_DB.public(o) for o in USERS_DB.all_except(user)]
     return {"user": user_public(user), "others": others}
 
 
@@ -168,7 +189,7 @@ async def share(request: Request, node_id: str = Form(...), grantee: str = Form(
     node = STORE.node(node_id)
     if not node or node["owner"] != user:
         raise HTTPException(status_code=403, detail="You can only share your own items")
-    if grantee not in USERS or grantee == user:
+    if USERS_DB.get(grantee) is None or grantee == user:
         raise HTTPException(status_code=400, detail="Unknown recipient")
 
     # Real on-chain grant. Sharing a folder writes a grant for every file under it,

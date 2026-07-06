@@ -28,18 +28,11 @@ from xinsere_pipeline.backends.base import (  # noqa: E402
 )
 from xinsere_pipeline.backends.local import LocalKeyManager, LocalObjectStore  # noqa: E402
 
-DATA_DIR = os.path.join(_HERE, "data")
+DATA_DIR = os.environ.get("XINSERE_DATA_DIR", os.path.join(_HERE, "data"))
 OBJECTS_DIR = os.path.join(DATA_DIR, "objects")
 MASTER_KEY_FILE = os.path.join(DATA_DIR, "master.key")
 INDEX_FILE = os.path.join(DATA_DIR, "index.json")
 DEMO_FILE = os.path.join(DATA_DIR, "demo.json")
-
-# Fixed demo users — basic auth only, enough to demonstrate the share flow.
-USERS = {
-    "mark":   {"name": "Mark Turner",  "password": "xinsere", "initials": "MT", "grad": ("#8A6BFF", "#5B3DF5")},
-    "jeremy": {"name": "Jeremy Katz",  "password": "xinsere", "initials": "JK", "grad": ("#4FE3C1", "#2E9E8A")},
-    "joshua": {"name": "Joshua Katz",  "password": "xinsere", "initials": "JS", "grad": ("#FF8B7A", "#B4503F")},
-}
 
 
 def _now() -> str:
@@ -151,7 +144,6 @@ class DemoStore:
         self.nodes: dict = {}   # node_id -> node dict
         self.shares: list = []  # {node_id, grantee, tx, at}
         self._load()
-        self._ensure_roots()
 
     # persistence
     def _load(self) -> None:
@@ -167,18 +159,17 @@ class DemoStore:
             json.dump({"nodes": self.nodes, "shares": self.shares}, f, indent=1)
         os.replace(tmp, DEMO_FILE)
 
-    def _ensure_roots(self) -> None:
-        changed = False
-        for user in USERS:
-            rid = f"root:{user}"
-            if rid not in self.nodes:
+    def ensure_root(self, user_id: str) -> str:
+        """Create the user's root folder on first sign-in; return its id."""
+        rid = self.root_id(user_id)
+        if rid not in self.nodes:
+            with self._lock:
                 self.nodes[rid] = {
                     "id": rid, "type": "folder", "name": "My Files",
-                    "parent": None, "owner": user, "created_at": _now(),
+                    "parent": None, "owner": user_id, "created_at": _now(),
                 }
-                changed = True
-        if changed:
-            self._save()
+                self._save()
+        return rid
 
     # tree ops
     def root_id(self, user: str) -> str:
