@@ -110,7 +110,8 @@ class Chain:
         raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
         tx_hash = w3.eth.send_raw_transaction(raw)
         w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
-        return tx_hash.hex()
+        h = tx_hash.hex()
+        return h if h.startswith("0x") else "0x" + h
 
 
 CHAIN = Chain()

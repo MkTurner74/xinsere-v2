@@ -291,7 +291,10 @@ function shareBtnRow(n){ const d=document.createElement("div"); d.className="act
   const wrap=document.createElement("div"); wrap.appendChild(d); if(n.shared_with&&n.shared_with.length) wrap.appendChild(sharedAvatars(n)); return wrap; }
 function sharedAvatars(n){ const s=document.createElement("div"); s.className="shared";
   n.shared_with.forEach(u=>s.insertAdjacentHTML("beforeend",avatarHtml(u)));
-  if(n.shared_with[0].tx){ const p=document.createElement("a"); p.className="proof"; p.href="#"; p.textContent="on-chain proof · "+n.shared_with[0].tx; s.appendChild(p);} return s; }
+  const tx=n.shared_with[0].tx;
+  if(tx){ const full=tx.startsWith("0x")?tx:"0x"+tx; const p=document.createElement("a"); p.className="proof";
+    p.href="https://amoy.polygonscan.com/tx/"+full; p.target="_blank"; p.rel="noopener";
+    p.textContent="on-chain proof · "+full.slice(0,12)+"…"; p.title="View this grant on PolygonScan"; s.appendChild(p);} return s; }
 
 /* ---- create / upload ---- */
 $("#new-folder").addEventListener("click", async ()=>{
