@@ -11,16 +11,24 @@ DynamoDB table shapes assumed:
 """
 from __future__ import annotations
 
+import os
+
 import boto3
 from botocore.exceptions import ClientError
 
 from .base import FileRecord, FragmentRecord, IndexStore, KeyManager, ObjectStore
 
 
+def _region() -> str:
+    # Explicit region: serverless runtimes (e.g. Vercel) have no ~/.aws/config, and
+    # botocore won't always read AWS_REGION, so pass it in rather than rely on it.
+    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+
+
 class KmsKeyManager(KeyManager):
     def __init__(self, key_id: str, kms_client=None) -> None:
         self._key_id = key_id
-        self._kms = kms_client or boto3.client("kms")
+        self._kms = kms_client or boto3.client("kms", region_name=_region())
 
     def generate_data_key(self) -> tuple[bytes, bytes]:
         resp = self._kms.generate_data_key(KeyId=self._key_id, KeySpec="AES_256")
@@ -117,7 +125,7 @@ class DynamoIndexStore(IndexStore):
         sha_index: str = "sha-index",
         dynamodb=None,
     ) -> None:
-        self._db = dynamodb or boto3.resource("dynamodb")
+        self._db = dynamodb or boto3.resource("dynamodb", region_name=_region())
         self._files = self._db.Table(files_table)
         self._fragments = self._db.Table(fragments_table)
         self._sha_index = sha_index
