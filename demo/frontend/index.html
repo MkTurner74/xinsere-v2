@@ -235,7 +235,14 @@ $("#signup-form").addEventListener("submit", async (e)=>{
   e.preventDefault();
   const fd=new FormData(); fd.append("name",$("#s-name").value); fd.append("email",$("#s-email").value); fd.append("password",$("#s-pass").value);
   const r=await api("/api/signup",{method:"POST",body:fd});
-  if(!r.ok){ $("#login-err").textContent=(await r.json()).error||"Sign-up failed"; return; }
+  const d=await r.json();
+  if(!r.ok){ $("#login-err").textContent=d.error||"Sign-up failed"; return; }
+  if(d.needs_confirmation){
+    $("#signup-form").classList.add("hidden"); $("#login-form").classList.remove("hidden");
+    $("#login-err").style.color="var(--mint)";
+    $("#login-err").textContent=d.message||"Check your email to confirm, then sign in.";
+    return;
+  }
   await boot();
 });
 $("#logout").addEventListener("click", async ()=>{ await api("/api/logout",{method:"POST"}); location.reload(); });
