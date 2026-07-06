@@ -1,0 +1,7 @@
+fastapi>=0.110
+python-multipart>=0.0.9
+itsdangerous>=2.1
+cryptography>=42.0
+web3>=6.15
+boto3>=1.34
+requests>=2.31

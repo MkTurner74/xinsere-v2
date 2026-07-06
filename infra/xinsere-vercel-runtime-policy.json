@@ -1,0 +1,33 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3Fragments",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::xinsere-dev-frag-*/*"
+    },
+    {
+      "Sid": "KmsEnvelope",
+      "Effect": "Allow",
+      "Action": ["kms:GenerateDataKey", "kms:Decrypt"],
+      "Resource": "arn:aws:kms:us-east-1:058264449111:key/062e9a3d-7d05-4241-beb6-00f69daf1ec3"
+    },
+    {
+      "Sid": "DynamoIndex",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:Query"],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:058264449111:table/xinsere_files",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/xinsere_files/index/*",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/xinsere_fragments"
+      ]
+    },
+    {
+      "Sid": "SecretsRead",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": "arn:aws:secretsmanager:us-east-1:058264449111:secret:xinsere/*"
+    }
+  ]
+}

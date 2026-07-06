@@ -16,4 +16,14 @@ sys.path.insert(0, os.path.join(_HERE, "..", "lambdas", "pipeline"))
 from xinsere_pipeline import XinsereIntegrityError  # noqa: E402,F401
 from xinsere_pipeline.factory import build_pipeline_from_env  # noqa: E402
 
-PIPELINE = build_pipeline_from_env()
+_PIPELINE = None
+
+
+def get_pipeline():
+    """Lazy singleton. Building the AWS pipeline touches Secrets Manager, so we
+    defer it out of import time — cheaper cold starts, and import never crashes if
+    creds/env aren't present yet."""
+    global _PIPELINE
+    if _PIPELINE is None:
+        _PIPELINE = build_pipeline_from_env()
+    return _PIPELINE

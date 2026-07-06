@@ -23,7 +23,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import supa
 from chain import CHAIN
-from store import PIPELINE, XinsereIntegrityError
+from store import get_pipeline, XinsereIntegrityError
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION_SECRET = os.environ.get("XINSERE_SESSION_SECRET", "xinsere-demo-dev-secret")
@@ -219,7 +219,7 @@ async def upload(request: Request):
         subdir = os.path.dirname(rel)
         name = os.path.basename(rel) or (f.filename or "file")
         target = supa.ensure_path(token, subdir, parent, uid) if subdir else parent
-        res = PIPELINE.store(content, f.content_type or "application/octet-stream", label=name)
+        res = get_pipeline().store(content, f.content_type or "application/octet-stream", label=name)
         node = supa.insert_file(token, name, target, uid, file_id=res.file_id,
                                 sha256=res.file_sha256, size=len(content),
                                 frags=res.fragment_count,
@@ -283,7 +283,7 @@ async def download(request: Request, node_id: str):
         if not has:
             raise HTTPException(status_code=403, detail="No active on-chain grant for you")
     try:
-        r = PIPELINE.retrieve(node["file_id"])
+        r = get_pipeline().retrieve(node["file_id"])
     except XinsereIntegrityError as exc:
         raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
     return StreamingResponse(

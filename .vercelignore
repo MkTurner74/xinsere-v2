@@ -1,0 +1,12 @@
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/data
+demo/.venv
+contracts
+tests
+*.md
+Dockerfile
+render.yaml
+.dockerignore
