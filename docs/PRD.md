@@ -150,6 +150,17 @@ tier is **meaningless without in-browser viewing**. Therefore:
      drawn *over* the rendered content by the viewer. The **only** thing that can
      trace a **screenshot/screen-record**, which is the sole exfil vector once
      download is blocked. Needed specifically for view-only mode.
+- **Visibility, per Mark's 2026-07-07 question:** the byte-level forensic mark is
+  **INVISIBLE by design** in every format — for images it's spread-spectrum in the
+  pixel **LSBs** ("cannot be detected by visual inspection", patent Emb. 8); for
+  PDF/OOXML it's structural metadata + micro-spacing. Users never see it. The
+  **only** visible mark is the separate overlay, and only in view-only mode.
+  Caveat for images: LSB steganography survives an **exact byte copy** but is
+  **destroyed by re-compression / resize / format-convert / screenshot** — which
+  is exactly why the visible overlay is required for the screenshot case; the
+  invisible LSB mark only catches verbatim-copy exfiltration of a downloaded file.
+  (A frequency-domain/DCT watermark would survive transforms but is heavier — a
+  later robustness upgrade.)
 - **Viewer-selection constraint (critical):** an in-browser viewer must **not
   corrupt the byte-level watermark**, and the embedding varies by file type. Per
   candidate viewer, verify: (a) rendering preserves the source bytes (pure
@@ -194,14 +205,23 @@ watermark by construction (they never rewrite the source).
     Botverse already runs Fargate + SQS/event-driven orchestrator; office→PDF is
     lighter than its video transcode, so it scales. Bonus: a real internal
     customer for Botverse (cross-product synergy).
-  - **To confirm/build:** Botverse currently targets media (transcode/transcribe)
-    — verify or add an **office→PDF** converter (LibreOffice/Collabora headless
-    under the hood). Inter-entity note: Botverse=ETI, Xinsere=separate entity — a
-    light internal licensing arrangement (cf. the existing ETI↔Xinsere license
-    item) applies.
-  - *Fallback (offline / no-Botverse):* the client-side libs — docx-preview
-    (Apache-2.0), SheetJS CE (Apache-2.0), PPTXjs (MIT) — read OOXML directly
-    (open ISO 29500, **no MS licence**) at medium fidelity.
+  - **Botverse coverage (confirmed via MCP 2026-07-07):** inputs
+    **docx, md, html, rst, txt → PDF** (flat $0.05/file; `convert_content` inline
+    ≤4MB, `convert_from_url`, or `convert_file`). So **.docx and markdown viewing
+    are covered now.** **GAP: xlsx and pptx are NOT accepted inputs** (xlsx is
+    output-only; pptx absent) — for spreadsheet/deck viewing either add those
+    inputs to Botverse or use the client-side fallback.
+  - **UX:** while Botverse converts + we re-inject the watermark, show a quick
+    **"Rendering and securing file…"** toast, then open the PDF in PDF.js.
+  - **Strategic (Mark 2026-07-07):** fine to pay Botverse per-file now; at scale
+    Xinsere likely **builds conversion natively** (drop the per-file fee + the
+    inter-entity dependency). Keep the converter behind an interface so swapping
+    Botverse → native is a config change. Inter-entity note: Botverse=ETI,
+    Xinsere=separate entity — a light internal licensing arrangement applies
+    (cf. the existing ETI↔Xinsere license item).
+  - *Fallback (xlsx/pptx, offline, or no-Botverse):* client-side libs —
+    docx-preview (Apache-2.0), SheetJS CE (Apache-2.0), PPTXjs (MIT) — read OOXML
+    directly (open ISO 29500, **no MS licence**) at medium fidelity.
 - **AVOID / gate:** HEVC/H.265 + HEIC/HEIF — patent-pool encumbered *and* not
   natively decoded by Chrome/Firefox; LGPL libheif does NOT clear the patents and
   Xinsere's MPEG-LA grant is **H.264 only**. Transcode server-side if forced.
