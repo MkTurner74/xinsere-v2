@@ -116,6 +116,12 @@
   .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:#17122b;border:1px solid var(--edge-strong);color:var(--text);padding:12px 18px;border-radius:12px;font-size:0.86rem;display:flex;gap:10px;align-items:center;box-shadow:0 18px 50px -12px rgba(0,0,0,0.7);opacity:0;pointer-events:none;transition:opacity .3s,transform .3s;z-index:50;}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
   .toast .tick{color:var(--mint);font-weight:700;}
+  /* busy (sticky) status: swap the tick for a spinner */
+  .toast.busy .tick{display:none;}
+  .toast .spin{display:none;width:14px;height:14px;border:2px solid rgba(255,255,255,0.25);border-top-color:var(--mint);border-radius:50%;animation:spin .7s linear infinite;}
+  .toast.busy .spin{display:inline-block;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .mini.dl.loading{opacity:.6;pointer-events:none;}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
 </style>
 </head>
@@ -200,7 +206,7 @@
 
 <input type="file" id="file-input" multiple class="hidden">
 <input type="file" id="folder-input" webkitdirectory multiple class="hidden">
-<div class="toast" id="toast"><span class="tick">✓</span><span id="toast-msg"></span></div>
+<div class="toast" id="toast"><span class="spin"></span><span class="tick">✓</span><span id="toast-msg"></span></div>
 
 <script>
 const api = (path, opts={}) => fetch(path, {credentials:"same-origin", ...opts});
@@ -216,8 +222,12 @@ function iconFor(name){ const e=(name.split(".").pop()||"").toLowerCase();
   const m={pdf:"▤",xlsx:"▦",xls:"▦",csv:"▦",mov:"▷",mp4:"▷",zip:"◫",png:"▣",jpg:"▣",jpeg:"▣",doc:"▤",docx:"▤",key:"◈",txt:"≡"};
   return m[e]||"▧"; }
 
-function toast(msg){ $("#toast-msg").textContent=msg; const t=$("#toast"); t.classList.add("show");
-  clearTimeout(window._tt); window._tt=setTimeout(()=>t.classList.remove("show"),2800); }
+function toast(msg, sticky){ $("#toast-msg").textContent=msg; const t=$("#toast"); t.classList.add("show");
+  t.classList.toggle("busy", !!sticky);
+  clearTimeout(window._tt);
+  // Sticky messages (long ops like reassembly) stay up with a spinner until the
+  // next toast replaces them — no more blank screen mid-operation.
+  if(!sticky) window._tt=setTimeout(()=>t.classList.remove("show"),2800); }
 
 /* ---- auth ---- */
 $("#to-signup")?.addEventListener("click", ()=>{ $("#login-form").classList.add("hidden"); $("#signup-form").classList.remove("hidden"); $("#login-err").textContent=""; });
@@ -303,7 +313,7 @@ function renderGrid(children, canManage){
         ${n.sha256?`<div class="sha" title="SHA-256 taken before encryption; re-checked on download">SHA-256 ${n.sha256.slice(0,12)}…</div>`:""}`;
       const acts=document.createElement("div"); acts.className="acts";
       const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-      dl.onclick=()=>downloadFile(n);
+      dl.onclick=()=>downloadFile(n, dl);
       acts.appendChild(dl);
       if(canManage && n.owner===ME.id){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); }
       t.appendChild(acts);
@@ -325,19 +335,29 @@ function sharedAvatars(n){ const s=document.createElement("div"); s.className="s
     p.textContent="on-chain proof · "+full.slice(0,12)+"…"; p.title="View this grant on PolygonScan"; s.appendChild(p);} return s; }
 
 /* ---- download (on-chain check -> fetch -> verify bit-perfect) ---- */
-async function downloadFile(n){
-  toast("Checking permission on-chain…");
-  const rv=await api("/api/verify/"+n.id); const v=await rv.json();
-  if(!v.allowed){ toast("Blockchain: no active grant for you ✗"); return; }
-  toast(v.source==="owner" ? "Reassembling & verifying…" : "Blockchain verified ✓ — reassembling…");
-  const r=await api("/api/download/"+n.id);
-  if(!r.ok){ let m="Download failed"; try{ m=(await r.json()).error||m; }catch(e){} toast("✗ "+m); return; }
-  const sha=r.headers.get("X-Content-SHA256")||"";
-  const blob=await r.blob();
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a"); a.href=url; a.download=n.name; document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
-  toast("✓ Bit-perfect — SHA-256 verified"+(sha?" · "+sha.slice(0,10)+"…":""));
+async function downloadFile(n, btn){
+  const label = btn ? btn.textContent : "";
+  if(btn){ btn.classList.add("loading"); btn.textContent="Reassembling…"; }
+  // Every status below is sticky (2nd arg) so the spinner stays visible for the
+  // full ~30s reassembly instead of vanishing after 2.8s. Only the final result
+  // is a normal auto-hiding toast.
+  const done=(msg)=>{ toast(msg); if(btn){ btn.classList.remove("loading"); btn.textContent=label; } };
+  try{
+    toast("Checking permission on-chain…", true);
+    const rv=await api("/api/verify/"+n.id); const v=await rv.json();
+    if(!v.allowed){ done("Blockchain: no active grant for you ✗"); return; }
+    toast(v.source==="owner" ? "Reassembling & verifying — this takes a moment…"
+                             : "Blockchain verified ✓ — reassembling…", true);
+    const r=await api("/api/download/"+n.id);
+    if(!r.ok){ let m="Download failed"; try{ m=(await r.json()).error||m; }catch(e){} done("✗ "+m); return; }
+    toast("Verifying integrity & preparing file…", true);
+    const sha=r.headers.get("X-Content-SHA256")||"";
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=n.name; document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    done("✓ Bit-perfect — SHA-256 verified"+(sha?" · "+sha.slice(0,10)+"…":""));
+  }catch(e){ done("✗ Download failed — "+(e.message||e)); }
 }
 
 /* ---- create / upload ---- */
