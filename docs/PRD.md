@@ -101,6 +101,18 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    type honesty. **Still to adopt (now-tier):** trash/soft-delete + undo for
    delete, multi-select + selection action bar, inline F2 rename, duplicate-name
    conflict dialog, keyboard set + aria-live, drag-to-move.
+   **Ideas parked 2026-07-07:** (a) replace the (always-7) fragment count in the
+   row Security column with a **cloud/region distribution indicator** — badges
+   for which providers/regions a file's fragments live in (real debug value once
+   multi-cloud lands + a strong scatter-story visual); (b) **adaptive fragment
+   count for tiny files** — a 0-byte / sub-threshold file still splits into 7
+   (valid: trailing fragments encrypt to an auth-tag token) which is correct but
+   wasteful (7 KMS keys + 7 objects for zero scatter benefit); keep 7 for
+   uniformity, or add a minimum-fragment-size / size-based count (ties to the
+   patent's size-based routing). Deferred — uniformity is fine for the demo.
+   (c) **New-folder perceived perf**: create does insert → full tree re-fetch
+   (two sequential round-trips); make it optimistic (append locally, reconcile
+   on next fetch).
 5. **Proper authentication.** Move the demo off invite-only email/password:
    Supabase Auth with email verification + password reset (Resend), OAuth
    (Google/Microsoft) sign-in, session hardening. Enterprise SSO (OIDC/SAML)
