@@ -163,6 +163,9 @@
   .folderpick button:disabled{opacity:0.4;}
   .person .rm{margin-left:auto;font-size:0.72rem;color:var(--coral);border:1px solid transparent;border-radius:7px;padding:3px 8px;background:transparent;}
   .person .rm:hover{border-color:var(--coral);}
+  .task .undo{margin-left:12px;flex:none;font-size:0.78rem;font-weight:600;color:var(--word);background:transparent;border:1px solid var(--edge-strong);border-radius:7px;padding:3px 12px;}
+  .task .undo:hover{background:var(--panel-2);}
+  .task .undo:disabled{opacity:0.5;}
   .theme-toggle{background:transparent;border:1px solid var(--edge);border-radius:9px;width:32px;height:32px;display:grid;place-items:center;color:var(--muted);font-size:0.95rem;line-height:1;padding:0;}
   .theme-toggle:hover{color:var(--text);border-color:var(--edge-strong);}
   #login .theme-toggle{position:absolute;top:18px;right:20px;}
@@ -280,6 +283,28 @@ let ME=null, OTHERS=[], VIEW="mine", CURRENT=null; // CURRENT folder id
 
 function avatarHtml(u){ return `<span class="avatar" style="background:linear-gradient(135deg,${u.grad[0]},${u.grad[1]})">${u.initials}</span>`; }
 function fmtSize(b){ if(b==null) return ""; const u=["B","KB","MB","GB"];let i=0;while(b>=1024&&i<3){b/=1024;i++;}return b.toFixed(b<10&&i>0?1:0)+" "+u[i]; }
+// Authoritative content-type -> canonical extension. The TRUE type is captured
+// at upload and travels with the bytes; renaming can't change it. We use this to
+// (a) label tiles with the real type and (b) guarantee downloads open correctly.
+const MIME_EXT={
+  "application/pdf":"pdf","application/msword":"doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":"docx",
+  "application/vnd.ms-powerpoint":"ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation":"pptx",
+  "application/vnd.ms-excel":"xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"xlsx",
+  "image/png":"png","image/jpeg":"jpg","image/gif":"gif","image/webp":"webp","image/tiff":"tif","image/svg+xml":"svg",
+  "video/mp4":"mp4","video/quicktime":"mov","video/x-msvideo":"avi","video/webm":"webm",
+  "audio/mpeg":"mp3","audio/wav":"wav","text/plain":"txt","text/csv":"csv",
+  "application/json":"json","application/zip":"zip","application/gzip":"gz"};
+function trueExt(ct){ return MIME_EXT[(ct||"").toLowerCase().split(";")[0].trim()]||""; }
+function typeLabel(ct){ const e=trueExt(ct); return e?e.toUpperCase():""; }
+// Reconcile a display name's extension with the file's real type so the download
+// always opens — a file can be labelled anything, but it can't masquerade as
+// another type on the way out.
+function dlName(name, ct){ const ext=trueExt(ct); if(!ext) return name;
+  if(new RegExp("\\."+ext+"$","i").test(name)) return name;
+  return name.replace(/\.[A-Za-z0-9]{1,6}$/,"")+"."+ext; }
 function iconFor(name){ const e=(name.split(".").pop()||"").toLowerCase();
   const m={pdf:"▤",xlsx:"▦",xls:"▦",csv:"▦",mov:"▷",mp4:"▷",zip:"◫",png:"▣",jpg:"▣",jpeg:"▣",doc:"▤",docx:"▤",key:"◈",txt:"≡"};
   return m[e]||"▧"; }
@@ -313,6 +338,20 @@ function newTask(name){
 
 // One-off notices (folder created, share results, errors) — a transient task line.
 function toast(msg){ newTask("").done(msg); }
+
+// A result line with an Undo action (reversible ops — rename now, move/trash next).
+// Auto-dismisses after ~7s; Undo runs the supplied reverser.
+function undoToast(msg, undoFn){
+  const el=document.createElement("div"); el.className="task done";
+  el.innerHTML='<div class="trow"><span class="tick">✓</span><span class="tmsg"></span><button class="undo">Undo</button></div>';
+  el.querySelector(".tmsg").textContent=msg;
+  $("#tasks").appendChild(el); requestAnimationFrame(()=>el.classList.add("show"));
+  let closed=false;
+  const kill=()=>{ if(closed) return; closed=true; el.classList.remove("show"); setTimeout(()=>el.remove(),300); };
+  el.querySelector(".undo").onclick=async ()=>{ const b=el.querySelector(".undo"); b.disabled=true; b.textContent="Undoing…";
+    try{ await undoFn(); }catch(e){ toast("✗ Undo failed"); } kill(); };
+  setTimeout(kill, 7000);
+}
 
 /* ---- auth ---- */
 $("#to-signup")?.addEventListener("click", ()=>{ $("#login-form").classList.add("hidden"); $("#signup-form").classList.remove("hidden"); $("#login-err").textContent=""; });
@@ -394,7 +433,7 @@ function renderGrid(children, canManage){
       if(canManage && n.owner===ME.id){ t.appendChild(shareBtnRow(n)); t.appendChild(kebab(n)); }
     } else {
       t.innerHTML=`<div class="ic">${iconFor(n.name)}</div><div class="nm" title="${n.name}">${n.name}</div>
-        <div class="mt"><span class="secured">● Secured</span> · ${n.frags} frags · ${fmtSize(n.size)}</div>
+        <div class="mt"><span class="secured">● Secured</span>${typeLabel(n.content_type)?` · <span title="Verified content type — captured at upload; a rename can't change it">${typeLabel(n.content_type)}</span>`:""} · ${n.frags} frags · ${fmtSize(n.size)}</div>
         ${n.sha256?`<div class="sha" title="SHA-256 taken before encryption; re-checked on download">SHA-256 ${n.sha256.slice(0,12)}…</div>`:""}`;
       const acts=document.createElement("div"); acts.className="acts";
       const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
@@ -445,11 +484,19 @@ function openCtx(e, n){
   setTimeout(()=>addEventListener("click", ()=>m.remove(), {once:true}));
 }
 
+async function doRename(id, to){
+  const fd=new FormData(); fd.append("node_id",id); fd.append("name",to);
+  return api("/api/rename",{method:"POST",body:fd});
+}
 async function renameItem(n){
   const name=prompt("Rename to:", n.name); if(!name || name===n.name) return;
-  const fd=new FormData(); fd.append("node_id",n.id); fd.append("name",name);
-  const r=await api("/api/rename",{method:"POST",body:fd});
-  if(r.ok){ toast("Renamed"); openFolder(CURRENT); } else toast("✗ "+((await r.json()).error||"Rename failed"));
+  const old=n.name;
+  const r=await doRename(n.id, name);
+  if(!r.ok){ toast("✗ "+((await r.json()).error||"Rename failed")); return; }
+  openFolder(CURRENT);
+  // Rename is metadata-only and instantly reversible — offer undo instead of a
+  // confirm dialog (the pattern the UX research recommends for reversible ops).
+  undoToast(`Renamed to “${name}”`, async ()=>{ await doRename(n.id, old); openFolder(CURRENT); });
 }
 
 async function listFolders(excludeId){
@@ -569,7 +616,7 @@ async function downloadFile(n, btn){
             : T.set(`Fetching fragments — ${fmtSize(got)}…`,{indet:true}),
         });
         const url=URL.createObjectURL(blob);
-        const a=document.createElement("a"); a.href=url; a.download=n.name; document.body.appendChild(a); a.click(); a.remove();
+        const a=document.createElement("a"); a.href=url; a.download=dlName(n.name, n.content_type); document.body.appendChild(a); a.click(); a.remove();
         URL.revokeObjectURL(url);
         done("✓ Bit-perfect — reassembled & verified in your browser · "+sha256.slice(0,10)+"…");
         return;
@@ -604,7 +651,7 @@ async function downloadFile(n, btn){
       T.set("Preparing file…",{indet:true}); blob=await r.blob();
     }
     const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download=n.name; document.body.appendChild(a); a.click(); a.remove();
+    const a=document.createElement("a"); a.href=url; a.download=dlName(n.name, n.content_type); document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
     done("✓ Bit-perfect — SHA-256 verified"+(sha?" · "+sha.slice(0,10)+"…":""));
   }catch(e){ done("✗ Download failed — "+(e.message||e)); }
