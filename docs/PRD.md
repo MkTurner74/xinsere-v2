@@ -58,6 +58,10 @@ The DPD core is built and tested. Reference implementation lives in this repo
 5. **MCP server** (`@xinsere/mcp`) — the AI-agent product surface (see mcp-spec).
 6. **Deeper patent differentiators:** fail-closed revocation cache, federated
    identity (OIDC/SAML), size-based large-file routing, forensic watermarking.
+7. **Region-scoped write (data residency).** API-selectable write region; default
+   scatters wide across the North America pool. Region-locked *and* randomized —
+   the EU/Germany data-sovereignty play. Bucket prerequisite met 2026-07-07; schema
+   + routing mode to build in Phase 3. See *Planned capability: region-scoped write*.
 
 ### Planned capability: temporal access windows (timed shares & embargo release)
 
@@ -79,6 +83,44 @@ with no action at release time and no possibility of early access — enforced b
 ledger, not by the operator withholding data. Target use cases: film/media releases,
 press embargoes, financial/regulatory disclosures, simultaneous multi-party reveals.
 (Covered by CIP patent Embodiment 10 / Claims 60–64.)
+
+### Planned capability: region-scoped write (data residency + randomized scatter)
+
+Data residency as a **first-class API feature**, not a deployment mode. The caller
+chooses where a file's fragments are written; the security model (per-fragment keys,
+opaque `{uuid}_{sequence}` object names, no file linkage, N-of-M scatter) is
+unchanged — the fragments are still randomized, just within a chosen geography.
+
+- **API-selectable region on write.** `POST /v1/files` takes an optional `region`
+  (or `residency`) parameter. Specify `eu-central-1` and every fragment for that
+  file is scattered across buckets **in that region only**.
+- **Default = scatter wide.** Omit the parameter and fragments spread across the
+  full North America pool (current behavior) — maximum dispersion for users who
+  don't have a residency constraint.
+- **Region-locked *and* randomized — the differentiator.** Jurisdictions like
+  Germany/the EU require data to stay in-region, but still want the randomized,
+  fragment-level security. Competing "keep it in-region" offerings just pin a
+  single bucket; Xinsere keeps the file scattered across many in-region buckets, so
+  residency compliance costs nothing in security. (Also gives a latency win — a
+  single-region file avoids cross-region fragment reads.)
+
+**What it needs (not yet built — capturing intent):**
+- A **region-pinned routing mode** in the fragmenter: given a target region, pick
+  `N` buckets from that region's pool (`route()` already handles arbitrary bucket
+  lists; add region filtering).
+- A **per-file region field** on the file index record so `retrieve()`/audit know
+  the residency (retrieve already resolves per-fragment buckets, so no read-path
+  change is strictly required — the field is for policy/reporting/enforcement).
+- **Prerequisite met (2026-07-07):** every region now has ≥ `N` buckets (pool
+  expanded to 12/region × 5 regions), so any region can hold a full 7-fragment
+  file without spilling cross-region. Scaling to more regions/clouds = create
+  buckets + register them; the AWS bucket quota is 10,000.
+- API schema, validation (region allow-list per account/plan), and enforcement
+  (reject a residency-locked account writing out-of-region) to be designed in the
+  Phase 3 REST API work.
+
+Ties directly to **Market B — data sovereignty** (below) and Deployment Mode 3
+(BYOB), but works even in pure SaaS mode.
 
 ---
 
@@ -217,6 +259,7 @@ AI agents increasingly handle sensitive documents: legal discovery, patient reco
 - Fragment routing: modular distribution across registered buckets (same algorithm as existing code, with true random jitter added)
 - Hybrid mode: odd-numbered fragments → customer's S3, even-numbered → Xinsere's S3 (50/50 split, independently operated)
 - Customer-managed bucket mode: all buckets in customer's own AWS account; Xinsere only manages the API and blockchain layers
+- **Region-pinned mode (planned):** scatter a file's fragments across buckets within one caller-specified region for data residency, still randomized — see *Planned capability: region-scoped write*. Default when unspecified is scatter-wide across the region pool.
 
 ### Encryption improvements over current code
 
@@ -272,8 +315,9 @@ Postgres was considered and rejected — "blockchain-immutable permission trail"
 
 ```
 POST   /v1/files
-         body: { content_type, file_base64 OR presigned_upload }
-         → { file_id, fragment_count, stored_at, tx_hash }
+         body: { content_type, file_base64 OR presigned_upload,
+                 region? }                         # planned: residency; omit = scatter-wide
+         → { file_id, fragment_count, stored_at, region, tx_hash }
 
 GET    /v1/files/{id}
          → { file_base64, content_type, retrieved_at }
