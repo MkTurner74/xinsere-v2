@@ -10,20 +10,36 @@
     --edge:rgba(146,119,255,0.16);--edge-strong:rgba(146,119,255,0.34);
     --violet-br:#8A6BFF;--violet:#5B3DF5;--violet-deep:#2E2170;--word:#9277FF;
     --mint:#4FE3C1;--coral:#FF8B7A;--text:#ECE9F8;--muted:#9A93B8;--faint:#6E6688;
+    --glow-a:rgba(124,91,255,0.18);--glow-b:rgba(46,33,112,0.4);
+    --chrome:rgba(10,7,19,0.7);--input-bg:rgba(0,0,0,0.28);--task-bg:#17122b;
+    --track:rgba(255,255,255,0.18);--scrim:rgba(6,4,14,0.66);
     --radius:16px;--font:"Poppins","Outfit","Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    color-scheme:dark;
+  }
+  /* Light theme: same violet/mint brand, inverted canvas. Toggled via
+     data-theme on <html>; persisted in localStorage. Dark is the default. */
+  :root[data-theme="light"]{
+    --bg:#F4F2FB;--bg-2:#FFFFFF;--panel:rgba(91,61,245,0.05);--panel-2:rgba(91,61,245,0.09);
+    --edge:rgba(91,61,245,0.18);--edge-strong:rgba(91,61,245,0.38);
+    --word:#5B3DF5;--mint:#0C9E81;--coral:#D94F3C;
+    --text:#1B1633;--muted:#565073;--faint:#8B85A8;
+    --glow-a:rgba(124,91,255,0.12);--glow-b:rgba(46,33,112,0.07);
+    --chrome:rgba(255,255,255,0.78);--input-bg:rgba(91,61,245,0.06);--task-bg:#FFFFFF;
+    --track:rgba(27,22,51,0.14);--scrim:rgba(28,20,54,0.35);
+    color-scheme:light;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;}
   body{font-family:var(--font);color:var(--text);
-    background:radial-gradient(120% 90% at 88% -10%,rgba(124,91,255,0.18),transparent 55%),
-      radial-gradient(110% 90% at 5% 110%,rgba(46,33,112,0.4),transparent 55%),var(--bg);
+    background:radial-gradient(120% 90% at 88% -10%,var(--glow-a),transparent 55%),
+      radial-gradient(110% 90% at 5% 110%,var(--glow-b),transparent 55%),var(--bg);
     -webkit-font-smoothing:antialiased;}
   button{font:inherit;cursor:pointer;}
   .hidden{display:none !important;}
 
   /* login */
   #login{position:fixed;inset:0;display:grid;place-items:center;z-index:40;
-    background:radial-gradient(120% 90% at 80% -10%,rgba(124,91,255,0.22),transparent 55%),var(--bg);}
+    background:radial-gradient(120% 90% at 80% -10%,var(--glow-a),transparent 55%),var(--bg);}
   .login-card{width:340px;background:var(--panel);border:1px solid var(--edge);border-radius:20px;
     padding:30px 28px;backdrop-filter:blur(14px);text-align:center;}
   .login-card svg{width:52px;height:52px;margin-bottom:14px;}
@@ -32,7 +48,7 @@
   .login-card p{color:var(--muted);font-size:0.85rem;margin:4px 0 20px;}
   .field{text-align:left;margin-bottom:12px;}
   .field label{font-size:0.72rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--faint);}
-  .field input{width:100%;margin-top:5px;padding:11px 13px;border-radius:10px;background:rgba(0,0,0,0.28);
+  .field input{width:100%;margin-top:5px;padding:11px 13px;border-radius:10px;background:var(--input-bg);
     border:1px solid var(--edge);color:var(--text);font:inherit;}
   .field input:focus{outline:2px solid var(--violet);border-color:transparent;}
   .login-hint{font-size:0.74rem;color:var(--faint);margin-top:14px;line-height:1.6;}
@@ -48,7 +64,7 @@
 
   /* app shell */
   #app{display:grid;grid-template-rows:auto 1fr;height:100vh;}
-  .topbar{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--edge);background:rgba(10,7,19,0.7);backdrop-filter:blur(10px);}
+  .topbar{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--edge);background:var(--chrome);backdrop-filter:blur(10px);}
   .brand{display:flex;align-items:center;gap:11px;}
   .brand svg{width:30px;height:30px;}
   .brand .word{font-size:1.24rem;font-weight:600;letter-spacing:-0.03em;background:linear-gradient(90deg,var(--violet),var(--word));-webkit-background-clip:text;background-clip:text;color:transparent;}
@@ -101,7 +117,7 @@
   .empty .o{width:44px;height:44px;margin:0 auto 12px;border-radius:50%;background:radial-gradient(circle at 35% 30%,rgba(124,91,255,0.5),rgba(46,33,112,0.5));opacity:0.6;}
 
   /* modal */
-  .modal-bg{position:fixed;inset:0;background:rgba(6,4,14,0.66);display:grid;place-items:center;z-index:30;backdrop-filter:blur(3px);}
+  .modal-bg{position:fixed;inset:0;background:var(--scrim);display:grid;place-items:center;z-index:30;backdrop-filter:blur(3px);}
   .modal{width:360px;background:var(--bg-2);border:1px solid var(--edge-strong);border-radius:18px;padding:22px;}
   .modal h3{margin:0 0 4px;font-size:1.02rem;}
   .modal .msub{color:var(--muted);font-size:0.82rem;margin:0 0 16px;}
@@ -116,27 +132,32 @@
   /* Task stack: one status line per concurrent operation (downloads, uploads,
      notices) so parallel transfers never fight over a single message. */
   .tasks{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:50;pointer-events:none;}
-  .task{background:#17122b;border:1px solid var(--edge-strong);color:var(--text);padding:11px 16px;border-radius:12px;font-size:0.85rem;display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:300px;max-width:min(92vw,460px);box-shadow:0 18px 50px -12px rgba(0,0,0,0.7);opacity:0;transform:translateY(14px);transition:opacity .25s,transform .25s;}
+  .task{background:var(--task-bg);border:1px solid var(--edge-strong);color:var(--text);padding:11px 16px;border-radius:12px;font-size:0.85rem;display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:300px;max-width:min(92vw,460px);box-shadow:0 18px 50px -12px rgba(0,0,0,0.7);opacity:0;transform:translateY(14px);transition:opacity .25s,transform .25s;}
   .task.show{opacity:1;transform:translateY(0);}
   .task .trow{display:flex;gap:10px;align-items:center;}
   .task .tname{color:var(--faint);font-size:0.74rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none;}
   .task .tick{display:none;color:var(--mint);font-weight:700;}
   .task.done .tick{display:inline;}
-  .task .spin{width:14px;height:14px;border:2px solid rgba(255,255,255,0.25);border-top-color:var(--mint);border-radius:50%;animation:spin .7s linear infinite;flex:none;}
+  .task .spin{width:14px;height:14px;border:2px solid var(--track);border-top-color:var(--mint);border-radius:50%;animation:spin .7s linear infinite;flex:none;}
   .task.done .spin{display:none;}
   @keyframes spin{to{transform:rotate(360deg);}}
-  .task .bar{display:none;height:5px;border-radius:99px;background:rgba(255,255,255,0.10);overflow:hidden;}
+  .task .bar{display:none;height:5px;border-radius:99px;background:var(--track);overflow:hidden;}
   .task.progress .bar{display:block;}
   .task .fill{height:100%;width:0%;border-radius:99px;background:linear-gradient(90deg,var(--word),var(--mint));transition:width .18s ease;}
   .task.indet .fill{width:40%;transition:none;animation:indet 1.1s ease-in-out infinite;}
   @keyframes indet{0%{margin-left:-42%}100%{margin-left:102%}}
   .mini.dl{white-space:nowrap;min-width:94px;text-align:center;}
   .mini.dl.loading{pointer-events:none;opacity:.8;}
-  .btnspin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,0.3);border-top-color:var(--word);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;}
+  .btnspin{display:inline-block;width:12px;height:12px;border:2px solid var(--track);border-top-color:var(--word);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;}
+  .theme-toggle{background:transparent;border:1px solid var(--edge);border-radius:9px;width:32px;height:32px;display:grid;place-items:center;color:var(--muted);font-size:0.95rem;line-height:1;padding:0;}
+  .theme-toggle:hover{color:var(--text);border-color:var(--edge-strong);}
+  #login .theme-toggle{position:absolute;top:18px;right:20px;}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
 </style>
 </head>
 <body>
+<script>/* apply saved theme before first paint (no flash); dark is default */
+document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark";</script>
 <!-- mark defs, reused -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
   <linearGradient id="xm" x1="100%" y1="0%" x2="0%" y2="100%">
@@ -158,6 +179,7 @@
 
 <!-- LOGIN -->
 <div id="login">
+  <button class="theme-toggle" title="Switch light/dark mode" aria-label="Switch light/dark mode"></button>
   <div class="login-card">
     <span id="login-mark"></span>
     <div class="word">Xinsere</div>
@@ -188,6 +210,7 @@
     <div class="brand"><span id="top-mark"></span><span class="word">Xinsere</span></div>
     <div class="me">
       <span class="avatar" id="me-av"></span><span id="me-name"></span>
+      <button class="theme-toggle" title="Switch light/dark mode" aria-label="Switch light/dark mode"></button>
       <button class="link" id="logout">Sign out</button>
     </div>
   </div>
@@ -225,6 +248,19 @@ const api = (path, opts={}) => fetch(path, {credentials:"same-origin", ...opts})
 const $ = (s)=>document.querySelector(s);
 function mark(el){ el.appendChild(document.getElementById("mark").content.cloneNode(true)); }
 mark($("#login-mark")); mark($("#top-mark"));
+
+/* ---- theme toggle (dark default; persisted) ---- */
+function syncThemeButtons(){
+  const light=document.documentElement.dataset.theme==="light";
+  document.querySelectorAll(".theme-toggle").forEach(b=>{ b.textContent=light?"☾":"☀"; });
+}
+document.querySelectorAll(".theme-toggle").forEach(b=>b.addEventListener("click",()=>{
+  const next=document.documentElement.dataset.theme==="light"?"dark":"light";
+  document.documentElement.dataset.theme=next;
+  localStorage.setItem("xin-theme",next);
+  syncThemeButtons();
+}));
+syncThemeButtons();
 
 let ME=null, OTHERS=[], VIEW="mine", CURRENT=null; // CURRENT folder id
 
