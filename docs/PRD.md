@@ -164,6 +164,39 @@ tier is **meaningless without in-browser viewing**. Therefore:
 - **Decision:** downloads stay enabled for now; the view-only toggle is deferred
   until in-browser viewing exists (its true prerequisite).
 
+### Planned capability: sharing visibility — directional indicators + optional merged view (Mark 2026-07-07)
+
+Research: `research/2026-07-07-sharing-indicators-merged-view.md`. Currently the
+demo has a separate "Shared with me" section + a grantee facepile on outgoing
+shares. Recommended additions:
+- **Keep "Shared with me" a SEPARATE plane by default — do NOT auto-merge.**
+  Drive/OneDrive/Proton all keep incoming shares separate; only Dropbox
+  auto-mounts them into your tree. Merging blurs ownership (users misread what's
+  theirs, fear deleting removes it for everyone, over-share by accident) — the
+  exact boundary Xinsere's security brand sells.
+- **Offer an opt-in "Add to My Files" mount/shortcut** (the Drive/OneDrive
+  bridge) as a *pointer* (marked with a link-overlay) for power users who want a
+  shared folder in their own tree — merged convenience without merged confusion.
+  Guard-rails (copy OneDrive): can't move items out of Shared into My Files;
+  gate shortcuts for external/public items.
+- **Three-state directional icon scheme** (fits the existing SVG + facepile):
+  *private* = no badge (absence is information); *outgoing-shared* = two-person
+  badge + grantee facepile; *incoming-shared* = owner avatar chip ("from Name") +
+  a subtle arrow-into-tray glyph. One-person vs two-people hints scale; a
+  link/chain glyph for link-based grants.
+- **Distinct HIGH-ALARM "external / public / on-chain-grant-active" badge** — the
+  differentiator. A globe/broadcast glyph in a warning color that *replaces*
+  (never stacks on) the normal people badge and always wins the corner; tie it to
+  the on-chain grant so "you can see exactly what's exposed, cryptographically
+  enforced" is a trust feature. (Box overlays a globe on external collaborators;
+  Outlook reddens over-broad links.)
+- **Overlay discipline:** one corner, one primary badge (~16-20px, opaque
+  backing). Sharing → corner badge; *who* → name-row facepile; sync/availability
+  → a name-row dot or column — never a third corner glyph. Sharing and sync are
+  different axes and must never share a glyph. List view: carry it as Owner +
+  "Shared" columns ("3 people / Link / External" in the warning color) so users
+  can audit exposure by scanning.
+
 **Trash / soft-delete (build next — needs migration `0002_soft_delete.sql`).**
 - Delete is a **two-choice confirm**: **Move to Trash** (recoverable · auto-erases
   after 30 days) or **Erase** (immediate cryptographic erasure · irreversible),
