@@ -18,8 +18,9 @@ import os
 import re
 import threading
 
-import boto3
-from web3 import Web3
+# NOTE: boto3 and web3 are heavy imports (~0.5-1s combined at cold start). They are
+# imported lazily inside the functions that need them so endpoints that never touch
+# the chain (login, tree, upload) don't pay for them on a cold serverless boot.
 
 RPC_URL = os.environ.get("XINSERE_RPC_URL", "https://rpc-amoy.polygon.technology")
 CHAIN_ID = int(os.environ.get("XINSERE_CHAIN_ID", "80002"))
@@ -68,6 +69,7 @@ def _load_key() -> str:
     env = os.environ.get("XINSERE_PRIVATE_KEY")
     if env:
         return env if env.startswith("0x") else "0x" + env
+    import boto3
     raw = boto3.client("secretsmanager", region_name=AWS_REGION).get_secret_value(
         SecretId=SECRET_ID)["SecretString"]
     m = re.search(r"private_?key[\"\s:]+\s*\"?(0x)?([0-9a-fA-F]{64})", raw, re.I)
@@ -91,6 +93,7 @@ class Chain:
         with self._lock:
             if self._contract is not None:
                 return
+            from web3 import Web3
             w3 = Web3(Web3.HTTPProvider(RPC_URL))
             acct = w3.eth.account.from_key(_load_key())
             self._contract = w3.eth.contract(

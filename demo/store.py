@@ -9,9 +9,8 @@ from __future__ import annotations
 import os
 import sys
 import uuid
-
-import boto3
-from botocore.config import Config
+# boto3 is imported lazily inside _s3() — it's a heavy import and only the S3
+# staging helpers need it, so cold boots that don't stage a direct upload skip it.
 
 # Make the pipeline package importable from the sibling lambdas/ dir.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +29,8 @@ MAX_INLINE_BYTES = int(os.environ.get("XINSERE_MAX_INLINE_BYTES", str(500 * 1024
 
 
 def _s3():
+    import boto3
+    from botocore.config import Config
     # Force SigV4: with SigV2 presigned PUTs, Content-Type is part of the
     # string-to-sign, so the browser's MIME type (e.g. application/pdf) must match
     # the signed one exactly — it doesn't, so documents 403 while type-less files

@@ -1,0 +1,18 @@
+name: Keep demo warm
+
+# Pings /api/warm every 5 minutes so the Vercel serverless function keeps a warm
+# instance (heavy clients — S3/KMS/DynamoDB + web3 signer — stay built), cutting
+# cold-start latency on real user requests. Plan-independent (runs on GitHub, not
+# a Vercel cron, which needs Pro for sub-daily schedules).
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # GitHub Actions minimum interval is 5 min
+  workflow_dispatch: {}      # allow manual trigger
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/warm
+        run: |
+          curl -fsS --max-time 30 https://xinsere-v2.vercel.app/api/warm || true

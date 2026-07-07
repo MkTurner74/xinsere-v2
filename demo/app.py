@@ -106,6 +106,25 @@ def index() -> HTMLResponse:
         return HTMLResponse(f.read())
 
 
+@app.get("/api/warm")
+async def warm():
+    """Pre-build the heavy singletons (S3/KMS/DynamoDB clients + the web3 signer)
+    so a real user request doesn't pay cold-init latency. Hit by a scheduled ping;
+    intentionally unauthenticated — it touches no user data, only warms clients."""
+    warmed = {}
+    try:
+        get_pipeline()
+        warmed["pipeline"] = "ok"
+    except Exception as exc:
+        warmed["pipeline"] = f"err: {type(exc).__name__}"
+    try:
+        _ = CHAIN.wallet
+        warmed["chain"] = "ok"
+    except Exception as exc:
+        warmed["chain"] = f"err: {type(exc).__name__}"
+    return {"ok": True, "warmed": warmed}
+
+
 # --- auth -------------------------------------------------------------------
 
 @app.post("/api/login")
