@@ -113,20 +113,22 @@
   .person .st{margin-left:auto;font-size:0.72rem;color:var(--mint);}
   .modal .x{margin-top:14px;}
 
-  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:#17122b;border:1px solid var(--edge-strong);color:var(--text);padding:12px 18px;border-radius:12px;font-size:0.86rem;display:flex;flex-direction:column;gap:9px;align-items:stretch;min-width:300px;max-width:min(92vw,460px);box-shadow:0 18px 50px -12px rgba(0,0,0,0.7);opacity:0;pointer-events:none;transition:opacity .3s,transform .3s;z-index:50;}
-  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-  .toast .trow{display:flex;gap:10px;align-items:center;}
-  .toast .tick{color:var(--mint);font-weight:700;}
-  /* busy (sticky) status: swap the tick for a spinner */
-  .toast.busy .tick{display:none;}
-  .toast .spin{display:none;width:14px;height:14px;border:2px solid rgba(255,255,255,0.25);border-top-color:var(--mint);border-radius:50%;animation:spin .7s linear infinite;flex:none;}
-  .toast.busy .spin{display:inline-block;}
+  /* Task stack: one status line per concurrent operation (downloads, uploads,
+     notices) so parallel transfers never fight over a single message. */
+  .tasks{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:50;pointer-events:none;}
+  .task{background:#17122b;border:1px solid var(--edge-strong);color:var(--text);padding:11px 16px;border-radius:12px;font-size:0.85rem;display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:300px;max-width:min(92vw,460px);box-shadow:0 18px 50px -12px rgba(0,0,0,0.7);opacity:0;transform:translateY(14px);transition:opacity .25s,transform .25s;}
+  .task.show{opacity:1;transform:translateY(0);}
+  .task .trow{display:flex;gap:10px;align-items:center;}
+  .task .tname{color:var(--faint);font-size:0.74rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none;}
+  .task .tick{display:none;color:var(--mint);font-weight:700;}
+  .task.done .tick{display:inline;}
+  .task .spin{width:14px;height:14px;border:2px solid rgba(255,255,255,0.25);border-top-color:var(--mint);border-radius:50%;animation:spin .7s linear infinite;flex:none;}
+  .task.done .spin{display:none;}
   @keyframes spin{to{transform:rotate(360deg);}}
-  /* per-stage progress bar (shown only in progress mode) */
-  .toast .bar{display:none;height:5px;border-radius:99px;background:rgba(255,255,255,0.10);overflow:hidden;}
-  .toast.progress .bar{display:block;}
-  .toast .fill{height:100%;width:0%;border-radius:99px;background:linear-gradient(90deg,var(--word),var(--mint));transition:width .18s ease;}
-  .toast.indet .fill{width:40%;transition:none;animation:indet 1.1s ease-in-out infinite;}
+  .task .bar{display:none;height:5px;border-radius:99px;background:rgba(255,255,255,0.10);overflow:hidden;}
+  .task.progress .bar{display:block;}
+  .task .fill{height:100%;width:0%;border-radius:99px;background:linear-gradient(90deg,var(--word),var(--mint));transition:width .18s ease;}
+  .task.indet .fill{width:40%;transition:none;animation:indet 1.1s ease-in-out infinite;}
   @keyframes indet{0%{margin-left:-42%}100%{margin-left:102%}}
   .mini.dl{white-space:nowrap;min-width:94px;text-align:center;}
   .mini.dl.loading{pointer-events:none;opacity:.8;}
@@ -215,7 +217,7 @@
 
 <input type="file" id="file-input" multiple class="hidden">
 <input type="file" id="folder-input" webkitdirectory multiple class="hidden">
-<div class="toast" id="toast"><div class="trow"><span class="spin"></span><span class="tick">✓</span><span id="toast-msg"></span></div><div class="bar"><div class="fill" id="toast-fill"></div></div></div>
+<div class="tasks" id="tasks"></div>
 
 <script src="/xinsere-client.js"></script>
 <script>
@@ -232,24 +234,35 @@ function iconFor(name){ const e=(name.split(".").pop()||"").toLowerCase();
   const m={pdf:"▤",xlsx:"▦",xls:"▦",csv:"▦",mov:"▷",mp4:"▷",zip:"◫",png:"▣",jpg:"▣",jpeg:"▣",doc:"▤",docx:"▤",key:"◈",txt:"≡"};
   return m[e]||"▧"; }
 
-function toast(msg, sticky){ $("#toast-msg").textContent=msg; const t=$("#toast"); t.classList.add("show");
-  t.classList.toggle("busy", !!sticky); t.classList.remove("progress","indet");
-  clearTimeout(window._tt);
-  // Sticky messages (long ops) stay up with a spinner until the next toast
-  // replaces them — no blank screen mid-operation.
-  if(!sticky) window._tt=setTimeout(()=>t.classList.remove("show"),3200); }
+/* Task stack: each long operation gets its OWN status line, so concurrent
+ * downloads/uploads never flicker over each other.
+ *   const T=newTask("video.mp4");
+ *   T.set(msg)                    sticky spinner line
+ *   T.set(msg,{pct:42})           determinate progress bar
+ *   T.set(msg,{indet:true})       indeterminate animated bar
+ *   T.done(msg)                   final state, auto-removes after 3.2s
+ */
+function newTask(name){
+  const el=document.createElement("div"); el.className="task";
+  const nm=document.createElement("span"); nm.className="tname"; nm.textContent=name||""; nm.title=name||"";
+  el.innerHTML='<div class="trow"><span class="spin"></span><span class="tick">✓</span><span class="tmsg"></span></div><div class="bar"><div class="fill"></div></div>';
+  if(name) el.querySelector(".trow").insertBefore(nm, el.querySelector(".tmsg"));
+  $("#tasks").appendChild(el);
+  requestAnimationFrame(()=>el.classList.add("show"));
+  const msgEl=el.querySelector(".tmsg"), fill=el.querySelector(".fill");
+  function finish(msg){ msgEl.textContent=msg; el.classList.add("done"); el.classList.remove("progress","indet");
+    setTimeout(()=>{ el.classList.remove("show"); setTimeout(()=>el.remove(),300); },3200); }
+  return {
+    set(msg,o){ o=o||{}; msgEl.textContent=msg;
+      el.classList.toggle("progress", o.pct!=null||!!o.indet);
+      el.classList.toggle("indet", !!o.indet);
+      if(o.pct!=null) fill.style.width=Math.max(0,Math.min(100,o.pct)).toFixed(0)+"%"; },
+    done: finish,
+  };
+}
 
-// Determinate progress (0-100) — real % we can measure (upload PUT, download transfer).
-function prog(msg, pct){ $("#toast-msg").textContent=msg; const t=$("#toast");
-  t.classList.add("show","busy","progress"); t.classList.remove("indet");
-  clearTimeout(window._tt);
-  $("#toast-fill").style.width=Math.max(0,Math.min(100,pct)).toFixed(0)+"%"; }
-
-// Indeterminate — a stage whose duration we can't measure (server-side reassembly,
-// fragmenting/encrypting). Animated sliding bar so it's clearly "working".
-function progIndet(msg){ $("#toast-msg").textContent=msg; const t=$("#toast");
-  t.classList.add("show","busy","progress","indet");
-  clearTimeout(window._tt); $("#toast-fill").style.width="40%"; }
+// One-off notices (folder created, share results, errors) — a transient task line.
+function toast(msg){ newTask("").done(msg); }
 
 /* ---- auth ---- */
 $("#to-signup")?.addEventListener("click", ()=>{ $("#login-form").classList.add("hidden"); $("#signup-form").classList.remove("hidden"); $("#login-err").textContent=""; });
@@ -383,12 +396,13 @@ async function gateOnChain(n, btn){
 /* ---- download (on-chain check -> fetch -> verify bit-perfect) ---- */
 async function downloadFile(n, btn){
   // Button shows a fixed-width spinner (not long text) so the card never reflows;
-  // the descriptive per-stage status + progress bar live in the toast.
-  const label = btn ? btn.textContent : "";
-  if(btn){ btn.classList.add("loading"); btn.dataset.label=label; btn.innerHTML='<span class="btnspin"></span>'; }
-  const done=(msg)=>{ toast(msg); if(btn){ btn.classList.remove("loading"); btn.textContent=btn.dataset.label||"Download"; } };
+  // the descriptive per-stage status + progress bar live in this download's own
+  // task line — concurrent downloads each get their own.
+  const T=newTask(n.name);
+  if(btn){ btn.classList.add("loading"); btn.dataset.label=btn.textContent; btn.innerHTML='<span class="btnspin"></span>'; }
+  const done=(msg)=>{ T.done(msg); if(btn){ btn.classList.remove("loading"); btn.textContent=btn.dataset.label||"Download"; } };
   try{
-    progIndet("Checking permission on-chain…");
+    T.set("Checking permission on-chain…",{indet:true});
     const rv=await api("/api/verify/"+n.id); const v=await rv.json();
     if(!v.allowed){ done("Blockchain: no active grant for you ✗"); return; }
 
@@ -397,17 +411,17 @@ async function downloadFile(n, btn){
     // from storage and decrypts locally — plaintext never exists on the server.
     // Falls back to server-side reassembly if the plan isn't available.
     try{
-      progIndet("Requesting fragment map + keys…");
+      T.set("Requesting fragment map + keys…",{indet:true});
       const pr=await api("/api/download-plan/"+n.id);
       if(pr.ok){
         const plan=await pr.json();
         const {blob, sha256}=await XinsereClient.reassemble(plan, {
           // decrypt messages are suppressed — decrypt overlaps fetch, and flipping
           // the determinate bar to indeterminate mid-transfer reads as regression.
-          onStage:(stage,msg)=>{ if(stage==="verify") progIndet(msg); },
+          onStage:(stage,msg)=>{ if(stage==="verify") T.set(msg,{indet:true}); },
           onProgress:(got,total)=> total
-            ? prog(`Fetching fragments — ${(got/total*100).toFixed(0)}% · ${fmtSize(got)} / ${fmtSize(total)}`, got/total*100)
-            : progIndet(`Fetching fragments — ${fmtSize(got)}…`),
+            ? T.set(`Fetching fragments — ${(got/total*100).toFixed(0)}% · ${fmtSize(got)} / ${fmtSize(total)}`,{pct:got/total*100})
+            : T.set(`Fetching fragments — ${fmtSize(got)}…`,{indet:true}),
         });
         const url=URL.createObjectURL(blob);
         const a=document.createElement("a"); a.href=url; a.download=n.name; document.body.appendChild(a); a.click(); a.remove();
@@ -422,7 +436,7 @@ async function downloadFile(n, btn){
       try{ api("/api/client-log",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({file:n.id,name:n.name,size:n.size,error:String(e.message||e),
                              events:(e.xinsereEvents||[]).slice(-40)})}); }catch(_){}
-      progIndet("Browser reassembly interrupted — falling back to server (slower)…");
+      T.set("Browser reassembly interrupted — falling back to server (slower)…",{indet:true});
     }
 
     // Fallback: server-side reassembly (pull fragments -> decrypt -> verify).
@@ -437,12 +451,12 @@ async function downloadFile(n, btn){
       while(true){
         const {done:d, value}=await reader.read(); if(d) break;
         chunks.push(value); got+=value.length;
-        if(total) prog(`Downloading — ${(got/total*100).toFixed(0)}% · ${fmtSize(got)} / ${fmtSize(total)}`, got/total*100);
-        else progIndet(`Downloading — ${fmtSize(got)}…`);
+        if(total) T.set(`Downloading — ${(got/total*100).toFixed(0)}% · ${fmtSize(got)} / ${fmtSize(total)}`,{pct:got/total*100});
+        else T.set(`Downloading — ${fmtSize(got)}…`,{indet:true});
       }
       blob=new Blob(chunks, {type:r.headers.get("Content-Type")||"application/octet-stream"});
     } else {
-      progIndet("Preparing file…"); blob=await r.blob();
+      T.set("Preparing file…",{indet:true}); blob=await r.blob();
     }
     const url=URL.createObjectURL(blob);
     const a=document.createElement("a"); a.href=url; a.download=n.name; document.body.appendChild(a); a.click(); a.remove();
@@ -480,15 +494,17 @@ async function uploadFiles(files, withPaths=false){
   // Direct-to-S3: each file is PUT straight to the staging bucket via a presigned
   // URL (no 4.5 MB function cap), then finalized through the pipeline. Every stage
   // uses a sticky progress status so long uploads never look frozen.
-  let done=0;
-  for(let i=0;i<files.length;i++){
+  // One task line for the whole batch — parallel downloads keep their own lines.
+  const T=newTask(files.length>1 ? `${files.length} files` : files[0].name);
+  let done=0, failed=false;
+  for(let i=0;i<files.length && !failed;i++){
     const f=files[i];
     const rel = withPaths ? (f.webkitRelativePath||f.name) : f.name;
-    const tag = `${f.name} · ${i+1}/${files.length}`;
-    prog(`Uploading ${tag} — 0% · ${fmtSize(f.size)}`, 0);
+    const tag = files.length>1 ? `${f.name} · ${i+1}/${files.length}` : f.name;
+    T.set(`Uploading ${tag} — 0% · ${fmtSize(f.size)}`,{pct:0});
     const uf=new FormData(); uf.append("parent",CURRENT);
     const ur=await api("/api/upload-url",{method:"POST",body:uf});
-    if(!ur.ok){ toast("✗ "+((await ur.json()).error||"Could not start upload")); break; }
+    if(!ur.ok){ T.done("✗ "+((await ur.json()).error||"Could not start upload")); failed=true; break; }
     const {key,url}=await ur.json();
     // Retry the PUT up to 3 times with backoff — transient network/S3 blips must
     // not fail the upload. (A single PUT restarts whole-file; chunk-level resume
@@ -496,25 +512,25 @@ async function uploadFiles(files, withPaths=false){
     let uploaded=false;
     for(let a=0;a<3 && !uploaded;a++){
       try{
-        if(a) prog(`Retrying upload (${a+1}/3) ${tag} — 0% · ${fmtSize(f.size)}`, 0);
-        await putWithProgress(url, f, (pct)=> prog(`Uploading ${tag} — ${pct.toFixed(0)}% · ${fmtSize(f.size)}`, pct));
+        if(a) T.set(`Retrying upload (${a+1}/3) ${tag} — 0% · ${fmtSize(f.size)}`,{pct:0});
+        await putWithProgress(url, f, (pct)=> T.set(`Uploading ${tag} — ${pct.toFixed(0)}% · ${fmtSize(f.size)}`,{pct}));
         uploaded=true;
       }catch(e){
         console.warn("xinsere: upload PUT failed (attempt "+(a+1)+"):", e);
         if(a<2) await new Promise(r=>setTimeout(r, 600*(a+1)));
       }
     }
-    if(!uploaded){ toast("✗ Direct upload to storage failed after 3 attempts"); break; }
+    if(!uploaded){ T.done("✗ Direct upload to storage failed after 3 attempts"); failed=true; break; }
     // Server-side fragment/encrypt/scatter — duration unknown, so indeterminate.
-    progIndet(`Securing ${tag} · fragmenting + encrypting + scattering…`);
+    T.set(`Securing ${tag} · fragmenting + encrypting + scattering…`,{indet:true});
     const ff=new FormData();
     ff.append("key",key); ff.append("name",f.name); ff.append("parent",CURRENT);
     ff.append("path",rel); ff.append("content_type",f.type||"application/octet-stream");
     const fin=await api("/api/finalize-upload",{method:"POST",body:ff});
-    if(!fin.ok){ toast("✗ "+((await fin.json()).error||"Finalize failed")); break; }
+    if(!fin.ok){ T.done("✗ "+((await fin.json()).error||"Finalize failed")); failed=true; break; }
     done++;
   }
-  if(done) toast(`✓ Secured ${done} file${done>1?"s":""} · fragmented + encrypted + scattered`);
+  if(!failed) T.done(done ? `✓ Secured ${done} file${done>1?"s":""} · fragmented + encrypted + scattered` : "Upload cancelled");
   openFolder(CURRENT);
   $("#file-input").value=""; $("#folder-input").value="";
 }

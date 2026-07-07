@@ -36,9 +36,13 @@ def _s3():
     # the signed one exactly — it doesn't, so documents 403 while type-less files
     # (fonts) slip through. SigV4 signs only `host`, so the browser may send any
     # Content-Type as an unsigned header.
+    region = os.environ.get("AWS_REGION") or "us-east-1"
     return boto3.client(
         "s3",
-        region_name=os.environ.get("AWS_REGION") or "us-east-1",
+        region_name=region,
+        # Regional endpoint pinned — the global endpoint 307-redirects for new
+        # buckets (no CORS on the redirect), which kills browser uploads.
+        endpoint_url=f"https://s3.{region}.amazonaws.com",
         config=Config(signature_version="s3v4"),
     )
 

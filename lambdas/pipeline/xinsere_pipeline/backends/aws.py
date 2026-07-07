@@ -70,8 +70,14 @@ class S3ObjectStore(ObjectStore):
         self._names = list(bucket_names)
         self._default_region = default_region
         # client_factory(region) -> boto3 s3 client; overridable for tests.
+        # Pin the REGIONAL endpoint explicitly. The global endpoint answers for a
+        # brand-new bucket with a 307 redirect for up to ~24h — and that redirect
+        # carries no CORS headers, so browser fragment fetches die with
+        # "Failed to fetch". Regional endpoints work from the moment of creation.
         self._factory = client_factory or (
-            lambda region: boto3.client("s3", region_name=region, config=_SIGV4))
+            lambda region: boto3.client(
+                "s3", region_name=region,
+                endpoint_url=f"https://s3.{region}.amazonaws.com", config=_SIGV4))
         self._clients: dict[str, object] = {}   # region -> client
         self._bucket_region: dict[str, str] = {}  # bucket -> region (cache)
 
