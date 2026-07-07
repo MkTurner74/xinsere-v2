@@ -31,3 +31,5 @@ Thumbs.db
 # Test artifacts
 tests/fixtures/
 tests/tmp/
+
+.vercel
