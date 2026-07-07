@@ -170,6 +170,30 @@ async def logout(request: Request):
     return {"ok": True}
 
 
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get(
+    "XINSERE_ADMIN_EMAILS", "mark.turner@entertainmenttechnologists.com").split(",") if e.strip()}
+
+
+@app.post("/api/admin/invite")
+async def admin_invite(request: Request, email: str = Form(...), name: str = Form(...)):
+    """Invite a user (public signup is disabled). Admin-only: the signed-in
+    caller's profile email must be in XINSERE_ADMIN_EMAILS. Generates a strong
+    password and returns it ONCE — forward it privately."""
+    import secrets as _secrets
+    s = _session(request)
+    prof = supa.get_profile(s["access_token"], s["user_id"]) or {}
+    if (prof.get("email") or "").lower() not in ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="Admin only")
+    password = _secrets.token_urlsafe(12)
+    try:
+        user = supa.admin_create_user(email.strip().lower(), password, name.strip())
+    except supa.SupabaseError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail or "Invite failed")
+    # (invitee's root folder is created lazily on their first login)
+    return {"ok": True, "email": email.strip().lower(), "name": name.strip(),
+            "password": password, "user_id": user.get("id")}
+
+
 @app.get("/api/me")
 async def me(request: Request):
     s = _session(request)

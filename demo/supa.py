@@ -51,6 +51,25 @@ def sign_up(email: str, password: str, name: str, username: str | None = None) -
     return _auth("/signup", {"email": email, "password": password, "data": data})
 
 
+def admin_create_user(email: str, password: str, name: str) -> dict:
+    """Provision a confirmed account (invite flow — public signup is disabled).
+    Uses the service-role key; the on_auth_user_created trigger builds the
+    profile row from the metadata, same as self-serve signup."""
+    if not SERVICE_ROLE_KEY:
+        raise SupabaseError(501, "Service role key not configured")
+    r = requests.post(
+        f"{SUPABASE_URL}/auth/v1/admin/users",
+        headers={"apikey": SERVICE_ROLE_KEY, "Authorization": f"Bearer {SERVICE_ROLE_KEY}",
+                 "Content-Type": "application/json"},
+        json={"email": email, "password": password, "email_confirm": True,
+              "user_metadata": {"name": name}},
+        timeout=_TIMEOUT,
+    )
+    if r.status_code >= 400:
+        raise SupabaseError(r.status_code, r.json().get("msg") or r.text)
+    return r.json()
+
+
 def sign_in(email: str, password: str) -> dict:
     """Password login. Returns {access_token, refresh_token, expires_in, user}."""
     return _auth("/token", {"email": email, "password": password}, params={"grant_type": "password"})
