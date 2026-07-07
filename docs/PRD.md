@@ -93,10 +93,14 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    (move reconciles inherited shares on-chain both directions; rename is
    display-only by design; late-added files in shared folders now get grants).
    Remaining: **download-folder-as-zip** (client-side reassemble + zip),
-   deep-nesting verification on upload, and the UX upgrades from the research
+   deep-nesting verification on upload, and more UX upgrades from the research
    doc (`projects/Xinsere/research/2026-07-07-file-explorer-ux-best-practices.md`
-   in the Docs repo): trash/soft-delete with undo-toast instead of confirm
-   dialogs, inline F2 rename, multi-select, list/grid toggle, conflict dialog.
+   in the Docs repo). **Shipped 2026-07-07 from that doc:** list/grid toggle
+   (list default), SVG icon system + shield "Secured" badge, kebab context menu
+   with Drive-ordered actions + on-chain proof, undo-toast for rename, content-
+   type honesty. **Still to adopt (now-tier):** trash/soft-delete + undo for
+   delete, multi-select + selection action bar, inline F2 rename, duplicate-name
+   conflict dialog, keyboard set + aria-live, drag-to-move.
 5. **Proper authentication.** Move the demo off invite-only email/password:
    Supabase Auth with email verification + password reset (Resend), OAuth
    (Google/Microsoft) sign-in, session hardening. Enterprise SSO (OIDC/SAML)
