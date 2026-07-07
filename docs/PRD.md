@@ -7,10 +7,38 @@
 
 ---
 
-## Implementation Status — 2026-07-06
+## Implementation Status — 2026-07-07
 
-The DPD core is built and tested. Reference implementation lives in this repo
-(`lambdas/`, `demo/`); a working end-to-end demo runs today.
+The DPD core is built and tested, the hosted demo is **live in production on real
+AWS infrastructure** (https://xinsere-v2.vercel.app), and the flagship download
+path is now **client-side reassembly** — plaintext never exists on the server.
+
+### Major revision 2026-07-07 — production hardening + client-side reassembly
+- **Client-side reassembly SHIPPED (server-as-oracle).** `GET /api/download-plan`
+  issues presigned per-fragment URLs + unwrapped data keys post-permission-check;
+  the browser fetches fragments straight from S3 in parallel, decrypts with
+  WebCrypto AES-256-GCM, joins, and verifies whole-file SHA-256. Reusable module
+  `demo/frontend/xinsere-client.js` (seed of the JS SDK / MCP client). Server-side
+  retrieve() remains automatic fallback. 176MB file: verified fast, bit-perfect.
+- **Resilient transfers.** Per-fragment retry w/ exponential backoff, HTTP Range
+  resume from last byte, short-read detection (early EOF ≠ success), partial-byte
+  preservation across error retries. Upload PUT retries 3x. Client failures are
+  never silent: visible failover + diagnostics POSTed to `/api/client-log`.
+- **Fragment pool tripled: 21 → 60 buckets** (12 per region × use1/use2/usw1/
+  usw2/cac1), all private + SSE-S3. Every region can now hold a full 7-fragment
+  file (region-scoped-write prerequisite). AWS quota 10k — scales to 500+.
+- **Regional S3 endpoints pinned everywhere** — the global endpoint 307-redirects
+  for <24h-old buckets with no CORS headers (browser-fatal). Also: all presigned
+  URLs SigV4 (SigV2 signed Content-Type into PUTs, 403ing document uploads).
+- **Retrieve fan-out uncapped** (was min(frags, cpu_count) → 2 workers on
+  serverless; now one thread/fragment). 184MB reassembles in ~2.6s server-side.
+- **Per-stage timing instrumentation** — index/S3/KMS/AES/join/verify breakdown
+  logged per retrieve + `X-Retrieve-Timing` response header.
+- **Cold-start work**: lazy boto3/web3 imports, `/api/warm` endpoint, keep-warm
+  GitHub Action (activates on merge to main).
+- **UX**: per-operation task stack (concurrent transfers each get their own
+  status line + progress bar), fixed-width busy buttons, on-chain grant gate on
+  shared files' Download button (disabled until verify() reads the grant).
 
 ### Built & tested
 - **Smart contract** — `XinserePermissions` deployed to **Polygon Amoy** testnet:
@@ -31,17 +59,21 @@ The DPD core is built and tested. Reference implementation lives in this repo
   read ~0.7 s, write ~1.2 s. See `projects/Xinsere/benchmark-results.md` (Docs repo).
 
 ### Divergences from the target architecture (design intent, not yet built)
-- **Storage:** demo uses local pipeline backends, not S3/KMS/DynamoDB (P0 infra,
-  AWS-team-owned). AWS backends are written but untested.
+- ~~**Storage:** demo uses local pipeline backends~~ **RESOLVED 2026-07-07**: the
+  hosted demo runs the real AWS backends in production — S3 (60-bucket scatter),
+  KMS envelope keys, DynamoDB index.
 - **Network:** Amoy testnet, not Polygon PoS mainnet.
-- **Auth:** demo uses email/password, not federated OIDC/SAML.
+- **Auth:** demo uses email/password (Supabase), not federated OIDC/SAML.
 - **Permissions:** demo verifies direct-from-chain; the fail-closed local cache
   (Emb. 4 of the CIP) is not built.
-- **Parallelism:** real, but large-file gains need the parallel-S3 path (single
-  local disk is I/O-bound). Fragment count fixed/selectable (3/5/7/11/16), not
-  adaptive.
+- **Routing randomness:** modular routing places a file's fragments in
+  CONSECUTIVE buckets (jitter only shifts the start) — observed in prod
+  (video.mp4 → usw2-01..07). Fine for the demo; for the "fragments could be
+  anywhere" story the router should draw truly random distinct buckets per file.
+- **Upload resume:** staging PUT is whole-file retry; S3 multipart (chunk-level
+  resume) not yet built. Download-side resume is done.
 - Not built: size-based Lambda/Fargate routing, malware scan, multi-tenant CMK
-  isolation, MCP server, forensic watermarking.
+  isolation, MCP server, forensic watermarking, region-scoped write.
 
 ### Next in dev (priority order)
 1. **Finish security cleanup (Phase 0).** `AKIAQ3EGU6BLQUWCCQGV` (Mark's acct
@@ -50,18 +82,26 @@ The DPD core is built and tested. Reference implementation lives in this repo
    Mark's acct) — **Max must** deactivate/delete + scrub the POC repo/history.
    *Optional demo add:* wire on-chain permission **expiry** (contract already
    supports `expiryTime`; demo hardcodes 0) — end-dated grants, no revoke needed.
-2. **Deploy the hosted demo (v2).** Pick host, set signer secret — lets J&J self-serve.
+2. ~~Deploy the hosted demo (v2)~~ **DONE 2026-07-06/07** — live at
+   xinsere-v2.vercel.app on real AWS backends, invite-only auth.
 3. **Add revoke to the demo.** Contract supports it; surface grant *and* revoke so
    the demo shows access being cut off on-chain.
-4. **Wire AWS backends** (S3/KMS/DynamoDB) once P0 infra exists → real parallel-S3
-   throughput + multi-tenant CMK isolation.
-5. **MCP server** (`@xinsere/mcp`) — the AI-agent product surface (see mcp-spec).
-6. **Deeper patent differentiators:** fail-closed revocation cache, federated
-   identity (OIDC/SAML), size-based large-file routing, forensic watermarking.
+4. **True-random fragment routing.** Modular routing yields consecutive buckets
+   (see Divergences) — draw N distinct random buckets per file so the scatter
+   pattern is genuinely unpredictable. Small change, big story value.
+5. **Upload resume via S3 multipart** (chunk-level, matches the download-side
+   resilience already shipped); then client-side fragment+encrypt on upload
+   (MediaShippers pattern) so plaintext never touches the server on upload either.
+6. **MCP server** (`@xinsere/mcp`) — the AI-agent product surface (see mcp-spec);
+   reuses the retrieval-plan API + xinsere-client logic.
 7. **Region-scoped write (data residency).** API-selectable write region; default
-   scatters wide across the North America pool. Region-locked *and* randomized —
-   the EU/Germany data-sovereignty play. Bucket prerequisite met 2026-07-07; schema
-   + routing mode to build in Phase 3. See *Planned capability: region-scoped write*.
+   scatters wide. Region-locked *and* randomized — the EU/Germany play. Bucket
+   prerequisite met 2026-07-07. See *Planned capability: region-scoped write*.
+8. **Deeper patent differentiators:** fail-closed revocation cache, federated
+   identity (OIDC/SAML), size-based large-file routing, forensic watermarking.
+9. **Housekeeping:** fund Amoy signer wallet (grants ~0.015 POL each; Google
+   Cloud Web3 faucet); merge branch to main (activates keep-warm cron); revert
+   XINSERE_DEBUG_ERRORS handler when demo phase ends.
 
 ### Planned capability: temporal access windows (timed shares & embargo release)
 
