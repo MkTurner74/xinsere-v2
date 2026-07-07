@@ -152,10 +152,29 @@ tier is **meaningless without in-browser viewing**. Therefore:
   Trash window, grants kept intact to avoid gas churn on restore; revoked on
   Erase/expiry). A **recipient** can only **"Remove from Shared with me"** (drops
   their own grant), never delete the real file.
-- **30-day auto-purge** needs a scheduled job (daily cron → `/api/purge-expired`,
-  secret-gated) that hard-erases items past their `deleted_at + 30d`.
-- Depends on migration 0002 (adds `nodes.deleted_at`); Mark to run it in the
-  Supabase SQL editor, then the feature deploys.
+- **30-day auto-purge — demo vs scale (deliberately different systems).**
+  - *Demo (shipped):* a daily **Vercel cron** hits `GET /api/purge-expired`
+    (Vercel-cron-auth or manual secret), which erases a **bounded batch**
+    (`PURGE_BATCH`, oldest-first) so it can never exceed the function timeout no
+    matter how much is queued. Adequate at demo volume; a large backlog just
+    drains over several daily runs.
+  - *Production (NOT this — a single endpoint doesn't scale):* at real volume the
+    purge could be thousands of files/hour, each needing on-chain revoke + 7 S3
+    deletes + KMS + index removal — far past any one function's timeout, and a
+    single-signer revoke loop is the hard bottleneck. Correct design is a
+    **queue fan-out**, matching Xinsere's existing upload/orchestrator pattern:
+    1. **Scheduler** (EventBridge rule, or DynamoDB **native TTL** on the index
+       rows) identifies expired items — no scanning cron.
+    2. Enqueue each expired id to **SQS**.
+    3. **Worker Lambdas** consume concurrently (auto-scale with queue depth),
+       each erasing one item, with **retries + dead-letter queue** for failures
+       and idempotent deletes.
+    4. **Decouple the on-chain revoke** — cryptographic erasure *already* kills
+       access, so the revoke is an audit record, not enforcement. Push revokes to
+       a separate low-priority queue and **batch** them (a `revokeBatch()`
+       contract method), removing the thousands-of-txs/single-signer bottleneck.
+  - So: keep the bounded cron for the demo; swap in the SQS/worker fan-out +
+    batch-revoke when Xinsere goes multi-tenant/production.
 
 5. **Proper authentication.** Move the demo off invite-only email/password:
    Supabase Auth with email verification + password reset (Resend), OAuth

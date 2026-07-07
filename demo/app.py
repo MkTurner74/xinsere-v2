@@ -504,26 +504,42 @@ async def empty_trash(request: Request):
     return {"ok": True, **total}
 
 
-@app.post("/api/purge-expired")
+@app.get("/api/purge-expired")
 async def purge_expired(request: Request):
-    """Auto-purge: hard-erase Trash items older than 30 days. Service-role,
-    secret-gated (called by a daily cron); scans all users."""
-    if request.headers.get("X-Purge-Secret") != os.environ.get("XINSERE_PURGE_SECRET", "\x00off"):
+    """Auto-purge Trash items older than 30 days. BOUNDED per call (processes at
+    most PURGE_BATCH items, oldest first) so it can never exceed the function
+    timeout no matter how much is queued — a daily Vercel cron calls it.
+
+    NOTE (scale): this single-endpoint scan+erase is a DEMO-scale design. At
+    production volume the purge is a queue fan-out — scheduler enqueues expired
+    ids to SQS, worker Lambdas erase in parallel with retries/DLQ, and on-chain
+    revokes are batched/decoupled (erasure already kills access). See PRD
+    "Trash auto-purge at scale".
+
+    Auth: Vercel cron (Authorization: Bearer $CRON_SECRET) or a manual
+    X-Purge-Secret header."""
+    cron_secret = os.environ.get("CRON_SECRET")
+    manual_secret = os.environ.get("XINSERE_PURGE_SECRET")
+    authed = ((cron_secret and request.headers.get("authorization") == f"Bearer {cron_secret}")
+              or (manual_secret and request.headers.get("x-purge-secret") == manual_secret))
+    if not authed:
         raise HTTPException(status_code=403, detail="Forbidden")
     svc = supa.SERVICE_ROLE_KEY
     if not svc:
         raise HTTPException(status_code=501, detail="Service role key not configured")
+    limit = int(os.environ.get("XINSERE_PURGE_BATCH", "100"))
     cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    rows = supa._rest("GET", "/nodes", svc,
-                      params={"deleted_at": f"lt.{cutoff}", "select": "*"})
+    rows = supa._rest("GET", "/nodes", svc, params={
+        "deleted_at": f"lt.{cutoff}", "select": "id",
+        "order": "deleted_at.asc", "limit": str(limit)}) or []
     erased = 0
-    for r in rows or []:
+    for r in rows:
         try:
             _erase_subtree(svc, r["id"])
             erased += 1
         except Exception:
             pass
-    return {"ok": True, "purged": erased, "cutoff": cutoff}
+    return {"ok": True, "purged": erased, "batch_limit": limit, "more_likely": len(rows) == limit}
 
 
 @app.post("/api/unshare")
