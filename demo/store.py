@@ -11,6 +11,7 @@ import sys
 import uuid
 
 import boto3
+from botocore.config import Config
 
 # Make the pipeline package importable from the sibling lambdas/ dir.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,7 +30,16 @@ MAX_INLINE_BYTES = int(os.environ.get("XINSERE_MAX_INLINE_BYTES", str(500 * 1024
 
 
 def _s3():
-    return boto3.client("s3", region_name=os.environ.get("AWS_REGION") or "us-east-1")
+    # Force SigV4: with SigV2 presigned PUTs, Content-Type is part of the
+    # string-to-sign, so the browser's MIME type (e.g. application/pdf) must match
+    # the signed one exactly — it doesn't, so documents 403 while type-less files
+    # (fonts) slip through. SigV4 signs only `host`, so the browser may send any
+    # Content-Type as an unsigned header.
+    return boto3.client(
+        "s3",
+        region_name=os.environ.get("AWS_REGION") or "us-east-1",
+        config=Config(signature_version="s3v4"),
+    )
 
 
 def presign_put(user_id: str) -> tuple[str, str]:
