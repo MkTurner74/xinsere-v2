@@ -147,11 +147,10 @@
     <p>Secure files. Shared with proof.</p>
 
     <form id="login-form">
-      <div class="field"><label>Email or username</label><input id="u" autocomplete="username" placeholder="you@company.com" value="mark"></div>
-      <div class="field"><label>Password</label><input id="p" type="password" autocomplete="current-password" value="xinsere"></div>
+      <div class="field"><label>Email</label><input id="u" type="email" autocomplete="username" placeholder="you@company.com"></div>
+      <div class="field"><label>Password</label><input id="p" type="password" autocomplete="current-password"></div>
       <button class="btn full" type="submit">Sign in</button>
-      <div class="login-hint">New here? <button type="button" class="linkbtn" id="to-signup">Create an account</button><br>
-        Demo users: <b>mark</b> · <b>jeremy</b> · <b>joshua</b> — password <b>xinsere</b></div>
+      <div class="login-hint">Access is by invitation. Contact Mark to get an account.</div>
     </form>
 
     <form id="signup-form" class="hidden">
@@ -221,8 +220,8 @@ function toast(msg){ $("#toast-msg").textContent=msg; const t=$("#toast"); t.cla
   clearTimeout(window._tt); window._tt=setTimeout(()=>t.classList.remove("show"),2800); }
 
 /* ---- auth ---- */
-$("#to-signup").addEventListener("click", ()=>{ $("#login-form").classList.add("hidden"); $("#signup-form").classList.remove("hidden"); $("#login-err").textContent=""; });
-$("#to-login").addEventListener("click", ()=>{ $("#signup-form").classList.add("hidden"); $("#login-form").classList.remove("hidden"); $("#login-err").textContent=""; });
+$("#to-signup")?.addEventListener("click", ()=>{ $("#login-form").classList.add("hidden"); $("#signup-form").classList.remove("hidden"); $("#login-err").textContent=""; });
+$("#to-login")?.addEventListener("click", ()=>{ $("#signup-form").classList.add("hidden"); $("#login-form").classList.remove("hidden"); $("#login-err").textContent=""; });
 
 $("#login-form").addEventListener("submit", async (e)=>{
   e.preventDefault();
