@@ -128,7 +128,11 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    scatters wide. Region-locked *and* randomized — the EU/Germany play. Bucket
    prerequisite met 2026-07-07. See *Planned capability: region-scoped write*.
 12. **Deeper patent differentiators:** fail-closed revocation cache, federated
-   identity (OIDC/SAML), size-based large-file routing, forensic watermarking.
+   identity (OIDC/SAML), size-based large-file routing, forensic watermarking —
+   and once watermarking lands, the **forensic file-history tool** (admin-only
+   "what happened to this file" — decode + verify + provenance timeline; see
+   *Planned capability: forensic file-history tool*). We ship the reference
+   reader ourselves; it's the proof point of the whole forensic story.
 13. **Housekeeping:** fund Amoy signer wallet (grants ~0.015 POL each; Google
    Cloud Web3 faucet); ~~merge branch to main~~ done 2026-07-07 (keep-warm cron
    active); revert XINSERE_DEBUG_ERRORS handler when demo phase ends.
@@ -191,6 +195,42 @@ unchanged — the fragments are still randomized, just within a chosen geography
 
 Ties directly to **Market B — data sovereignty** (below) and Deployment Mode 3
 (BYOB), but works even in pure SaaS mode.
+
+### Planned capability: forensic file-history tool ("what happened to this file")
+
+An admin-only tool that takes any candidate file and produces a plain-English,
+evidence-grade account of its history — the productization of the patent's
+forensic extraction endpoint (Emb. 8) and the delivery-digest verifications
+(proposed Claims 53A–C). Third parties could build a reader against the API, but
+this capability IS the product's proof point — we ship the reference tool
+ourselves and make it part of the pitch/demo.
+
+**What it does.** Upload (or point at) a file →
+1. **Decode** the watermark across all encoding channels (metadata part, covert
+   micro-variation/spread-spectrum channels) and report channel survival.
+2. **Verify** — three server-side checks: delivery-digest comparison
+   (bit-identical-as-delivered vs modified-after-delivery), watermark
+   authenticity by HMAC recomputation with the signing key (genuine vs
+   forged/transplanted), and tamper characterisation from the channel-survival
+   pattern (metadata stripped / re-encoded / content edited).
+3. **Reconstruct provenance** — join the retrieval log entry with the on-chain
+   permission trail (grant → verify → retrieval → any revocation) and the file's
+   write-time record.
+4. **Explain** — render a timeline in plain language: *"Stored by A on date X
+   (SHA-256 …). Shared with B on date Y (tx 0x…). Downloaded by B on date Z from
+   IP …. This copy is bit-identical to that delivery"* — or *"…was modified
+   after delivery; the surviving channels indicate content editing."* Exportable
+   as a signed PDF report for legal/HR use.
+
+**Access control (critical):** admin-level users only, per tenant — the tool
+reveals retrieval history and party identifiers, so it must sit behind the same
+admin gating as user provisioning (and real identity resolution still requires
+the tenant secret, per Emb. 3 privacy model). Every forensic query is itself
+audit-logged (who investigated what, when).
+
+**Build shape:** an API endpoint (`POST /v1/forensics/examine`) + an admin UI
+page in the file explorer; the LLM-friendly "explain" layer also becomes an MCP
+tool so an authorized agent can answer "what happened to this file?" directly.
 
 ### Planned capability: client-side reassembly (server-as-oracle) — demo v1 SHIPPED 2026-07-07
 
