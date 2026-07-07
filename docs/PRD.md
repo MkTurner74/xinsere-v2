@@ -110,9 +110,53 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    wasteful (7 KMS keys + 7 objects for zero scatter benefit); keep 7 for
    uniformity, or add a minimum-fragment-size / size-based count (ties to the
    patent's size-based routing). Deferred — uniformity is fine for the demo.
-   (c) **New-folder perceived perf**: create does insert → full tree re-fetch
-   (two sequential round-trips); make it optimistic (append locally, reconcile
-   on next fetch).
+   (c) ~~New-folder perceived perf~~ DONE 2026-07-07 (optimistic insert).
+
+### Planned capability: sharing permission model + Trash (decided 2026-07-07)
+
+**Roles (target model — 4 tiers).** Encoded on-chain in the contract's existing
+`permissionType` string, so the immutable ledger records not just *who* had
+access but *what capability* — a differentiator that feeds the forensic tool.
+- **Viewer** — read + download/open. *(the only tier enforced today)*
+- **Editor** — Viewer + upload into, rename/move within, overwrite.
+- **Co-owner** — Editor + re-share + manage members + delete contents. Cannot
+  remove the original owner or transfer ownership.
+- **Owner** — all + permanent Erase + ownership transfer.
+Inheritance: folder role cascades to contents and to later-added files
+(grant-on-add, already built). **Phasing:** enforce Viewer now; Editor/Co-owner
+*write* enforcement (RLS + endpoint + contract-type checks) is a later phase.
+
+**The read-only problem (Mark, 2026-07-07) — load-bearing insight.** Xinsere is
+**download-only**: once a file leaves the browser to disk, the recipient
+effectively has *all* rights (edit/copy/redistribute). So a "Viewer / read-only"
+tier is **meaningless without in-browser viewing**. Therefore:
+- **In-browser viewing is the prerequisite that unlocks true read-only** — render
+  the client-reassembled bytes in the browser (PDF.js, `<img>`, `<video>`,
+  office-doc viewer) **without writing to disk**, so "view, no download" actually
+  denies a local copy. This is a real feature, not a flag. Add to roadmap.
+- Even then the **analog hole** (screenshot / screen-record / photograph) can't be
+  closed — so pair in-browser viewing with the **forensic watermark** to shift
+  from prevention (impossible) to attribution/deterrence (traceable), same posture
+  as Widevine/Netflix DRM.
+- **Decision:** downloads stay enabled for now; the view-only toggle is deferred
+  until in-browser viewing exists (its true prerequisite).
+
+**Trash / soft-delete (build next — needs migration `0002_soft_delete.sql`).**
+- Delete is a **two-choice confirm**: **Move to Trash** (recoverable · auto-erases
+  after 30 days) or **Erase** (immediate cryptographic erasure · irreversible),
+  plus a "Moved to Trash · **Undo**" toast.
+- Move-to-Trash / Restore are **metadata-only** (set/clear `deleted_at`) — instant
+  and **gas-free**; the on-chain **revoke + crypto-erase** fires only on Erase or
+  at 30-day auto-purge.
+- **Deleting a shared item:** owner delete affects everyone (hidden during the
+  Trash window, grants kept intact to avoid gas churn on restore; revoked on
+  Erase/expiry). A **recipient** can only **"Remove from Shared with me"** (drops
+  their own grant), never delete the real file.
+- **30-day auto-purge** needs a scheduled job (daily cron → `/api/purge-expired`,
+  secret-gated) that hard-erases items past their `deleted_at + 30d`.
+- Depends on migration 0002 (adds `nodes.deleted_at`); Mark to run it in the
+  Supabase SQL editor, then the feature deploys.
+
 5. **Proper authentication.** Move the demo off invite-only email/password:
    Supabase Auth with email verification + password reset (Resend), OAuth
    (Google/Microsoft) sign-in, session hardening. Enterprise SSO (OIDC/SAML)
