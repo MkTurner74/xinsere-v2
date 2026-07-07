@@ -138,9 +138,29 @@ tier is **meaningless without in-browser viewing**. Therefore:
   office-doc viewer) **without writing to disk**, so "view, no download" actually
   denies a local copy. This is a real feature, not a flag. Add to roadmap.
 - Even then the **analog hole** (screenshot / screen-record / photograph) can't be
-  closed — so pair in-browser viewing with the **forensic watermark** to shift
-  from prevention (impossible) to attribution/deterrence (traceable), same posture
-  as Widevine/Netflix DRM.
+  closed — so pair in-browser viewing with watermarking to shift from prevention
+  (impossible) to attribution/deterrence (traceable), same posture as
+  Widevine/Netflix DRM.
+- **TWO watermarks, don't conflate them** (Mark 2026-07-07):
+  1. **Byte-level forensic watermark** (patent Emb. 8) — in the file *structure*
+     (OOXML custom XML part + micro-spacing, PDF inter-char spacing + zero-opacity
+     text, image spread-spectrum LSB, video `moov/udta` UUID atom, XMP, MXF KLV).
+     Traces a **downloaded** copy that later escapes. Invisible.
+  2. **Perceptible overlay watermark** — a tiled semi-transparent "user · timestamp"
+     drawn *over* the rendered content by the viewer. The **only** thing that can
+     trace a **screenshot/screen-record**, which is the sole exfil vector once
+     download is blocked. Needed specifically for view-only mode.
+- **Viewer-selection constraint (critical):** an in-browser viewer must **not
+  corrupt the byte-level watermark**, and the embedding varies by file type. Per
+  candidate viewer, verify: (a) rendering preserves the source bytes (pure
+  renderers like PDF.js don't rewrite them — but flag any lib that
+  re-parses/normalizes/re-exports and could drop our custom XML part / XMP block /
+  `moov/udta` atom / micro-spacing); (b) no download/print/export path that emits
+  an **un-watermarked** copy (block it or re-watermark on export); (c) it can host
+  a **visible overlay** layer for view-only; (d) our watermark doesn't make the
+  file fail to render in that viewer. (Research in progress:
+  `research/2026-07-07-in-browser-viewer-licensing.md` — now scoring each viewer
+  for watermark-safety.)
 - **Decision:** downloads stay enabled for now; the view-only toggle is deferred
   until in-browser viewing exists (its true prerequisite).
 
