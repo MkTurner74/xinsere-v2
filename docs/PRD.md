@@ -98,9 +98,12 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    in the Docs repo). **Shipped 2026-07-07 from that doc:** list/grid toggle
    (list default), SVG icon system + shield "Secured" badge, kebab context menu
    with Drive-ordered actions + on-chain proof, undo-toast for rename, content-
-   type honesty. **Still to adopt (now-tier):** trash/soft-delete + undo for
-   delete, multi-select + selection action bar, inline F2 rename, duplicate-name
-   conflict dialog, keyboard set + aria-live, drag-to-move.
+   type honesty. **Still to adopt (now-tier):** ~~trash/soft-delete + undo~~
+   DONE 2026-07-07; **multi-select + selection action bar** (Mark 2026-07-07:
+   select several files → batch delete/move/download — endpoints already take a
+   single node_id, so this is a frontend selection store + a batch loop), inline
+   F2 rename, duplicate-name conflict dialog, keyboard set + aria-live,
+   drag-to-move.
    **Ideas parked 2026-07-07:** (a) replace the (always-7) fragment count in the
    row Security column with a **cloud/region distribution indicator** — badges
    for which providers/regions a file's fragments live in (real debug value once

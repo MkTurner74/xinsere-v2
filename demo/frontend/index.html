@@ -166,6 +166,9 @@
   .modal{width:360px;background:var(--bg-2);border:1px solid var(--edge-strong);border-radius:18px;padding:22px;}
   .modal h3{margin:0 0 4px;font-size:1.02rem;}
   .modal .msub{color:var(--muted);font-size:0.82rem;margin:0 0 16px;}
+  .modal .btn.full{margin-top:2px;}
+  .modal .choice-cap{color:var(--faint);font-size:0.76rem;line-height:1.4;text-align:center;margin:7px 6px 16px;}
+  .modal .x-cancel{display:block;margin:2px auto 0;}
   .people{display:flex;flex-direction:column;gap:8px;}
   .person{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:11px;border:1px solid var(--edge);background:transparent;color:var(--text);text-align:left;}
   .person:hover{border-color:var(--word);background:var(--panel-2);}
@@ -177,7 +180,9 @@
   /* Task stack: one status line per concurrent operation (downloads, uploads,
      notices) so parallel transfers never fight over a single message. */
   .tasks{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:50;pointer-events:none;}
-  .task{background:var(--task-bg);border:1px solid var(--edge-strong);color:var(--text);padding:11px 16px;border-radius:12px;font-size:0.85rem;display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:300px;max-width:min(92vw,460px);box-shadow:0 18px 50px -12px rgba(0,0,0,0.7);opacity:0;transform:translateY(14px);transition:opacity .25s,transform .25s;}
+  /* container ignores pointer events so it never blocks the page; each task
+     card re-enables them so its Undo button is clickable */
+  .task{background:var(--task-bg);border:1px solid var(--edge-strong);color:var(--text);padding:11px 16px;border-radius:12px;font-size:0.85rem;display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:300px;max-width:min(92vw,460px);box-shadow:0 18px 50px -12px rgba(0,0,0,0.7);opacity:0;transform:translateY(14px);transition:opacity .25s,transform .25s;pointer-events:auto;}
   .task.show{opacity:1;transform:translateY(0);}
   .task .trow{display:flex;gap:10px;align-items:center;}
   .task .tname{color:var(--faint);font-size:0.74rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none;}
@@ -701,11 +706,11 @@ function deleteItem(n){
   const bg=document.createElement("div"); bg.className="modal-bg";
   bg.innerHTML=`<div class="modal"><h3>Delete “${esc(n.name)}”?</h3>
     <p class="msub">Choose what happens to this ${n.type}${inside}.</p>
-    <button class="btn full x-trash" style="margin-bottom:10px">Move to Trash</button>
-    <p class="msub" style="margin-top:-4px">Recoverable · auto-erases after 30 days</p>
-    <button class="btn-ghost btn full x-erase" style="color:var(--coral);border-color:var(--coral);margin-top:8px">Erase permanently</button>
-    <p class="msub" style="margin-top:-4px">Immediate cryptographic erasure · cannot be undone</p>
-    <button class="linkbtn x-cancel" style="margin-top:14px">Cancel</button></div>`;
+    <button class="btn full x-trash">Move to Trash</button>
+    <p class="choice-cap">Recoverable · auto-erases after 30 days</p>
+    <button class="btn-ghost btn full x-erase" style="color:var(--coral);border-color:var(--coral)">Erase permanently</button>
+    <p class="choice-cap">Immediate cryptographic erasure · cannot be undone</p>
+    <button class="linkbtn x-cancel">Cancel</button></div>`;
   const close=()=>bg.remove();
   bg.querySelector(".x-cancel").onclick=close;
   bg.addEventListener("click",e=>{ if(e.target===bg) close(); });
