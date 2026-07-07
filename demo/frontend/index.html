@@ -320,14 +320,6 @@ document.querySelectorAll(".theme-toggle").forEach(b=>b.addEventListener("click"
 }));
 syncThemeButtons();
 
-/* ---- grid/list view toggle (list default; persisted) ---- */
-function applyLayoutButtons(){ document.querySelectorAll("#viewtoggle button").forEach(b=>b.classList.toggle("on", b.dataset.layout===LAYOUT)); }
-document.querySelectorAll("#viewtoggle button").forEach(b=>{
-  b.innerHTML = b.dataset.layout==="list" ? svg("listv") : svg("gridv");
-  b.addEventListener("click", ()=>{ LAYOUT=b.dataset.layout; localStorage.setItem("xin-layout",LAYOUT); applyLayoutButtons(); renderGrid(LAST, LAST_MANAGE); });
-});
-applyLayoutButtons();
-
 let ME=null, OTHERS=[], VIEW="mine", CURRENT=null; // CURRENT folder id
 let LAYOUT=localStorage.getItem("xin-layout")||"list";  // list (default) | grid
 let LAST=[], LAST_MANAGE=true;                           // last rendered set, for view re-render
@@ -893,6 +885,16 @@ function openShare(node){
   bg.addEventListener("click",e=>{ if(e.target===bg) document.body.removeChild(bg); });
   document.body.appendChild(bg);
 }
+
+/* ---- grid/list view toggle (list default; persisted) ---- */
+/* Wired here, AFTER all definitions (ICON/svg) — running it earlier hit the
+ * const ICON temporal dead zone and threw at load, breaking the login handler. */
+function applyLayoutButtons(){ document.querySelectorAll("#viewtoggle button").forEach(b=>b.classList.toggle("on", b.dataset.layout===LAYOUT)); }
+document.querySelectorAll("#viewtoggle button").forEach(b=>{
+  b.innerHTML = b.dataset.layout==="list" ? svg("listv") : svg("gridv");
+  b.addEventListener("click", ()=>{ LAYOUT=b.dataset.layout; localStorage.setItem("xin-layout",LAYOUT); applyLayoutButtons(); renderGrid(LAST, LAST_MANAGE); });
+});
+applyLayoutButtons();
 
 /* auto-login if session exists */
 boot();
