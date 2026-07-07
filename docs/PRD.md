@@ -84,22 +84,19 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    supports `expiryTime`; demo hardcodes 0) — end-dated grants, no revoke needed.
 2. ~~Deploy the hosted demo (v2)~~ **DONE 2026-07-06/07** — live at
    xinsere-v2.vercel.app on real AWS backends, invite-only auth.
-3. **Revoke + delete (paired).** Surface on-chain revoke in the demo (contract
-   supports it), and **file/folder delete** — which is revoke's storage twin: the
-   pipeline's `delete()` already does cryptographic erasure (remove fragments +
-   index; leftover ciphertext is unrecoverable without the wrapped keys). Deleting
-   a shared file should also revoke its outstanding grants so the chain trail
-   stays truthful.
-4. **File-manager basics (demo → product table stakes):**
-   - **Move** files/folders between directories (tree re-parent; no pipeline work)
-   - **Rename** files/folders (display-name only — fragment names carry no
-     filename linkage, so this never touches storage)
-   - **Nested folders end-to-end**: upload preserves subfolder structure (partially
-     works via relative paths — verify deep nesting), download a folder as a
-     zip (client-side: reassemble each file, zip in browser)
-   - **Directory sharing done right**: share must cover files added to the folder
-     LATER (grant-on-add for existing shares — today only files present at share
-     time get grants), plus unshare
+3. ~~Revoke + delete (paired)~~ **DONE 2026-07-07** — on-chain revoke (unshare,
+   fails closed, verify-first so retries never brick) + delete (revoke grants →
+   pipeline cryptographic erasure → metadata cascade). Chain-consistency review
+   applied: receipt-status checking (reverted tx ≠ success), no-existence-oracle
+   on all endpoints.
+4. **File-manager basics** — move/rename/grant-on-add **DONE 2026-07-07**
+   (move reconciles inherited shares on-chain both directions; rename is
+   display-only by design; late-added files in shared folders now get grants).
+   Remaining: **download-folder-as-zip** (client-side reassemble + zip),
+   deep-nesting verification on upload, and the UX upgrades from the research
+   doc (`projects/Xinsere/research/2026-07-07-file-explorer-ux-best-practices.md`
+   in the Docs repo): trash/soft-delete with undo-toast instead of confirm
+   dialogs, inline F2 rename, multi-select, list/grid toggle, conflict dialog.
 5. **Proper authentication.** Move the demo off invite-only email/password:
    Supabase Auth with email verification + password reset (Resend), OAuth
    (Google/Microsoft) sign-in, session hardening. Enterprise SSO (OIDC/SAML)
