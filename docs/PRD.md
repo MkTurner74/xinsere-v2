@@ -164,6 +164,54 @@ tier is **meaningless without in-browser viewing**. Therefore:
 - **Decision:** downloads stay enabled for now; the view-only toggle is deferred
   until in-browser viewing exists (its true prerequisite).
 
+**In-browser viewing — royalty-free, watermark-preserving rollout** (research:
+`research/2026-07-07-in-browser-viewer-licensing.md`). Reading these needs **no**
+Microsoft/Adobe/codec licence, and pure-reader libs preserve the byte-level
+watermark by construction (they never rewrite the source).
+- **Build shared plumbing FIRST:** the visible tiled `user · timestamp` **overlay**
+  (only thing that traces a screenshot) + **export/print lockdown** in view-only
+  mode. Every recommended viewer supports a DOM/canvas overlay.
+- **Phase 1 (zero licence/patent risk, watermark-safe):** PDF → **PDF.js**
+  (Apache-2.0, the anchor); web-native images PNG/JPEG/GIF/WebP/AVIF/SVG (no lib);
+  TIFF → UTIF.js (MIT); PSD → ag-psd (MIT); text/code/markdown → marked +
+  highlight.js + DOMPurify; CSV → PapaParse (MIT); 3D → three.js/`<model-viewer>`;
+  ZIP listing → fflate (MIT); royalty-free A/V → VP9/AV1/WebM + MP3/Opus/Vorbis/
+  FLAC via native `<video>`/`<audio>`.
+- **Phase 2 — Office (.docx/.xlsx/.pptx) → convert to PDF via BOTVERSE, then view
+  with PDF.js** (Mark 2026-07-07; preferred over the client-side office libs).
+  Reuses ETI's Botverse conversion API as the high-fidelity office→PDF engine, so
+  the *viewer* is always just the zero-risk PDF.js anchor — no docx-preview/SheetJS
+  fidelity ceiling, no AGPL (ONLYOFFICE) / MPL (Collabora) engine to host, no
+  office-viewer iframe with its own download buttons.
+  - **Watermark:** conversion re-serializes the file, so the OOXML byte-watermark
+    is dropped — expected and fine. **Inject the PDF-format forensic watermark
+    into the converted PDF** (patent Emb. 8, PDF method) + the visible overlay at
+    view time. Watermark the artifact the viewer actually sees.
+  - **Scale lever = CACHE the converted PDF** (one conversion per file version,
+    stored — ideally back through Xinsere's own DPD pipeline so the rendered
+    artifact is itself fragmented/encrypted — and reused for every later view). So
+    Botverse load scales with *unique file versions viewed*, not view count.
+    Botverse already runs Fargate + SQS/event-driven orchestrator; office→PDF is
+    lighter than its video transcode, so it scales. Bonus: a real internal
+    customer for Botverse (cross-product synergy).
+  - **To confirm/build:** Botverse currently targets media (transcode/transcribe)
+    — verify or add an **office→PDF** converter (LibreOffice/Collabora headless
+    under the hood). Inter-entity note: Botverse=ETI, Xinsere=separate entity — a
+    light internal licensing arrangement (cf. the existing ETI↔Xinsere license
+    item) applies.
+  - *Fallback (offline / no-Botverse):* the client-side libs — docx-preview
+    (Apache-2.0), SheetJS CE (Apache-2.0), PPTXjs (MIT) — read OOXML directly
+    (open ISO 29500, **no MS licence**) at medium fidelity.
+- **AVOID / gate:** HEVC/H.265 + HEIC/HEIF — patent-pool encumbered *and* not
+  natively decoded by Chrome/Firefox; LGPL libheif does NOT clear the patents and
+  Xinsere's MPEG-LA grant is **H.264 only**. Transcode server-side if forced.
+  H.264/AAC = managed-caution (browser carries its own codec licence).
+- **Watermark traps:** `XLSX.write`, canvas `toBlob()`, three.js exporters, and
+  Collabora/ONLYOFFICE Download all re-serialize → emit **un-watermarked** copies.
+  Disable export in view-only, or re-watermark on the way out.
+- **Myths killed:** reading .docx needs no Microsoft licence; reading PDF/PSD needs
+  no Adobe licence (PDF.js, ag-psd are clean-room).
+
 ### Planned capability: sharing visibility — directional indicators + optional merged view (Mark 2026-07-07)
 
 Research: `research/2026-07-07-sharing-indicators-merged-view.md`. Currently the

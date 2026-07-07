@@ -639,8 +639,19 @@ async function doRename(id, to){
   return api("/api/rename",{method:"POST",body:fd});
 }
 async function renameItem(n){
-  const name=prompt("Rename to:", n.name); if(!name || name===n.name) return;
   const old=n.name;
+  // The extension is LOCKED to the true content type — a file can't fake or lose
+  // its real type, so you rename only the base name. Folders rename freely.
+  const ext = n.type==="file"
+    ? (trueExt(n.content_type) || (n.name.match(/\.([A-Za-z0-9]{1,6})$/)||[])[1] || "")
+    : "";
+  const base = ext ? n.name.replace(/\.[A-Za-z0-9]{1,6}$/,"") : n.name;
+  const input = prompt(ext?`Rename (the .${ext} extension is fixed):`:"Rename to:", base);
+  if(input===null) return;
+  let name;
+  if(ext){ const b=input.trim(); name = new RegExp("\\."+ext+"$","i").test(b) ? b : b+"."+ext; }
+  else name = input.trim();
+  if(!name || name===old) return;
   const r=await doRename(n.id, name);
   if(!r.ok){ toast("✗ "+((await r.json()).error||"Rename failed")); return; }
   openFolder(CURRENT);
