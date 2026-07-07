@@ -364,7 +364,9 @@ async def download_plan(request: Request, node_id: str):
         if not has:
             raise HTTPException(status_code=403, detail="No active on-chain grant for you")
     try:
-        plan = get_pipeline().retrieval_plan(node["file_id"])
+        # 30 min TTL: a retried/slow transfer must not see its fragment URLs
+        # expire mid-download (an expired URL 403s on the Range resume).
+        plan = get_pipeline().retrieval_plan(node["file_id"], url_ttl=1800)
     except NotImplementedError:
         raise HTTPException(status_code=501, detail="Client-side reassembly unavailable")
     except XinsereIntegrityError as exc:
@@ -381,6 +383,20 @@ async def download_plan(request: Request, node_id: str):
             for f in plan["fragments"]
         ],
     }
+
+
+@app.post("/api/client-log")
+async def client_log(request: Request):
+    """Client-side transfer diagnostics sink. Fragment fetches go browser->S3
+    directly, so the server never sees their failures — the client reports them
+    here and they land in the platform logs for diagnosis. Auth required; body
+    truncated; nothing sensitive is logged (no keys, no URLs with signatures)."""
+    s = _session(request)
+    body = (await request.body())[:4000]
+    import logging
+    logging.getLogger("xinsere.client").warning(
+        "client-diag user=%s %s", s["user_id"], body.decode("utf-8", "replace"))
+    return {"ok": True}
 
 
 @app.get("/api/download/{node_id}")

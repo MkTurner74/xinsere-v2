@@ -417,8 +417,11 @@ async function downloadFile(n, btn){
       }
     }catch(e){
       // Failover must be VISIBLE, not silent — otherwise the slow server path
-      // looks like the product. Console carries the real error for diagnosis.
-      console.warn("xinsere: client-side reassembly failed, falling back to server:", e);
+      // looks like the product. Console + server log carry the real error.
+      console.warn("xinsere: client-side reassembly failed, falling back to server:", e, e.xinsereEvents||[]);
+      try{ api("/api/client-log",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({file:n.id,name:n.name,size:n.size,error:String(e.message||e),
+                             events:(e.xinsereEvents||[]).slice(-40)})}); }catch(_){}
       progIndet("Browser reassembly interrupted — falling back to server (slower)…");
     }
 

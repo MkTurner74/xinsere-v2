@@ -37,7 +37,7 @@
    * Content-Range total, that's an early EOF (network drop, server hangup) and
    * we resume from the last byte via Range. Without this, truncated ciphertext
    * only surfaces later as a GCM auth failure. */
-  async function fetchFragment(url, onBytes, retries) {
+  async function fetchFragment(url, onBytes, retries, diag) {
     const chunks = [];
     let got = 0;
     let expected = 0; // total fragment size, learned from the first response
@@ -45,11 +45,14 @@
       try {
         const headers = got > 0 ? { Range: `bytes=${got}-` } : {};
         const r = await fetch(url, { headers });
-        if (got > 0 && r.status !== 206) {
-          // Server ignored Range (or URL re-signed) — start this fragment over.
+        // Order matters: an ERROR response on a resume must NOT wipe the bytes we
+        // already have — we keep them and resume again. Only a genuine 200 (server
+        // ignored Range and is re-sending the full body) restarts the fragment.
+        if (!r.ok && r.status !== 206) throw new Error("fragment GET " + r.status);
+        if (got > 0 && r.status === 200) {
+          diag && diag({ event: "range-ignored", had: got });
           onBytes(-got); chunks.length = 0; got = 0;
         }
-        if (!r.ok && r.status !== 206) throw new Error("fragment GET " + r.status);
         if (!expected) {
           if (r.status === 206) {
             const m = /\/(\d+)\s*$/.exec(r.headers.get("Content-Range") || "");
@@ -72,6 +75,7 @@
         for (const c of chunks) { out.set(c, pos); pos += c.length; }
         return out;
       } catch (e) {
+        diag && diag({ event: "retry", attempt: attempt + 1, got, expected, error: String(e.message || e) });
         if (attempt >= retries) throw e;
         if (typeof console !== "undefined") console.debug("xinsere: fragment retry", attempt + 1, e.message || e);
         // Exponential backoff with jitter; partial bytes are kept — the next
@@ -93,29 +97,43 @@
     [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
   async function reassemble(plan, opts) {
+    // concurrency defaults to 4: reduces parallel-stream churn on big fragments
+    // (browser + S3 cope better than 7+ simultaneous 25MB bodies) at negligible
+    // wall-clock cost since bandwidth is shared anyway.
     const { onStage = () => {}, onProgress = () => {}, retries = 3,
-            concurrency = plan.fragments.length } = opts || {};
+            concurrency = 4 } = opts || {};
     const total = plan.size || 0;
     let received = 0;
     const onBytes = (d) => { received += d; onProgress(received, total); };
 
+    // Diagnostic trail: every retry / range-reset / failure per fragment, so a
+    // failed download can report exactly what went wrong (attached to the error).
+    const events = [];
+    const diagFor = (seq) => (e) => {
+      events.push({ seq, t: Math.round(performance.now()), ...e });
+    };
+
     onStage("fetch", `Fetching ${plan.fragments.length} fragments in parallel…`);
     const frags = plan.fragments.slice().sort((a, b) => a.sequence - b.sequence);
 
-    // Simple concurrency pool (default: all at once — fragment counts are small).
     const plains = new Array(frags.length);
     let next = 0;
     async function worker() {
       while (next < frags.length) {
         const i = next++;
         const f = frags[i];
-        const cipher = await fetchFragment(f.url, onBytes, retries);
+        const cipher = await fetchFragment(f.url, onBytes, retries, diagFor(f.sequence));
         onStage("decrypt", `Decrypting fragment ${f.sequence + 1}/${frags.length}…`);
         plains[i] = await decryptFragment(cipher, f.key, f.nonce);
       }
     }
-    await Promise.all(
-      Array.from({ length: Math.min(concurrency, frags.length) }, worker));
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(concurrency, frags.length) }, worker));
+    } catch (e) {
+      e.xinsereEvents = events;  // carry the trail out for logging
+      throw e;
+    }
 
     onStage("verify", "Verifying whole-file SHA-256…");
     let size = 0;
@@ -126,7 +144,9 @@
 
     const sha = toHex(await crypto.subtle.digest("SHA-256", joined));
     if (plan.sha256 && sha !== plan.sha256) {
-      throw new Error("reassembled file failed SHA-256 verification");
+      const err = new Error("reassembled file failed SHA-256 verification");
+      err.xinsereEvents = events;
+      throw err;
     }
     return {
       blob: new Blob([joined], { type: plan.content_type || "application/octet-stream" }),
