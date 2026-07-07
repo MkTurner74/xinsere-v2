@@ -337,6 +337,10 @@ function renderGrid(children, canManage){
       const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
       dl.onclick=()=>downloadFile(n, dl);
       acts.appendChild(dl);
+      // Files shared TO me: don't light up Download until the on-chain grant is
+      // actually readable from the contract — a freshly-signed grant can lag on
+      // load-balanced RPC nodes, and clicking too early fails the chain check.
+      if(n.owner!==ME.id) gateOnChain(n, dl);
       if(canManage && n.owner===ME.id){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); }
       t.appendChild(acts);
       if(n.owner!==ME.id){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
@@ -355,6 +359,26 @@ function sharedAvatars(n){ const s=document.createElement("div"); s.className="s
   if(tx){ const full=tx.startsWith("0x")?tx:"0x"+tx; const p=document.createElement("a"); p.className="proof";
     p.href="https://amoy.polygonscan.com/tx/"+full; p.target="_blank"; p.rel="noopener";
     p.textContent="on-chain proof · "+full.slice(0,12)+"…"; p.title="View this grant on PolygonScan"; s.appendChild(p);} return s; }
+
+/* Disable a shared file's Download button until verify() reads the grant from
+ * the contract. Retries a few times — a just-written grant can take a moment to
+ * be visible on every RPC node. */
+async function gateOnChain(n, btn){
+  btn.disabled=true; btn.classList.add("loading"); btn.title="Confirming on-chain grant…";
+  btn.innerHTML='<span class="btnspin"></span>';
+  for(let a=0;a<5;a++){
+    try{
+      const r=await api("/api/verify/"+n.id);
+      if(r.ok && (await r.json()).allowed){
+        btn.disabled=false; btn.classList.remove("loading"); btn.textContent="Download";
+        btn.title="On-chain grant confirmed"; return;
+      }
+    }catch(e){}
+    await new Promise(res=>setTimeout(res, 1500*(a+1)));
+  }
+  btn.classList.remove("loading"); btn.textContent="No grant";
+  btn.title="No active on-chain grant found for you";
+}
 
 /* ---- download (on-chain check -> fetch -> verify bit-perfect) ---- */
 async function downloadFile(n, btn){
@@ -378,7 +402,9 @@ async function downloadFile(n, btn){
       if(pr.ok){
         const plan=await pr.json();
         const {blob, sha256}=await XinsereClient.reassemble(plan, {
-          onStage:(stage,msg)=>{ if(stage!=="fetch") progIndet(msg); },
+          // decrypt messages are suppressed — decrypt overlaps fetch, and flipping
+          // the determinate bar to indeterminate mid-transfer reads as regression.
+          onStage:(stage,msg)=>{ if(stage==="verify") progIndet(msg); },
           onProgress:(got,total)=> total
             ? prog(`Fetching fragments — ${(got/total*100).toFixed(0)}% · ${fmtSize(got)} / ${fmtSize(total)}`, got/total*100)
             : progIndet(`Fetching fragments — ${fmtSize(got)}…`),
@@ -389,11 +415,14 @@ async function downloadFile(n, btn){
         done("✓ Bit-perfect — reassembled & verified in your browser · "+sha256.slice(0,10)+"…");
         return;
       }
-    }catch(e){ /* fall through to server-side path */ }
+    }catch(e){
+      // Failover must be VISIBLE, not silent — otherwise the slow server path
+      // looks like the product. Console carries the real error for diagnosis.
+      console.warn("xinsere: client-side reassembly failed, falling back to server:", e);
+      progIndet("Browser reassembly interrupted — falling back to server (slower)…");
+    }
 
     // Fallback: server-side reassembly (pull fragments -> decrypt -> verify).
-    progIndet(v.source==="owner" ? "Reassembling & verifying across fragments…"
-                                 : "Blockchain verified ✓ — reassembling…");
     const r=await api("/api/download/"+n.id);
     if(!r.ok){ let m="Download failed"; try{ m=(await r.json()).error||m; }catch(e){} done("✗ "+m); return; }
     const sha=r.headers.get("X-Content-SHA256")||"";
@@ -458,9 +487,21 @@ async function uploadFiles(files, withPaths=false){
     const ur=await api("/api/upload-url",{method:"POST",body:uf});
     if(!ur.ok){ toast("✗ "+((await ur.json()).error||"Could not start upload")); break; }
     const {key,url}=await ur.json();
-    try{
-      await putWithProgress(url, f, (pct)=> prog(`Uploading ${tag} — ${pct.toFixed(0)}% · ${fmtSize(f.size)}`, pct));
-    }catch(e){ toast("✗ Direct upload to storage failed — "+(e.message||e)); break; }
+    // Retry the PUT up to 3 times with backoff — transient network/S3 blips must
+    // not fail the upload. (A single PUT restarts whole-file; chunk-level resume
+    // via S3 multipart is the planned upgrade for very large files.)
+    let uploaded=false;
+    for(let a=0;a<3 && !uploaded;a++){
+      try{
+        if(a) prog(`Retrying upload (${a+1}/3) ${tag} — 0% · ${fmtSize(f.size)}`, 0);
+        await putWithProgress(url, f, (pct)=> prog(`Uploading ${tag} — ${pct.toFixed(0)}% · ${fmtSize(f.size)}`, pct));
+        uploaded=true;
+      }catch(e){
+        console.warn("xinsere: upload PUT failed (attempt "+(a+1)+"):", e);
+        if(a<2) await new Promise(r=>setTimeout(r, 600*(a+1)));
+      }
+    }
+    if(!uploaded){ toast("✗ Direct upload to storage failed after 3 attempts"); break; }
     // Server-side fragment/encrypt/scatter — duration unknown, so indeterminate.
     progIndet(`Securing ${tag} · fragmenting + encrypting + scattering…`);
     const ff=new FormData();

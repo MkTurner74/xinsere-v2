@@ -31,10 +31,16 @@
 
   /* Fetch one fragment with retry + Range resume. Returns Uint8Array of the
    * complete ciphertext. `onBytes(delta)` reports newly received bytes (may be
-   * called again with a negative correction if a resume restarts a chunk). */
+   * called again with a negative correction if a resume restarts a chunk).
+   *
+   * Short reads are NOT success: if the stream ends before Content-Length /
+   * Content-Range total, that's an early EOF (network drop, server hangup) and
+   * we resume from the last byte via Range. Without this, truncated ciphertext
+   * only surfaces later as a GCM auth failure. */
   async function fetchFragment(url, onBytes, retries) {
     const chunks = [];
     let got = 0;
+    let expected = 0; // total fragment size, learned from the first response
     for (let attempt = 0; ; attempt++) {
       try {
         const headers = got > 0 ? { Range: `bytes=${got}-` } : {};
@@ -44,11 +50,22 @@
           onBytes(-got); chunks.length = 0; got = 0;
         }
         if (!r.ok && r.status !== 206) throw new Error("fragment GET " + r.status);
+        if (!expected) {
+          if (r.status === 206) {
+            const m = /\/(\d+)\s*$/.exec(r.headers.get("Content-Range") || "");
+            if (m) expected = parseInt(m[1], 10);
+          } else {
+            expected = parseInt(r.headers.get("Content-Length") || "0", 10);
+          }
+        }
         const reader = r.body.getReader();
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           chunks.push(value); got += value.length; onBytes(value.length);
+        }
+        if (expected && got < expected) {
+          throw new Error(`short read: ${got}/${expected} bytes`); // retryable — resumes via Range
         }
         const out = new Uint8Array(got);
         let pos = 0;
@@ -56,6 +73,7 @@
         return out;
       } catch (e) {
         if (attempt >= retries) throw e;
+        if (typeof console !== "undefined") console.debug("xinsere: fragment retry", attempt + 1, e.message || e);
         // Exponential backoff with jitter; partial bytes are kept — the next
         // attempt resumes from `got` via Range.
         await sleep(Math.min(8000, 400 * 2 ** attempt) + Math.random() * 300);
