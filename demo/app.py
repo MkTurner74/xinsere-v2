@@ -82,6 +82,7 @@ def node_view(node: dict, viewer: str, token: str, pmap: dict) -> dict:
     owner = pmap.get(node["owner"])
     v = {
         "id": node["id"], "type": node["type"], "name": node["name"],
+        "parent": node.get("parent"),
         "owner": node["owner"], "owner_name": owner["name"] if owner else node["owner"],
         "created_at": node.get("created_at"),
     }

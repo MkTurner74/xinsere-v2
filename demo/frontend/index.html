@@ -13,6 +13,7 @@
     --glow-a:rgba(124,91,255,0.18);--glow-b:rgba(46,33,112,0.4);
     --chrome:rgba(10,7,19,0.7);--input-bg:rgba(0,0,0,0.28);--task-bg:#17122b;
     --track:rgba(255,255,255,0.18);--scrim:rgba(6,4,14,0.66);
+    --icon-bg:rgba(150,124,255,0.22);--icon-edge:rgba(150,124,255,0.4);
     --radius:16px;--font:"Poppins","Outfit","Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     color-scheme:dark;
   }
@@ -26,6 +27,7 @@
     --glow-a:rgba(124,91,255,0.12);--glow-b:rgba(46,33,112,0.07);
     --chrome:rgba(255,255,255,0.78);--input-bg:rgba(91,61,245,0.06);--task-bg:#FFFFFF;
     --track:rgba(27,22,51,0.14);--scrim:rgba(28,20,54,0.35);
+    --icon-bg:rgba(91,61,245,0.09);--icon-edge:rgba(91,61,245,0.22);
     color-scheme:light;
   }
   *{box-sizing:border-box;}
@@ -100,7 +102,7 @@
   .tile.folder:hover{transform:translateY(-2px);}
   .tile .ic{width:44px;height:44px;border-radius:11px;display:grid;place-items:center;font-size:1.3rem;margin-bottom:11px;}
   .tile.folder .ic{background:rgba(224,164,74,0.13);color:#E0A44A;border:1px solid rgba(224,164,74,0.28);}
-  .tile.file .ic{background:var(--panel-2);color:var(--word);border:1px solid var(--edge);}
+  .tile.file .ic{background:var(--icon-bg);color:var(--word);border:1px solid var(--icon-edge);}
   .tile .nm{font-size:0.88rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .tile .mt{font-size:0.72rem;color:var(--muted);margin-top:4px;font-variant-numeric:tabular-nums;}
   .tile .secured{color:var(--mint);}
@@ -138,7 +140,7 @@
   .lrow{border-radius:9px;cursor:default;}
   .lrow:hover{background:var(--panel-2);}
   .lrow.folder{cursor:pointer;}
-  .lrow .ic{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--panel-2);color:var(--word);border:1px solid var(--edge);}
+  .lrow .ic{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;background:var(--icon-bg);color:var(--word);border:1px solid var(--icon-edge);}
   .lrow.folder .ic{color:#E0A44A;background:rgba(224,164,74,0.13);border-color:rgba(224,164,74,0.28);}
   .lrow .ic .svgi{width:17px;height:17px;stroke-width:1.9;}
   .lrow .nm{font-weight:600;font-size:0.86rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -769,11 +771,19 @@ async function downloadFile(n, btn){
 }
 
 /* ---- create / upload ---- */
+// Sort like the backend: folders first, then by name (for optimistic inserts).
+function sortNodes(a,b){ return (a.type!=="folder")-(b.type!=="folder") || (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase()); }
 $("#new-folder").addEventListener("click", async ()=>{
   const name=prompt("Folder name:"); if(!name) return;
   const fd=new FormData(); fd.append("name",name); fd.append("parent",CURRENT);
   const r=await api("/api/folder",{method:"POST",body:fd});
-  if(r.ok){ toast("Folder created"); openFolder(CURRENT); } else toast((await r.json()).error);
+  if(!r.ok){ toast("✗ "+((await r.json()).error||"Could not create folder")); return; }
+  // Optimistic: drop the returned node straight into the current view instead of
+  // re-fetching the whole tree (that second round-trip made it feel slow).
+  const node=await r.json();
+  if(VIEW==="mine" && node.parent===CURRENT){ LAST.push(node); LAST.sort(sortNodes); renderGrid(LAST, LAST_MANAGE); }
+  else openFolder(CURRENT);
+  toast("Folder created");
 });
 $("#up-file").addEventListener("click", ()=>$("#file-input").click());
 $("#up-folder").addEventListener("click", ()=>$("#folder-input").click());
