@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import os
 import time
+from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -414,31 +415,22 @@ async def move(request: Request, node_id: str = Form(...), new_parent: str = For
     return view
 
 
-@app.post("/api/delete")
-async def delete_item(request: Request, node_id: str = Form(...)):
-    """Delete a file or folder (recursive). For every file: revoke outstanding
-    on-chain grants (so the ledger trail stays truthful), then cryptographic
-    erasure in the pipeline (fragments + index removed — leftover ciphertext is
-    unrecoverable), then remove the metadata node (descendants cascade)."""
-    s = _session(request)
-    token, uid = s["access_token"], s["user_id"]
-    node = supa.get_node(token, node_id)
-    if not node or node["owner"] != uid:
-        raise HTTPException(status_code=403, detail="You can only delete your own items")
-    if not node.get("parent"):
-        raise HTTPException(status_code=400, detail="The root folder cannot be deleted")
-
+def _erase_subtree(token: str, node_id: str) -> dict:
+    """Permanent cryptographic erasure of a node (and descendants). For every
+    file: revoke outstanding on-chain grants, then pipeline erasure (fragments +
+    index removed — leftover ciphertext is unrecoverable), then remove the
+    metadata node (descendants cascade). token may be a user token or the
+    service-role key (auto-purge cron)."""
     files = supa.files_under(token, node_id)
     revoked, revoke_errors = 0, 0
     for f in files:
-        # Revoke every grant that covers this file (direct or via a shared ancestor).
         try:
             for sh in supa.shares_covering(token, f["id"]):
                 try:
                     if CHAIN.revoke(f["file_id"], sh["grantee"]):  # None = no active grant (skip)
                         revoked += 1
                 except Exception:
-                    revoke_errors += 1  # chain revoke is best-effort on delete; erasure below is what kills access
+                    revoke_errors += 1  # erasure below kills access regardless
         except Exception:
             revoke_errors += 1
         try:
@@ -446,8 +438,92 @@ async def delete_item(request: Request, node_id: str = Form(...)):
         except Exception:
             pass  # already-gone pipeline records shouldn't block metadata cleanup
     supa.delete_node(token, node_id)
-    return {"ok": True, "deleted_files": len(files), "grants_revoked": revoked,
-            "revoke_errors": revoke_errors}
+    return {"erased_files": len(files), "grants_revoked": revoked, "revoke_errors": revoke_errors}
+
+
+@app.post("/api/delete")
+async def delete_item(request: Request, node_id: str = Form(...)):
+    """Move to Trash (soft delete) — metadata only, no chain writes, no erasure.
+    Reversible via /api/restore; auto-purged 30 days later, or Erased on demand."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="You can only delete your own items")
+    if not node.get("parent"):
+        raise HTTPException(status_code=400, detail="The root folder cannot be deleted")
+    supa.soft_delete(token, node_id, datetime.now(timezone.utc).isoformat())
+    return {"ok": True, "trashed": True}
+
+
+@app.post("/api/restore")
+async def restore_item(request: Request, node_id: str = Form(...)):
+    """Bring an item back out of the Trash to its original location."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="You can only restore your own items")
+    supa.restore_node(token, node_id)
+    return {"ok": True}
+
+
+@app.get("/api/trash")
+async def list_trash(request: Request):
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    pmap = _profiles_map(token)
+    items = [node_view(n, uid, token, pmap) for n in supa.trashed(token, uid)]
+    return {"children": items}
+
+
+@app.post("/api/erase")
+async def erase_item(request: Request, node_id: str = Form(...)):
+    """Permanent, irreversible cryptographic erasure (from Trash or directly)."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="You can only erase your own items")
+    if not node.get("parent"):
+        raise HTTPException(status_code=400, detail="The root folder cannot be erased")
+    return {"ok": True, **_erase_subtree(token, node_id)}
+
+
+@app.post("/api/empty-trash")
+async def empty_trash(request: Request):
+    """Erase everything in the caller's Trash."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    total = {"erased_files": 0, "grants_revoked": 0, "revoke_errors": 0, "items": 0}
+    for n in supa.trashed(token, uid):
+        r = _erase_subtree(token, n["id"])
+        for k in ("erased_files", "grants_revoked", "revoke_errors"):
+            total[k] += r[k]
+        total["items"] += 1
+    return {"ok": True, **total}
+
+
+@app.post("/api/purge-expired")
+async def purge_expired(request: Request):
+    """Auto-purge: hard-erase Trash items older than 30 days. Service-role,
+    secret-gated (called by a daily cron); scans all users."""
+    if request.headers.get("X-Purge-Secret") != os.environ.get("XINSERE_PURGE_SECRET", "\x00off"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    svc = supa.SERVICE_ROLE_KEY
+    if not svc:
+        raise HTTPException(status_code=501, detail="Service role key not configured")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    rows = supa._rest("GET", "/nodes", svc,
+                      params={"deleted_at": f"lt.{cutoff}", "select": "*"})
+    erased = 0
+    for r in rows or []:
+        try:
+            _erase_subtree(svc, r["id"])
+            erased += 1
+        except Exception:
+            pass
+    return {"ok": True, "purged": erased, "cutoff": cutoff}
 
 
 @app.post("/api/unshare")

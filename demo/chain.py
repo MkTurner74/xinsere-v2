@@ -27,8 +27,13 @@ CHAIN_ID = int(os.environ.get("XINSERE_CHAIN_ID", "80002"))
 CONTRACT = os.environ.get("XINSERE_CONTRACT_ADDRESS", "0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD")
 SECRET_ID = os.environ.get("XINSERE_SECRET_ID", "xinsere/blockchain/polygon-mumbai/private-key")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-PRIORITY_GWEI = int(os.environ.get("XINSERE_PRIORITY_FEE_GWEI", "30"))
-MAXFEE_GWEI = int(os.environ.get("XINSERE_MAX_FEE_GWEI", "50"))
+# Amoy priority-fee floor is ~25 gwei. A grant uses ~113k gas, so 200k is safe
+# headroom. Lower defaults shrink the reserve check (gas_limit x maxFee) so a
+# near-empty wallet can still transact: 200k x 30 gwei = 0.006 POL/grant vs the
+# old 300k x 50 = 0.015. Env-overridable.
+PRIORITY_GWEI = int(os.environ.get("XINSERE_PRIORITY_FEE_GWEI", "26"))
+MAXFEE_GWEI = int(os.environ.get("XINSERE_MAX_FEE_GWEI", "30"))
+GAS_LIMIT = int(os.environ.get("XINSERE_GAS_LIMIT", "200000"))
 
 ABI = [
     {"inputs": [{"type": "bytes32"}, {"type": "bytes32"}, {"type": "string"}, {"type": "uint256"}],
@@ -123,7 +128,7 @@ class Chain:
             "chainId": CHAIN_ID,
             "maxPriorityFeePerGas": w3.to_wei(PRIORITY_GWEI, "gwei"),  # Amoy >=25 gwei floor
             "maxFeePerGas": w3.to_wei(MAXFEE_GWEI, "gwei"),
-            "gas": 300000,
+            "gas": GAS_LIMIT,
         })
         signed = w3.eth.account.sign_transaction(tx, acct.key)
         raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction

@@ -282,6 +282,7 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
     <aside class="side">
       <button class="nav active" data-view="mine" id="nav-mine">📁 My Files</button>
       <button class="nav" data-view="shared" id="nav-shared">🔗 Shared with me</button>
+      <button class="nav" data-view="trash" id="nav-trash">🗑️ Trash</button>
     </aside>
     <main class="main" id="main">
       <div class="bar">
@@ -328,6 +329,7 @@ syncThemeButtons();
 let ME=null, OTHERS=[], VIEW="mine", CURRENT=null; // CURRENT folder id
 let LAYOUT=localStorage.getItem("xin-layout")||"list";  // list (default) | grid
 let LAST=[], LAST_MANAGE=true;                           // last rendered set, for view re-render
+let TRASH_MODE=false;                                    // rendering the Trash view (Restore/Erase actions)
 
 function avatarHtml(u){ return `<span class="avatar" style="background:linear-gradient(135deg,${u.grad[0]},${u.grad[1]})">${u.initials}</span>`; }
 function fmtSize(b){ if(b==null) return ""; const u=["B","KB","MB","GB"];let i=0;while(b>=1024&&i<3){b/=1024;i++;}return b.toFixed(b<10&&i>0?1:0)+" "+u[i]; }
@@ -466,7 +468,27 @@ function setView(v){
   VIEW=v;
   document.querySelectorAll(".side .nav").forEach(b=>b.classList.toggle("active",b.dataset.view===v));
   $("#tools").style.visibility = v==="mine" ? "visible":"hidden";
-  if(v==="mine"){ openFolder(""); } else { loadShared(); }
+  if(v==="mine") openFolder("");
+  else if(v==="trash") loadTrash();
+  else loadShared();
+}
+async function loadTrash(){
+  const r=await api("/api/trash"); const d=r.ok?await r.json():{children:[]};
+  const n=(d.children||[]).length;
+  $("#crumbs").innerHTML=`<span class="cur">Trash</span>`+
+    (n?` <button class="linkbtn" id="empty-trash" style="margin-left:10px">Empty Trash</button>`:"");
+  const eb=$("#empty-trash");
+  if(eb) eb.onclick=emptyTrash;
+  TRASH_MODE=true; renderGrid(d.children, false); TRASH_MODE=false;
+  if(!n){ $("#grid").innerHTML=`<div class="empty"><div class="o"></div>Trash is empty. Deleted items appear here for 30 days.</div>`; }
+}
+async function emptyTrash(){
+  if(!confirm("Empty Trash?\n\nEverything in Trash is permanently, cryptographically erased. This cannot be undone.")) return;
+  const T=newTask(""); T.set("Erasing all Trash — revoking grants + wiping fragments…",{indet:true});
+  const r=await api("/api/empty-trash",{method:"POST"});
+  if(r.ok){ const d=await r.json(); T.done(`✓ Trash emptied · ${d.items} item${d.items!==1?"s":""} · ${d.erased_files} file${d.erased_files!==1?"s":""} erased`); }
+  else T.done("✗ Empty Trash failed");
+  loadTrash();
 }
 
 async function openFolder(folderId){
@@ -513,6 +535,7 @@ function renderList(g, children, canManage){
     `<span class="col-type">Type</span><span class="col-size">Security</span>`+
     `<span class="col-share">Shared</span><span class="col-act" style="width:104px"></span>`;
   g.appendChild(head);
+  const trash=TRASH_MODE;
   children.forEach(n=>{
     const mine=n.owner===ME.id;
     const r=document.createElement("div"); r.className="lrow "+n.type;
@@ -521,31 +544,37 @@ function renderList(g, children, canManage){
         `<span class="nm">${esc(n.name)}<span class="sub">Folder${mine?"":" · from "+esc(n.owner_name)}</span></span>`+
         `<span class="col-type">Folder</span><span class="col-size"></span>`+
         `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
-      r.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
+      if(!trash) r.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
     } else {
       r.innerHTML=`<span class="ic">${svg(fileIconName(n.name))}</span>`+
         `<span class="nm" title="${esc(n.name)}">${esc(n.name)}<span class="sub">SHA-256 ${(n.sha256||"").slice(0,12)}…</span></span>`+
         `<span class="col-type">${typeLabel(n.content_type)||"—"}</span>`+
         `<span class="col-size"><span class="secured-i" title="${n.frags} fragments · AES-256-GCM · on-chain permissioned">${svg("shield")}</span> ${fmtSize(n.size)}</span>`+
         `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
-      const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-      dl.onclick=()=>downloadFile(n, dl); r.querySelector(".col-act").appendChild(dl);
-      if(!mine) gateOnChain(n, dl);
+      if(!trash){
+        const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
+        dl.onclick=()=>downloadFile(n, dl); r.querySelector(".col-act").appendChild(dl);
+        if(!mine) gateOnChain(n, dl);
+      }
     }
-    if(canManage && mine) r.querySelector(".col-act").appendChild(kebab(n));
+    const act=r.querySelector(".col-act");
+    if(trash){ trashActions(act, n); }
+    else if(canManage && mine){ act.appendChild(kebab(n)); }
     g.appendChild(r);
   });
 }
 
 /* Grid cards — tightened, shield icon for Secured, proof moved to the kebab. */
 function renderCards(g, children, canManage){
+  const trash=TRASH_MODE;
   children.forEach(n=>{
     const mine=n.owner===ME.id;
     const t=document.createElement("div"); t.className="tile "+n.type;
     if(n.type==="folder"){
       t.innerHTML=`<div class="ic">${svg("folder")}</div><div class="nm">${esc(n.name)}</div><div class="mt">Folder</div>`;
-      t.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
-      if(canManage && mine){
+      if(!trash) t.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
+      if(trash){ const acts=document.createElement("div"); acts.className="acts"; trashActions(acts, n); t.appendChild(acts); }
+      else if(canManage && mine){
         const acts=document.createElement("div"); acts.className="acts";
         const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share";
         sb.onclick=(e)=>{e.stopPropagation();openShare(n);}; acts.appendChild(sb);
@@ -558,12 +587,15 @@ function renderCards(g, children, canManage){
         `${typeLabel(n.content_type)?` · <span title="Verified content type — a rename can't change it">${typeLabel(n.content_type)}</span>`:""} · <span title="${n.frags} fragments">${fmtSize(n.size)}</span></div>`+
         `${n.sha256?`<div class="sha" title="SHA-256 taken before encryption; re-checked on download">SHA-256 <b>${n.sha256.slice(0,12)}</b>…</div>`:""}`;
       const acts=document.createElement("div"); acts.className="acts";
-      const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-      dl.onclick=()=>downloadFile(n, dl); acts.appendChild(dl);
-      if(!mine) gateOnChain(n, dl);
-      if(canManage && mine){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); t.appendChild(kebab(n)); }
+      if(trash){ trashActions(acts, n); }
+      else {
+        const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
+        dl.onclick=()=>downloadFile(n, dl); acts.appendChild(dl);
+        if(!mine) gateOnChain(n, dl);
+        if(canManage && mine){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); t.appendChild(kebab(n)); }
+      }
       t.appendChild(acts);
-      if(!mine){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
+      if(!mine && !trash){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
       if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
     }
     g.appendChild(t);
@@ -663,19 +695,66 @@ async function openMove(n){
   });
 }
 
-async function deleteItem(n){
-  const what = n.type==="folder" ? `folder “${n.name}” and everything inside` : `“${n.name}”`;
-  if(!confirm(`Delete ${what}?\n\nFragments are cryptographically erased and any on-chain grants revoked. This cannot be undone.`)) return;
-  const T=newTask(n.name);
-  T.set("Deleting — revoking grants + erasing fragments…",{indet:true});
+/* Two-choice delete: Move to Trash (recoverable, 30-day expiry) or Erase now. */
+function deleteItem(n){
+  const inside = n.type==="folder" ? " and everything inside it" : "";
+  const bg=document.createElement("div"); bg.className="modal-bg";
+  bg.innerHTML=`<div class="modal"><h3>Delete “${esc(n.name)}”?</h3>
+    <p class="msub">Choose what happens to this ${n.type}${inside}.</p>
+    <button class="btn full x-trash" style="margin-bottom:10px">Move to Trash</button>
+    <p class="msub" style="margin-top:-4px">Recoverable · auto-erases after 30 days</p>
+    <button class="btn-ghost btn full x-erase" style="color:var(--coral);border-color:var(--coral);margin-top:8px">Erase permanently</button>
+    <p class="msub" style="margin-top:-4px">Immediate cryptographic erasure · cannot be undone</p>
+    <button class="linkbtn x-cancel" style="margin-top:14px">Cancel</button></div>`;
+  const close=()=>bg.remove();
+  bg.querySelector(".x-cancel").onclick=close;
+  bg.addEventListener("click",e=>{ if(e.target===bg) close(); });
+  bg.querySelector(".x-trash").onclick=async ()=>{ close(); await trashItem(n); };
+  bg.querySelector(".x-erase").onclick=async ()=>{
+    close();
+    if(!confirm(`Erase “${n.name}” permanently?\n\nFragments are cryptographically wiped and any on-chain grants revoked. This cannot be undone.`)) return;
+    await eraseItem(n, true);
+  };
+  document.body.appendChild(bg);
+}
+
+async function trashItem(n){
   const fd=new FormData(); fd.append("node_id",n.id);
   const r=await api("/api/delete",{method:"POST",body:fd});
-  if(r.ok){
-    const d=await r.json();
-    T.done(d.revoke_errors ? `Deleted — ⚠ ${d.revoke_errors} on-chain revocation${d.revoke_errors>1?"s":""} failed (fragments erased; access is dead regardless)` :
-           `✓ Deleted · ${d.deleted_files} file${d.deleted_files!==1?"s":""} erased${d.grants_revoked?` · ${d.grants_revoked} grant${d.grants_revoked!==1?"s":""} revoked on-chain`:""}`);
-  } else T.done("✗ "+((await r.json()).error||"Delete failed"));
+  if(!r.ok){ toast("✗ "+((await r.json()).error||"Could not move to Trash")); return; }
   openFolder(CURRENT);
+  undoToast(`“${n.name}” moved to Trash`, async ()=>{
+    const f2=new FormData(); f2.append("node_id",n.id);
+    await api("/api/restore",{method:"POST",body:f2}); openFolder(CURRENT);
+  });
+}
+
+function trashActions(holder, n){
+  const rs=document.createElement("button"); rs.className="mini"; rs.textContent="Restore";
+  rs.onclick=(e)=>{ e.stopPropagation(); restoreItem(n); };
+  const er=document.createElement("button"); er.className="mini"; er.textContent="Erase";
+  er.style.color="var(--coral)"; er.style.borderColor="var(--coral)";
+  er.onclick=(e)=>{ e.stopPropagation();
+    if(confirm(`Erase “${n.name}” permanently? This cannot be undone.`)) eraseItem(n, false); };
+  holder.appendChild(rs); holder.appendChild(er);
+}
+
+async function restoreItem(n){
+  const fd=new FormData(); fd.append("node_id",n.id);
+  const r=await api("/api/restore",{method:"POST",body:fd});
+  if(r.ok) toast(`“${n.name}” restored`); else toast("✗ Restore failed");
+  loadTrash();
+}
+
+async function eraseItem(n, fromMain){
+  const T=newTask(n.name); T.set("Erasing — revoking grants + wiping fragments…",{indet:true});
+  const fd=new FormData(); fd.append("node_id",n.id);
+  const r=await api("/api/erase",{method:"POST",body:fd});
+  if(r.ok){ const d=await r.json();
+    T.done(d.revoke_errors ? `Erased — ⚠ ${d.revoke_errors} on-chain revocation${d.revoke_errors>1?"s":""} failed (fragments wiped; access dead regardless)` :
+      `✓ Erased · ${d.erased_files} file${d.erased_files!==1?"s":""} wiped${d.grants_revoked?` · ${d.grants_revoked} grant${d.grants_revoked!==1?"s":""} revoked`:""}`);
+  } else T.done("✗ "+((await r.json()).error||"Erase failed"));
+  fromMain ? openFolder(CURRENT) : loadTrash();
 }
 
 /* Disable a shared file's Download button until verify() reads the grant from

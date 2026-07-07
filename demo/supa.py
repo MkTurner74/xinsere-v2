@@ -115,6 +115,7 @@ def _node(row: dict) -> dict:
         "file_id": row.get("file_id"), "sha": row.get("sha256"),
         "size": row.get("size"), "frags": row.get("frags"),
         "content_type": row.get("content_type"),
+        "deleted_at": row.get("deleted_at"),
     }
 
 
@@ -163,10 +164,33 @@ def get_node(token: str, node_id: str) -> dict | None:
 
 
 def children(token: str, parent_id: str) -> list[dict]:
-    rows = _rest("GET", "/nodes", token, params={"parent": f"eq.{parent_id}", "select": "*"})
+    # Hide trashed items from normal navigation (deleted_at IS NULL).
+    rows = _rest("GET", "/nodes", token,
+                 params={"parent": f"eq.{parent_id}", "deleted_at": "is.null", "select": "*"})
     nodes = [_node(r) for r in rows]
     nodes.sort(key=lambda n: (n["type"] != "folder", (n["name"] or "").lower()))
     return nodes
+
+
+def trashed(token: str, user_id: str) -> list[dict]:
+    """Items the user has moved to Trash (deleted_at set), newest first."""
+    rows = _rest("GET", "/nodes", token,
+                 params={"owner": f"eq.{user_id}", "deleted_at": "not.is.null",
+                         "select": "*", "order": "deleted_at.desc"})
+    return [_node(r) for r in rows]
+
+
+def soft_delete(token: str, node_id: str, when_iso: str) -> None:
+    """Move to Trash — metadata only (no chain, no erasure). Reversible."""
+    _rest("PATCH", "/nodes", token, params={"id": f"eq.{node_id}"},
+          json_body={"deleted_at": when_iso})
+
+
+def restore_node(token: str, node_id: str) -> None:
+    """Bring a node back out of Trash (clears deleted_at; parent is unchanged so
+    it returns to its original location)."""
+    _rest("PATCH", "/nodes", token, params={"id": f"eq.{node_id}"},
+          json_body={"deleted_at": None})
 
 
 def insert_folder(token: str, name: str, parent_id: str, owner: str) -> dict:
@@ -277,6 +301,6 @@ def shared_with(token: str, user_id: str) -> list[dict]:
     out = []
     for s in rows:
         n = get_node(token, s["node_id"])
-        if n:
+        if n and not n.get("deleted_at"):   # a trashed item is hidden from recipients
             out.append(n)
     return out
