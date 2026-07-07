@@ -251,8 +251,6 @@ function progIndet(msg){ $("#toast-msg").textContent=msg; const t=$("#toast");
   t.classList.add("show","busy","progress","indet");
   clearTimeout(window._tt); $("#toast-fill").style.width="40%"; }
 
-const fmtSize=(b)=> b<1048576 ? Math.round(b/1024)+" KB" : (b/1048576).toFixed(1)+" MB";
-
 /* ---- auth ---- */
 $("#to-signup")?.addEventListener("click", ()=>{ $("#login-form").classList.add("hidden"); $("#signup-form").classList.remove("hidden"); $("#login-err").textContent=""; });
 $("#to-login")?.addEventListener("click", ()=>{ $("#signup-form").classList.add("hidden"); $("#login-form").classList.remove("hidden"); $("#login-err").textContent=""; });
