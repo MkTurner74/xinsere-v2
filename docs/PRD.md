@@ -122,6 +122,35 @@ unchanged — the fragments are still randomized, just within a chosen geography
 Ties directly to **Market B — data sovereignty** (below) and Deployment Mode 3
 (BYOB), but works even in pure SaaS mode.
 
+### Planned capability: client-side reassembly (server-as-oracle) — demo v1 SHIPPED 2026-07-07
+
+The server never assembles plaintext. After the permission check, it issues a
+**retrieval plan** — per-fragment presigned GET URLs + unwrapped per-fragment data
+keys/nonces (never the CMK) — and the client fetches fragments straight from
+storage, decrypts locally (WebCrypto AES-256-GCM), joins, and verifies the
+whole-file SHA-256. Server-side retrieve() remains the fallback.
+
+- **Security:** plaintext never exists on operator infrastructure — completes the
+  "even Xinsere cannot read your files" proposition end-to-end. Client receives
+  only its own file's data keys, post-authorization, over TLS, short-TTL URLs.
+- **Performance:** removes the double hop (S3→function→client) and the serverless
+  memory/time ceiling; fragments land in parallel from their home regions.
+- **Resilience (REQUIRED for all client-side transfer code, upload & download):**
+  broken transfers must self-heal — per-fragment retry with exponential backoff,
+  HTTP Range resume from the last received byte, and seamless continuation after
+  network loss. Fragments are independent GCM-authenticated units, so recovery
+  re-fetches only what's missing and corruption cannot pass unnoticed.
+  - *Download:* shipped in the demo client (`xinsere-client.js`).
+  - *Upload (to build):* staging PUT is currently single-shot retry-whole-file;
+    move to S3 multipart upload for chunk-level resume, and eventually client-side
+    fragment+encrypt on upload (the MediaShippers pattern) so uploads get the same
+    fragment-level resume as downloads.
+- **Reuse path:** the demo module (`demo/frontend/xinsere-client.js`, framework-
+  free) is the seed for the JS SDK; the MCP client and the future desktop/file-
+  explorer agent (mount Xinsere as a drive) use the same plan API.
+- **Rollout:** web app (shipped, demo) → JS SDK → MCP client → browser extension /
+  desktop agent as the premium tier.
+
 ---
 
 ## Why redesign

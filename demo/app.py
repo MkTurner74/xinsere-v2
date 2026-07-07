@@ -106,6 +106,12 @@ def index() -> HTMLResponse:
         return HTMLResponse(f.read())
 
 
+@app.get("/xinsere-client.js")
+def client_js() -> HTMLResponse:
+    with open(os.path.join(_HERE, "frontend", "xinsere-client.js"), "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read(), media_type="application/javascript")
+
+
 @app.get("/api/warm")
 async def warm():
     """Pre-build the heavy singletons (S3/KMS/DynamoDB clients + the web3 signer)
@@ -337,6 +343,44 @@ async def verify_access(request: Request, node_id: str):
     has, granted_at = CHAIN.verify(node["file_id"], uid)
     return {"allowed": has, "granted_at": granted_at, "source": "amoy-contract",
             "contract": "0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD"}
+
+
+@app.get("/api/download-plan/{node_id}")
+async def download_plan(request: Request, node_id: str):
+    """Client-side reassembly: return per-fragment presigned GET URLs + unwrapped
+    data keys/nonces so the browser fetches fragments straight from S3 and
+    decrypts locally — the plaintext never exists on this server. Same permission
+    gate as /api/download; keys are per-fragment data keys only (never KMS/CMK),
+    URLs are single-object with a short TTL. 501 if the backend can't presign
+    (local dev) — the client falls back to server-side download."""
+    import base64
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["type"] != "file":
+        raise HTTPException(status_code=404, detail="File not found")
+    if node["owner"] != uid:
+        has, _ = CHAIN.verify(node["file_id"], uid)
+        if not has:
+            raise HTTPException(status_code=403, detail="No active on-chain grant for you")
+    try:
+        plan = get_pipeline().retrieval_plan(node["file_id"])
+    except NotImplementedError:
+        raise HTTPException(status_code=501, detail="Client-side reassembly unavailable")
+    except XinsereIntegrityError as exc:
+        raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
+    return {
+        "name": node["name"],
+        "content_type": plan["content_type"],
+        "size": plan["size"],
+        "sha256": plan["file_sha256"],
+        "fragments": [
+            {"sequence": f["sequence"], "url": f["url"],
+             "key": base64.b64encode(f["key"]).decode(),
+             "nonce": base64.b64encode(f["nonce"]).decode()}
+            for f in plan["fragments"]
+        ],
+    }
 
 
 @app.get("/api/download/{node_id}")

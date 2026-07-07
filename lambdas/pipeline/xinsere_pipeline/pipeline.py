@@ -214,6 +214,49 @@ class PipelineService:
         _log.info("retrieve %s %s", file_id, timings)
         return RetrieveResult(content, file_rec.content_type, file_rec.file_sha256, timings)
 
+    def retrieval_plan(self, file_id: str, *, url_ttl: int = 300) -> dict:
+        """Client-side reassembly plan: per-fragment presigned GET URLs plus the
+        unwrapped data keys and nonces, in sequence order. The file bytes never
+        touch this process — the (already-authorized) client fetches fragments
+        straight from storage and decrypts locally with AES-256-GCM.
+
+        Security contract for callers: run the permission check BEFORE calling
+        this, and hand the plan only to that authorized client over TLS. URLs are
+        single-object and short-lived; keys are per-fragment data keys (not the
+        master key — KMS/CMK is never exposed).
+
+        Raises NotImplementedError if the object store cannot presign (local dev);
+        callers should fall back to server-side retrieve()."""
+        file_rec = self._index.get_file(file_id)
+        if file_rec is None:
+            raise XinsereNotFoundError(f"unknown file_id: {file_id}")
+        frags = self._index.get_fragments(file_id)
+        if len(frags) != file_rec.fragment_count:
+            raise XinsereIntegrityError(
+                f"expected {file_rec.fragment_count} fragments, found {len(frags)}"
+            )
+
+        def _one(fr: FragmentRecord) -> dict:
+            return {
+                "sequence": fr.sequence,
+                "url": self._objects.presign_get(fr.bucket, fr.fragment_id, expires_in=url_ttl),
+                "key": self._keys.decrypt_data_key(fr.wrapped_key),   # bytes; caller encodes
+                "nonce": fr.nonce,
+            }
+
+        # Presign + KMS-unwrap all fragments concurrently (I/O-bound, like retrieve).
+        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+            plan_frags = list(pool.map(_one, frags))
+
+        return {
+            "file_id": file_id,
+            "file_sha256": file_rec.file_sha256,
+            "content_type": file_rec.content_type,
+            "size": file_rec.size,
+            "fragment_count": file_rec.fragment_count,
+            "fragments": plan_frags,
+        }
+
     def _read_and_decrypt(self, fr: FragmentRecord) -> tuple[bytes, dict]:
         """Worker: read a fragment -> unwrap key -> AES-256-GCM decrypt.
 

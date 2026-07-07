@@ -217,6 +217,7 @@
 <input type="file" id="folder-input" webkitdirectory multiple class="hidden">
 <div class="toast" id="toast"><div class="trow"><span class="spin"></span><span class="tick">✓</span><span id="toast-msg"></span></div><div class="bar"><div class="fill" id="toast-fill"></div></div></div>
 
+<script src="/xinsere-client.js"></script>
 <script>
 const api = (path, opts={}) => fetch(path, {credentials:"same-origin", ...opts});
 const $ = (s)=>document.querySelector(s);
@@ -368,8 +369,31 @@ async function downloadFile(n, btn){
     progIndet("Checking permission on-chain…");
     const rv=await api("/api/verify/"+n.id); const v=await rv.json();
     if(!v.allowed){ done("Blockchain: no active grant for you ✗"); return; }
-    // Server-side reassembly (pull fragments -> decrypt -> verify) — we can't see
-    // inside it, so it's indeterminate until the response starts streaming.
+
+    // Preferred path: client-side reassembly. The server only issues a plan
+    // (presigned fragment URLs + data keys); the browser pulls fragments straight
+    // from storage and decrypts locally — plaintext never exists on the server.
+    // Falls back to server-side reassembly if the plan isn't available.
+    try{
+      progIndet("Requesting fragment map + keys…");
+      const pr=await api("/api/download-plan/"+n.id);
+      if(pr.ok){
+        const plan=await pr.json();
+        const {blob, sha256}=await XinsereClient.reassemble(plan, {
+          onStage:(stage,msg)=>{ if(stage!=="fetch") progIndet(msg); },
+          onProgress:(got,total)=> total
+            ? prog(`Fetching fragments — ${(got/total*100).toFixed(0)}% · ${fmtSize(got)} / ${fmtSize(total)}`, got/total*100)
+            : progIndet(`Fetching fragments — ${fmtSize(got)}…`),
+        });
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement("a"); a.href=url; a.download=n.name; document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        done("✓ Bit-perfect — reassembled & verified in your browser · "+sha256.slice(0,10)+"…");
+        return;
+      }
+    }catch(e){ /* fall through to server-side path */ }
+
+    // Fallback: server-side reassembly (pull fragments -> decrypt -> verify).
     progIndet(v.source==="owner" ? "Reassembling & verifying across fragments…"
                                  : "Blockchain verified ✓ — reassembling…");
     const r=await api("/api/download/"+n.id);

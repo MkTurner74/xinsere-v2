@@ -47,6 +47,12 @@ class ObjectStore(ABC):
     @abstractmethod
     def delete(self, bucket: str, key: str) -> None: ...
 
+    def presign_get(self, bucket: str, key: str, expires_in: int = 300) -> str:
+        """Short-lived, single-object GET URL for direct client fetch (client-side
+        reassembly). Optional — backends without presign support raise, and the
+        caller falls back to server-side retrieval."""
+        raise NotImplementedError("this backend does not support presigned GETs")
+
 
 # --- Index (DynamoDB metadata) ----------------------------------------------
 

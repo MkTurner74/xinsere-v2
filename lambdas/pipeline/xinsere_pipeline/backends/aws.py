@@ -14,7 +14,12 @@ from __future__ import annotations
 import os
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
+
+# SigV4 explicitly: the default signer can still emit SigV2 presigned URLs, which
+# are deprecated (and sign Content-Type into PUTs — see the staging-bucket bug).
+_SIGV4 = Config(signature_version="s3v4")
 
 from .base import FileRecord, FragmentRecord, IndexStore, KeyManager, ObjectStore
 
@@ -65,7 +70,8 @@ class S3ObjectStore(ObjectStore):
         self._names = list(bucket_names)
         self._default_region = default_region
         # client_factory(region) -> boto3 s3 client; overridable for tests.
-        self._factory = client_factory or (lambda region: boto3.client("s3", region_name=region))
+        self._factory = client_factory or (
+            lambda region: boto3.client("s3", region_name=region, config=_SIGV4))
         self._clients: dict[str, object] = {}   # region -> client
         self._bucket_region: dict[str, str] = {}  # bucket -> region (cache)
 
@@ -112,6 +118,13 @@ class S3ObjectStore(ObjectStore):
             if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
                 raise FileNotFoundError(f"s3://{bucket}/{key}") from exc
             raise
+
+    def presign_get(self, bucket: str, key: str, expires_in: int = 300) -> str:
+        # Signed by the bucket's own regional client (SigV4 requires the right
+        # region). Single object, short TTL — handed only to a caller that has
+        # already passed the permission check.
+        return self._for(bucket).generate_presigned_url(
+            "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires_in)
 
     def delete(self, bucket: str, key: str) -> None:
         self._for(bucket).delete_object(Bucket=bucket, Key=key)
