@@ -84,24 +84,54 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    supports `expiryTime`; demo hardcodes 0) — end-dated grants, no revoke needed.
 2. ~~Deploy the hosted demo (v2)~~ **DONE 2026-07-06/07** — live at
    xinsere-v2.vercel.app on real AWS backends, invite-only auth.
-3. **Add revoke to the demo.** Contract supports it; surface grant *and* revoke so
-   the demo shows access being cut off on-chain.
-4. **True-random fragment routing.** Modular routing yields consecutive buckets
+3. **Revoke + delete (paired).** Surface on-chain revoke in the demo (contract
+   supports it), and **file/folder delete** — which is revoke's storage twin: the
+   pipeline's `delete()` already does cryptographic erasure (remove fragments +
+   index; leftover ciphertext is unrecoverable without the wrapped keys). Deleting
+   a shared file should also revoke its outstanding grants so the chain trail
+   stays truthful.
+4. **File-manager basics (demo → product table stakes):**
+   - **Move** files/folders between directories (tree re-parent; no pipeline work)
+   - **Rename** files/folders (display-name only — fragment names carry no
+     filename linkage, so this never touches storage)
+   - **Nested folders end-to-end**: upload preserves subfolder structure (partially
+     works via relative paths — verify deep nesting), download a folder as a
+     zip (client-side: reassemble each file, zip in browser)
+   - **Directory sharing done right**: share must cover files added to the folder
+     LATER (grant-on-add for existing shares — today only files present at share
+     time get grants), plus unshare
+5. **Proper authentication.** Move the demo off invite-only email/password:
+   Supabase Auth with email verification + password reset (Resend), OAuth
+   (Google/Microsoft) sign-in, session hardening. Enterprise SSO (OIDC/SAML)
+   stays a Phase 3+ item.
+6. **Host on xinsere.com.** Move the demo SaaS off xinsere-v2.vercel.app to
+   xinsere.com (or app.xinsere.com) — custom domain on Vercel, TLS, update S3
+   CORS origins + Supabase auth redirect URLs. Makes it pitchable as the product.
+7. **True-random fragment routing.** Modular routing yields consecutive buckets
    (see Divergences) — draw N distinct random buckets per file so the scatter
    pattern is genuinely unpredictable. Small change, big story value.
-5. **Upload resume via S3 multipart** (chunk-level, matches the download-side
+8. **Upload resume via S3 multipart** (chunk-level, matches the download-side
    resilience already shipped); then client-side fragment+encrypt on upload
    (MediaShippers pattern) so plaintext never touches the server on upload either.
-6. **MCP server** (`@xinsere/mcp`) — the AI-agent product surface (see mcp-spec);
+9. **Multi-cloud research (Google dev budget available).** Scope adding GCS as a
+   second fragment store: the ObjectStore interface is already pluggable, GCS has
+   S3-interoperability mode (HMAC keys + S3-compatible XML API) that may work with
+   the existing boto3 path, and V4 signed URLs + CORS support the client-side
+   reassembly model. Cross-CLOUD scatter (some fragments AWS, some GCS) means a
+   breach of one cloud provider yields only partial fragments — strongest version
+   of the hybrid story, and the "fragments could be anywhere" haystack spans
+   providers. Deliverable: a research memo + a spike (store/retrieve a file with
+   fragments split across AWS+GCS using Google's dev credits).
+10. **MCP server** (`@xinsere/mcp`) — the AI-agent product surface (see mcp-spec);
    reuses the retrieval-plan API + xinsere-client logic.
-7. **Region-scoped write (data residency).** API-selectable write region; default
+11. **Region-scoped write (data residency).** API-selectable write region; default
    scatters wide. Region-locked *and* randomized — the EU/Germany play. Bucket
    prerequisite met 2026-07-07. See *Planned capability: region-scoped write*.
-8. **Deeper patent differentiators:** fail-closed revocation cache, federated
+12. **Deeper patent differentiators:** fail-closed revocation cache, federated
    identity (OIDC/SAML), size-based large-file routing, forensic watermarking.
-9. **Housekeeping:** fund Amoy signer wallet (grants ~0.015 POL each; Google
-   Cloud Web3 faucet); merge branch to main (activates keep-warm cron); revert
-   XINSERE_DEBUG_ERRORS handler when demo phase ends.
+13. **Housekeeping:** fund Amoy signer wallet (grants ~0.015 POL each; Google
+   Cloud Web3 faucet); ~~merge branch to main~~ done 2026-07-07 (keep-warm cron
+   active); revert XINSERE_DEBUG_ERRORS handler when demo phase ends.
 
 ### Planned capability: temporal access windows (timed shares & embargo release)
 
