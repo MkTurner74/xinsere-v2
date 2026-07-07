@@ -198,6 +198,46 @@ def ensure_path(token: str, rel_path: str, root: str, owner: str) -> str:
     return parent
 
 
+def rename_node(token: str, node_id: str, name: str) -> dict:
+    """Display-name only: fragment ids carry no filename linkage, so renaming
+    never touches storage or the chain."""
+    rows = _rest("PATCH", "/nodes", token, params={"id": f"eq.{node_id}"},
+                 prefer="return=representation", json_body={"name": name})
+    return _node(rows[0]) if rows else {}
+
+
+def move_node(token: str, node_id: str, new_parent: str) -> dict:
+    """Re-parent within the tree (RLS restricts to owner)."""
+    rows = _rest("PATCH", "/nodes", token, params={"id": f"eq.{node_id}"},
+                 prefer="return=representation", json_body={"parent": new_parent})
+    return _node(rows[0]) if rows else {}
+
+
+def delete_node(token: str, node_id: str) -> None:
+    """Remove a node; descendants cascade via the FK (metadata only — the caller
+    is responsible for pipeline crypto-erasure and on-chain revocations first)."""
+    _rest("DELETE", "/nodes", token, params={"id": f"eq.{node_id}"})
+
+
+def ancestors(token: str, node_id: str) -> list[dict]:
+    """Chain from node_id's parent up to the root (nearest first)."""
+    out: list[dict] = []
+    cur = get_node(token, node_id)
+    while cur and cur.get("parent"):
+        cur = get_node(token, cur["parent"])
+        if cur:
+            out.append(cur)
+    return out
+
+
+def shares_covering(token: str, node_id: str) -> list[dict]:
+    """Shares on the node itself or ANY ancestor — everyone with inherited access.
+    Used for grant-on-add (late-added files) and revoke-on-delete."""
+    ids = [node_id] + [a["id"] for a in ancestors(token, node_id)]
+    return _rest("GET", "/shares", token,
+                 params={"node_id": f"in.({','.join(ids)})", "select": "node_id,grantee,tx"})
+
+
 def files_under(token: str, node_id: str) -> list[dict]:
     """All file nodes at or below node_id (app-side recursion; RLS already scopes)."""
     node = get_node(token, node_id)
@@ -223,6 +263,11 @@ def insert_share(token: str, node_id: str, grantee: str, tx: str | None) -> dict
 def shares_for_node(token: str, node_id: str) -> list[dict]:
     return _rest("GET", "/shares", token,
                  params={"node_id": f"eq.{node_id}", "select": "grantee,tx"})
+
+
+def delete_share(token: str, node_id: str, grantee: str) -> None:
+    _rest("DELETE", "/shares", token,
+          params={"node_id": f"eq.{node_id}", "grantee": f"eq.{grantee}"})
 
 
 def shared_with(token: str, user_id: str) -> list[dict]:

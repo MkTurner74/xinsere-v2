@@ -149,6 +149,20 @@
   .mini.dl{white-space:nowrap;min-width:94px;text-align:center;}
   .mini.dl.loading{pointer-events:none;opacity:.8;}
   .btnspin{display:inline-block;width:12px;height:12px;border:2px solid var(--track);border-top-color:var(--word);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;}
+  /* tile kebab menu (owner file management) */
+  .tile .kebab{position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:8px;border:0;background:transparent;color:var(--faint);font-size:1rem;line-height:1;display:grid;place-items:center;opacity:0;transition:opacity .12s;}
+  .tile:hover .kebab{opacity:1;}
+  .tile .kebab:hover{background:var(--panel-2);color:var(--text);}
+  .ctx{position:fixed;z-index:45;background:var(--task-bg);border:1px solid var(--edge-strong);border-radius:11px;padding:6px;min-width:150px;box-shadow:0 14px 40px -10px rgba(0,0,0,0.55);display:flex;flex-direction:column;}
+  .ctx button{background:transparent;border:0;color:var(--text);text-align:left;padding:8px 11px;border-radius:8px;font-size:0.84rem;}
+  .ctx button:hover{background:var(--panel-2);}
+  .ctx button.danger{color:var(--coral);}
+  .folderpick{max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin:12px 0;}
+  .folderpick button{background:transparent;border:0;color:var(--text);text-align:left;padding:7px 10px;border-radius:8px;font-size:0.85rem;}
+  .folderpick button:hover{background:var(--panel-2);}
+  .folderpick button:disabled{opacity:0.4;}
+  .person .rm{margin-left:auto;font-size:0.72rem;color:var(--coral);border:1px solid transparent;border-radius:7px;padding:3px 8px;background:transparent;}
+  .person .rm:hover{border-color:var(--coral);}
   .theme-toggle{background:transparent;border:1px solid var(--edge);border-radius:9px;width:32px;height:32px;display:grid;place-items:center;color:var(--muted);font-size:0.95rem;line-height:1;padding:0;}
   .theme-toggle:hover{color:var(--text);border-color:var(--edge-strong);}
   #login .theme-toggle{position:absolute;top:18px;right:20px;}
@@ -377,7 +391,7 @@ function renderGrid(children, canManage){
     if(n.type==="folder"){
       t.innerHTML=`<div class="ic">📁</div><div class="nm">${n.name}</div><div class="mt">Folder</div>`;
       t.onclick=()=>openFolder(n.id);
-      if(canManage && n.owner===ME.id) t.appendChild(shareBtnRow(n));
+      if(canManage && n.owner===ME.id){ t.appendChild(shareBtnRow(n)); t.appendChild(kebab(n)); }
     } else {
       t.innerHTML=`<div class="ic">${iconFor(n.name)}</div><div class="nm" title="${n.name}">${n.name}</div>
         <div class="mt"><span class="secured">● Secured</span> · ${n.frags} frags · ${fmtSize(n.size)}</div>
@@ -390,7 +404,7 @@ function renderGrid(children, canManage){
       // actually readable from the contract — a freshly-signed grant can lag on
       // load-balanced RPC nodes, and clicking too early fails the chain check.
       if(n.owner!==ME.id) gateOnChain(n, dl);
-      if(canManage && n.owner===ME.id){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); }
+      if(canManage && n.owner===ME.id){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); t.appendChild(kebab(n)); }
       t.appendChild(acts);
       if(n.owner!==ME.id){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
       if(n.shared_with && n.shared_with.length){ t.appendChild(sharedAvatars(n)); }
@@ -408,6 +422,101 @@ function sharedAvatars(n){ const s=document.createElement("div"); s.className="s
   if(tx){ const full=tx.startsWith("0x")?tx:"0x"+tx; const p=document.createElement("a"); p.className="proof";
     p.href="https://amoy.polygonscan.com/tx/"+full; p.target="_blank"; p.rel="noopener";
     p.textContent="on-chain proof · "+full.slice(0,12)+"…"; p.title="View this grant on PolygonScan"; s.appendChild(p);} return s; }
+
+/* ---- file management: kebab menu, rename, move, delete ---- */
+function kebab(n){
+  const b=document.createElement("button"); b.className="kebab"; b.textContent="⋯"; b.title="More actions";
+  b.onclick=(e)=>{ e.stopPropagation(); openCtx(e, n); };
+  return b;
+}
+function openCtx(e, n){
+  document.querySelectorAll(".ctx").forEach(el=>el.remove());
+  const m=document.createElement("div"); m.className="ctx";
+  const add=(label, fn, danger)=>{ const x=document.createElement("button");
+    x.textContent=label; if(danger) x.className="danger";
+    x.onclick=()=>{ m.remove(); fn(); }; m.appendChild(x); };
+  add("Rename", ()=>renameItem(n));
+  add("Move to…", ()=>openMove(n));
+  add("Delete", ()=>deleteItem(n), true);
+  document.body.appendChild(m);
+  const r=m.getBoundingClientRect();
+  m.style.left=Math.min(e.clientX, innerWidth-r.width-10)+"px";
+  m.style.top=Math.min(e.clientY, innerHeight-r.height-10)+"px";
+  setTimeout(()=>addEventListener("click", ()=>m.remove(), {once:true}));
+}
+
+async function renameItem(n){
+  const name=prompt("Rename to:", n.name); if(!name || name===n.name) return;
+  const fd=new FormData(); fd.append("node_id",n.id); fd.append("name",name);
+  const r=await api("/api/rename",{method:"POST",body:fd});
+  if(r.ok){ toast("Renamed"); openFolder(CURRENT); } else toast("✗ "+((await r.json()).error||"Rename failed"));
+}
+
+async function listFolders(excludeId){
+  // Flatten the folder tree (owner's own) for the move picker, skipping the
+  // subtree rooted at excludeId (a folder can't move into itself).
+  const out=[];
+  async function walk(id, depth){
+    const r=await api("/api/tree?folder="+encodeURIComponent(id)); if(!r.ok) return;
+    const d=await r.json();
+    if(!id){ out.push({id:d.folder.id, name:"My Files", depth:0}); }
+    for(const c of d.children){
+      if(c.type!=="folder" || c.id===excludeId) continue;
+      out.push({id:c.id, name:c.name, depth:depth+1});
+      await walk(c.id, depth+1);
+    }
+  }
+  await walk("", 0);
+  return out;
+}
+
+async function openMove(n){
+  const bg=document.createElement("div"); bg.className="modal-bg";
+  bg.innerHTML=`<div class="modal"><h3>Move “${n.name}”</h3>
+    <p class="msub">Choose a destination folder. Shares inherited from the old and new location are reconciled on-chain.</p>
+    <div class="folderpick"><em style="color:var(--faint);font-size:0.82rem;">Loading folders…</em></div>
+    <button class="btn-ghost btn full x">Cancel</button></div>`;
+  bg.querySelector(".x").onclick=()=>bg.remove();
+  bg.addEventListener("click",e=>{ if(e.target===bg) bg.remove(); });
+  document.body.appendChild(bg);
+  const folders=await listFolders(n.type==="folder"?n.id:null);
+  const holder=bg.querySelector(".folderpick"); holder.innerHTML="";
+  folders.forEach(f=>{
+    const b=document.createElement("button");
+    b.style.paddingLeft=(10+f.depth*16)+"px";
+    b.textContent="📁 "+f.name;
+    if(f.id===CURRENT) b.disabled=true;   // already here
+    b.onclick=async ()=>{
+      bg.remove();
+      const T=newTask(n.name);
+      T.set("Moving & reconciling on-chain shares…",{indet:true});
+      const fd=new FormData(); fd.append("node_id",n.id); fd.append("new_parent",f.id);
+      const r=await api("/api/move",{method:"POST",body:fd});
+      if(r.ok){
+        const d=await r.json();
+        const rec=d.reconciliation||{};
+        T.done(rec.errors ? `Moved — ⚠ ${rec.errors} on-chain share update${rec.errors>1?"s":""} failed (retry via re-share)` : "Moved to "+f.name);
+      } else T.done("✗ "+((await r.json()).error||"Move failed"));
+      openFolder(CURRENT);
+    };
+    holder.appendChild(b);
+  });
+}
+
+async function deleteItem(n){
+  const what = n.type==="folder" ? `folder “${n.name}” and everything inside` : `“${n.name}”`;
+  if(!confirm(`Delete ${what}?\n\nFragments are cryptographically erased and any on-chain grants revoked. This cannot be undone.`)) return;
+  const T=newTask(n.name);
+  T.set("Deleting — revoking grants + erasing fragments…",{indet:true});
+  const fd=new FormData(); fd.append("node_id",n.id);
+  const r=await api("/api/delete",{method:"POST",body:fd});
+  if(r.ok){
+    const d=await r.json();
+    T.done(d.revoke_errors ? `Deleted — ⚠ ${d.revoke_errors} on-chain revocation${d.revoke_errors>1?"s":""} failed (fragments erased; access is dead regardless)` :
+           `✓ Deleted · ${d.deleted_files} file${d.deleted_files!==1?"s":""} erased${d.grants_revoked?` · ${d.grants_revoked} grant${d.grants_revoked!==1?"s":""} revoked on-chain`:""}`);
+  } else T.done("✗ "+((await r.json()).error||"Delete failed"));
+  openFolder(CURRENT);
+}
 
 /* Disable a shared file's Download button until verify() reads the grant from
  * the contract. Retries a few times — a just-written grant can take a moment to
@@ -586,15 +695,35 @@ function openShare(node){
   const holder=bg.querySelector(".people");
   OTHERS.forEach(u=>{
     const already=(node.shared_with||[]).some(s=>s.id===u.id);
-    const b=document.createElement("button"); b.className="person"; b.disabled=already;
+    const b=document.createElement("button"); b.className="person";
     b.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name}</span>`+(already?`<span class="st">shared ✓</span>`:``);
-    b.onclick=async ()=>{
-      const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",u.id);
-      b.disabled=true; toast("Recording grant on-chain (Amoy)… a few seconds");
-      const r=await api("/api/share",{method:"POST",body:fd});
-      if(r.ok){ const d=await r.json(); toast(`Shared with ${u.name.split(" ")[0]} · on-chain proof ${d.tx.slice(0,14)}…`); document.body.removeChild(bg); openFolder(CURRENT); }
-      else { toast((await r.json()).error); b.disabled=false; }
-    };
+    if(already){
+      // Already shared → offer revoke. On-chain revocation per file; fails
+      // closed (share kept) if any revoke tx fails.
+      const rm=document.createElement("button"); rm.className="rm"; rm.textContent="Revoke";
+      rm.onclick=async (e)=>{
+        e.stopPropagation();
+        if(!confirm(`Revoke ${u.name.split(" ")[0]}'s access to “${node.name}”?\nThis writes an on-chain revocation for every file covered.`)) return;
+        rm.disabled=true;
+        const T=newTask(node.name); T.set(`Revoking ${u.name.split(" ")[0]}'s access on-chain…`,{indet:true});
+        const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",u.id);
+        const r=await api("/api/unshare",{method:"POST",body:fd});
+        if(r.ok){ const d=await r.json();
+          T.done(`✓ Access revoked · ${d.files_revoked} file${d.files_revoked!==1?"s":""} on-chain${d.tx?` · ${d.tx.slice(0,12)}…`:""}`);
+          document.body.removeChild(bg); openFolder(CURRENT);
+        } else { T.done("✗ "+((await r.json()).error||"Revoke failed")); rm.disabled=false; }
+      };
+      b.appendChild(rm);
+      b.onclick=null;
+    } else {
+      b.onclick=async ()=>{
+        const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",u.id);
+        b.disabled=true; toast("Recording grant on-chain (Amoy)… a few seconds");
+        const r=await api("/api/share",{method:"POST",body:fd});
+        if(r.ok){ const d=await r.json(); toast(`Shared with ${u.name.split(" ")[0]} · on-chain proof ${d.tx.slice(0,14)}…`); document.body.removeChild(bg); openFolder(CURRENT); }
+        else { toast((await r.json()).error); b.disabled=false; }
+      };
+    }
     holder.appendChild(b);
   });
   bg.querySelector(".x").onclick=()=>document.body.removeChild(bg);

@@ -33,6 +33,8 @@ MAXFEE_GWEI = int(os.environ.get("XINSERE_MAX_FEE_GWEI", "50"))
 ABI = [
     {"inputs": [{"type": "bytes32"}, {"type": "bytes32"}, {"type": "string"}, {"type": "uint256"}],
      "name": "grantPermission", "outputs": [{"type": "bytes32"}], "stateMutability": "nonpayable", "type": "function"},
+    {"inputs": [{"type": "bytes32"}, {"type": "bytes32"}], "name": "revokePermission",
+     "outputs": [{"type": "bytes32"}], "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [{"type": "bytes32"}, {"type": "bytes32"}], "name": "verify",
      "outputs": [{"name": "hasPermission", "type": "bool"}, {"name": "grantedAt", "type": "uint256"}],
      "stateMutability": "view", "type": "function"},
@@ -112,12 +114,9 @@ class Chain:
             file_hash(file_id), grantee_hash(grantee_id)).call()
         return bool(has), int(granted_at)
 
-    def grant(self, file_id: str, grantee_id: str, ptype: str = "read") -> str:
-        """Write an on-chain grant. Returns the real transaction hash."""
-        self._ensure()
+    def _send(self, fn) -> str:
+        """Sign, send, and await a contract write. Returns the transaction hash."""
         w3, acct = self._w3, self._acct
-        fn = self._contract.functions.grantPermission(
-            file_hash(file_id), grantee_hash(grantee_id), ptype, 0)
         tx = fn.build_transaction({
             "from": acct.address,
             "nonce": w3.eth.get_transaction_count(acct.address, "pending"),
@@ -129,9 +128,36 @@ class Chain:
         signed = w3.eth.account.sign_transaction(tx, acct.key)
         raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
         tx_hash = w3.eth.send_raw_transaction(raw)
-        w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
         h = tx_hash.hex()
-        return h if h.startswith("0x") else "0x" + h
+        h = h if h.startswith("0x") else "0x" + h
+        # A mined-but-reverted tx (status 0) must surface as failure — otherwise a
+        # failed revoke would be logged/reported as a successful one (audit lie).
+        if getattr(receipt, "status", 1) != 1:
+            raise RuntimeError(f"transaction reverted on-chain: {h}")
+        return h
+
+    def grant(self, file_id: str, grantee_id: str, ptype: str = "read") -> str:
+        """Write an on-chain grant. Returns the real transaction hash.
+        (Contract overwrites an existing record — re-granting is safe.)"""
+        self._ensure()
+        return self._send(self._contract.functions.grantPermission(
+            file_hash(file_id), grantee_hash(grantee_id), ptype, 0))
+
+    def revoke(self, file_id: str, grantee_id: str) -> str | None:
+        """Write an on-chain revocation. Returns the transaction hash, or None
+        if there was no active grant to revoke (no-op).
+
+        verify() is checked first because the contract REVERTS when revoking an
+        inactive/absent grant ("Permission not found or already revoked") — a
+        blind revoke would burn gas on a predictable revert, and a retry after a
+        partial folder revocation would brick on the already-revoked files."""
+        self._ensure()
+        has, _ = self.verify(file_id, grantee_id)
+        if not has:
+            return None
+        return self._send(self._contract.functions.revokePermission(
+            file_hash(file_id), grantee_hash(grantee_id)))
 
 
 CHAIN = Chain()

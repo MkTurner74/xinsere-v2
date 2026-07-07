@@ -170,6 +170,28 @@ async def logout(request: Request):
     return {"ok": True}
 
 
+def _grant_inherited(token: str, node_id: str, file_id: str) -> int:
+    """Grant-on-add: a file added to a folder that is already shared must be
+    readable by the existing grantees — the on-chain contract is per-file, so
+    each inherited share needs its own grant tx. Best-effort: a chain failure
+    must not fail the upload (RLS already lets grantees SEE the file; the grant
+    governs download, and a re-share repairs it)."""
+    granted = 0
+    try:
+        grantees = {sh["grantee"] for sh in supa.shares_covering(token, node_id)}
+        for g in grantees:
+            try:
+                CHAIN.grant(file_id, g, "read")
+                granted += 1
+            except Exception as exc:
+                import logging
+                logging.getLogger("xinsere.app").warning(
+                    "grant-on-add failed node=%s grantee=%s: %s", node_id, g, exc)
+    except Exception:
+        pass
+    return granted
+
+
 ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get(
     "XINSERE_ADMIN_EMAILS", "mark.turner@entertainmenttechnologists.com").split(",") if e.strip()}
 
@@ -274,6 +296,7 @@ async def upload(request: Request):
                                 sha256=res.file_sha256, size=len(content),
                                 frags=res.fragment_count,
                                 content_type=f.content_type or "application/octet-stream")
+        _grant_inherited(token, node["id"], res.file_id)
         created.append(node_view(node, uid, token, pmap))
     return {"created": created, "count": len(created)}
 
@@ -324,7 +347,134 @@ async def finalize_upload(request: Request, key: str = Form(...), name: str = Fo
                             sha256=res.file_sha256, size=len(content),
                             frags=res.fragment_count, content_type=content_type)
     delete_staged(key)
+    _grant_inherited(token, node["id"], res.file_id)  # folder already shared? grant new file too
     return node_view(node, uid, token, _profiles_map(token))
+
+
+# --- file management (rename / move / delete) --------------------------------
+
+@app.post("/api/rename")
+async def rename(request: Request, node_id: str = Form(...), name: str = Form(...)):
+    """Display-name only — fragment names carry no filename linkage, so this
+    never touches storage or the chain."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="You can only rename your own items")
+    clean = name.strip()
+    if not clean:
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+    updated = supa.rename_node(token, node_id, clean)
+    return node_view(updated, uid, token, _profiles_map(token))
+
+
+@app.post("/api/move")
+async def move(request: Request, node_id: str = Form(...), new_parent: str = Form(...)):
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    target = supa.get_node(token, new_parent)
+    if not node or node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="You can only move your own items")
+    if not node.get("parent"):
+        raise HTTPException(status_code=400, detail="The root folder cannot be moved")
+    if not target or target["type"] != "folder" or target["owner"] != uid:
+        raise HTTPException(status_code=403, detail="Destination must be your own folder")
+    # A folder cannot be moved into itself or its own subtree.
+    if node["type"] == "folder":
+        if new_parent == node_id or any(a["id"] == node_id for a in supa.ancestors(token, new_parent)):
+            raise HTTPException(status_code=400, detail="Cannot move a folder into itself")
+
+    # Inherited-share reconciliation: the contract is per-file, so moving between
+    # differently-shared folders must revoke grants the file leaves behind and
+    # add the ones it gains (direct shares on the node itself always survive).
+    before = {sh["grantee"] for sh in supa.shares_covering(token, node_id)}
+    updated = supa.move_node(token, node_id, new_parent)
+    after = {sh["grantee"] for sh in supa.shares_covering(token, node_id)}
+    rec = {"granted": 0, "revoked": 0, "errors": 0}
+    if before != after:
+        files = supa.files_under(token, node_id)
+        for f in files:
+            for g in after - before:
+                try:
+                    CHAIN.grant(f["file_id"], g, "read")
+                    rec["granted"] += 1
+                except Exception:
+                    rec["errors"] += 1   # fail-closed: no grant -> no download for them
+            for g in before - after:
+                try:
+                    if CHAIN.revoke(f["file_id"], g):   # None = nothing active to revoke
+                        rec["revoked"] += 1
+                except Exception:
+                    rec["errors"] += 1   # surfaced to the UI; lingering grant is RLS-blocked but must be retried
+    view = node_view(updated, uid, token, _profiles_map(token))
+    view["reconciliation"] = rec
+    return view
+
+
+@app.post("/api/delete")
+async def delete_item(request: Request, node_id: str = Form(...)):
+    """Delete a file or folder (recursive). For every file: revoke outstanding
+    on-chain grants (so the ledger trail stays truthful), then cryptographic
+    erasure in the pipeline (fragments + index removed — leftover ciphertext is
+    unrecoverable), then remove the metadata node (descendants cascade)."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="You can only delete your own items")
+    if not node.get("parent"):
+        raise HTTPException(status_code=400, detail="The root folder cannot be deleted")
+
+    files = supa.files_under(token, node_id)
+    revoked, revoke_errors = 0, 0
+    for f in files:
+        # Revoke every grant that covers this file (direct or via a shared ancestor).
+        try:
+            for sh in supa.shares_covering(token, f["id"]):
+                try:
+                    if CHAIN.revoke(f["file_id"], sh["grantee"]):  # None = no active grant (skip)
+                        revoked += 1
+                except Exception:
+                    revoke_errors += 1  # chain revoke is best-effort on delete; erasure below is what kills access
+        except Exception:
+            revoke_errors += 1
+        try:
+            get_pipeline().delete(f["file_id"])  # cryptographic erasure
+        except Exception:
+            pass  # already-gone pipeline records shouldn't block metadata cleanup
+    supa.delete_node(token, node_id)
+    return {"ok": True, "deleted_files": len(files), "grants_revoked": revoked,
+            "revoke_errors": revoke_errors}
+
+
+@app.post("/api/unshare")
+async def unshare(request: Request, node_id: str = Form(...), grantee: str = Form(...)):
+    """Revoke a share: on-chain revocation per file under the node, then remove
+    the share row. The contract is authoritative — downloads fail immediately."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="You can only manage shares on your own items")
+    files = supa.files_under(token, node_id)
+    last_tx, revoked, errors = None, 0, 0
+    for f in files:
+        try:
+            tx = CHAIN.revoke(f["file_id"], grantee)  # None = already inactive (retry-safe skip)
+            if tx:
+                last_tx, revoked = tx, revoked + 1
+        except Exception:
+            errors += 1
+    if errors:
+        # Fail closed: keep the share row so the owner can see it and retry.
+        # Already-revoked files are skipped on retry (verify-first), so a retry
+        # only re-attempts the failures — it can never brick on prior successes.
+        raise HTTPException(status_code=502,
+                            detail=f"On-chain revoke failed for {errors}/{len(files)} files — share kept; retry")
+    supa.delete_share(token, node_id, grantee)
+    return {"ok": True, "files_revoked": revoked, "files_covered": len(files), "tx": last_tx}
 
 
 # --- share / download -------------------------------------------------------
