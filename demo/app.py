@@ -336,6 +336,14 @@ async def download(request: Request, node_id: str):
         r = get_pipeline().retrieve(node["file_id"])
     except XinsereIntegrityError as exc:
         raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
+    t = r.timings or {}
+    # Compact per-stage breakdown, visible in the browser Network tab (and logged
+    # server-side in full). Handy for the perf pass: shows S3-vs-KMS split.
+    timing_hdr = (f"total={t.get('total_ms')}ms index={t.get('index_ms')}ms "
+                  f"fetch+decrypt={t.get('fetch_decrypt_ms')}ms "
+                  f"s3max={t.get('s3_get', {}).get('max')}ms "
+                  f"kmsmax={t.get('kms_decrypt', {}).get('max')}ms "
+                  f"verify={t.get('verify_sha_ms')}ms workers={t.get('workers')}")
     return StreamingResponse(
         io.BytesIO(r.content),
         media_type=r.content_type,
@@ -343,7 +351,8 @@ async def download(request: Request, node_id: str):
             "Content-Disposition": f'attachment; filename="{node["name"]}"',
             "X-Content-SHA256": node.get("sha", ""),
             "X-Integrity": "verified-bit-perfect",
-            "Access-Control-Expose-Headers": "X-Content-SHA256, X-Integrity",
+            "X-Retrieve-Timing": timing_hdr,
+            "Access-Control-Expose-Headers": "X-Content-SHA256, X-Integrity, X-Retrieve-Timing",
         },
     )
 

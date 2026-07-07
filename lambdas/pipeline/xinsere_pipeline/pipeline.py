@@ -12,10 +12,12 @@ storage only. Wire a permission check in front of retrieve() at the API layer.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from cryptography.exceptions import InvalidTag
@@ -31,6 +33,8 @@ from .config import (
 from .errors import XinsereIntegrityError, XinsereNotFoundError
 from . import fragmenter
 
+_log = logging.getLogger("xinsere.pipeline")
+
 
 @dataclass
 class StoreResult:
@@ -45,10 +49,24 @@ class RetrieveResult:
     content: bytes
     content_type: str
     file_sha256: str
+    # Per-stage wall-clock breakdown (ms), for profiling latency. See retrieve().
+    timings: dict = field(default_factory=dict)
 
 
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _ms(t0: float) -> float:
+    return round((time.perf_counter() - t0) * 1000, 1)
+
+
+def _agg(frag_timings: list[dict], key: str) -> dict:
+    """Aggregate a per-fragment timing across the fan-out. `max` is the critical
+    path (fragments run concurrently); `sum` is total work done."""
+    vals = [ft[key] for ft in frag_timings] or [0.0]
+    return {"max": round(max(vals), 1), "avg": round(sum(vals) / len(vals), 1),
+            "sum": round(sum(vals), 1)}
 
 
 def _now_iso() -> str:
@@ -75,10 +93,13 @@ class PipelineService:
         self._index = index_store
         self._n = fragment_count
         self._mode = route_mode
-        # Fragments are processed concurrently — AES-GCM and disk/S3 I/O both
-        # release the GIL, so threads give real parallelism. One worker per
-        # fragment, capped by CPU count.
-        self._workers = max_workers or min(fragment_count, os.cpu_count() or 4)
+        # Per-fragment work is I/O-bound: an S3 GET/PUT (often cross-region) plus a
+        # KMS round-trip, both of which release the GIL. So pool width should track
+        # the fragment count, NOT cpu_count — on serverless os.cpu_count() is 1-2,
+        # which serialized the fan-out into several sequential waves. fragment_count
+        # is bounded (<=16 by ALLOWED_FRAGMENT_COUNTS), so one thread per fragment
+        # is safe; keep an explicit ceiling as a guard.
+        self._workers = max_workers or min(fragment_count, 16)
 
     # --- Store ---------------------------------------------------------------
 
@@ -141,41 +162,84 @@ class PipelineService:
 
     def retrieve(self, file_id: str) -> RetrieveResult:
         """Reassemble and decrypt a file. Raises if any fragment is missing or
-        tampered, or if the reassembled bytes fail the whole-file SHA-256."""
+        tampered, or if the reassembled bytes fail the whole-file SHA-256.
+
+        Records a per-stage timing breakdown on the result (and logs it) so the
+        latency can be attributed to index / S3 / KMS / crypto rather than guessed."""
+        t_all = time.perf_counter()
+
+        t0 = time.perf_counter()
         file_rec = self._index.get_file(file_id)
         if file_rec is None:
             raise XinsereNotFoundError(f"unknown file_id: {file_id}")
-
         frags = self._index.get_fragments(file_id)
         if len(frags) != file_rec.fragment_count:
             raise XinsereIntegrityError(
                 f"expected {file_rec.fragment_count} fragments, found {len(frags)}"
             )
+        index_ms = _ms(t0)
 
         # Read + decrypt every fragment concurrently; map() preserves order and
         # re-raises any worker error (missing fragment, tamper) to the caller.
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
-            plaintext_fragments = list(pool.map(self._read_and_decrypt, frags))
+            results = list(pool.map(self._read_and_decrypt, frags))
+        fetch_ms = _ms(t0)
+        plaintext_fragments = [r[0] for r in results]
+        frag_timings = [r[1] for r in results]
 
+        t0 = time.perf_counter()
         content = fragmenter.join(plaintext_fragments)
+        join_ms = _ms(t0)
+
+        t0 = time.perf_counter()
         if _sha256_hex(content) != file_rec.file_sha256:
             raise XinsereIntegrityError("reassembled file failed SHA-256 check")
+        verify_ms = _ms(t0)
 
-        return RetrieveResult(content, file_rec.content_type, file_rec.file_sha256)
+        timings = {
+            "total_ms": _ms(t_all),
+            "index_ms": index_ms,
+            "fetch_decrypt_ms": fetch_ms,   # wall-clock of the parallel fan-out
+            "join_ms": join_ms,
+            "verify_sha_ms": verify_ms,
+            "fragments": file_rec.fragment_count,
+            "workers": self._workers,
+            "bytes": len(content),
+            # per-fragment breakdown across the fan-out (max = critical path):
+            "s3_get": _agg(frag_timings, "s3_ms"),
+            "kms_decrypt": _agg(frag_timings, "kms_ms"),
+            "aes_gcm": _agg(frag_timings, "aes_ms"),
+        }
+        _log.info("retrieve %s %s", file_id, timings)
+        return RetrieveResult(content, file_rec.content_type, file_rec.file_sha256, timings)
 
-    def _read_and_decrypt(self, fr: FragmentRecord) -> bytes:
-        """Worker: read a fragment -> unwrap key -> AES-256-GCM decrypt."""
+    def _read_and_decrypt(self, fr: FragmentRecord) -> tuple[bytes, dict]:
+        """Worker: read a fragment -> unwrap key -> AES-256-GCM decrypt.
+
+        Returns (plaintext, timing) where timing splits the S3 read, the KMS
+        unwrap, and the local AES-GCM decrypt so we can see which one dominates."""
+        t0 = time.perf_counter()
         try:
             ciphertext = self._objects.get(fr.bucket, fr.fragment_id)
         except (KeyError, FileNotFoundError) as exc:
             raise XinsereIntegrityError(f"fragment object missing: seq {fr.sequence}") from exc
+        s3_ms = _ms(t0)
+
+        t0 = time.perf_counter()
+        data_key = self._keys.decrypt_data_key(fr.wrapped_key)
+        kms_ms = _ms(t0)
+
+        t0 = time.perf_counter()
         try:
-            data_key = self._keys.decrypt_data_key(fr.wrapped_key)
-            return AESGCM(data_key).decrypt(fr.nonce, ciphertext, None)
+            plaintext = AESGCM(data_key).decrypt(fr.nonce, ciphertext, None)
         except InvalidTag as exc:
             raise XinsereIntegrityError(
                 f"fragment key/ciphertext failed authentication (tampered?): seq {fr.sequence}"
             ) from exc
+        aes_ms = _ms(t0)
+
+        return plaintext, {"seq": fr.sequence, "s3_ms": s3_ms, "kms_ms": kms_ms, "aes_ms": aes_ms}
 
     # --- Existence / lifecycle ----------------------------------------------
 
