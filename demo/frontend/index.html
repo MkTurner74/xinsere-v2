@@ -116,6 +116,41 @@
   .empty{grid-column:1/-1;text-align:center;color:var(--faint);padding:50px 0;}
   .empty .o{width:44px;height:44px;margin:0 auto 12px;border-radius:50%;background:radial-gradient(circle at 35% 30%,rgba(124,91,255,0.5),rgba(46,33,112,0.5));opacity:0.6;}
 
+  /* inline SVG icon system */
+  .svgi{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;vertical-align:-0.14em;}
+  .svgi.dots{fill:currentColor;stroke:none;}
+  .iconbtn{background:transparent;border:0;color:var(--muted);border-radius:8px;padding:6px;display:inline-grid;place-items:center;font-size:1.05rem;line-height:1;}
+  .iconbtn:hover{background:var(--panel-2);color:var(--text);}
+  .secured-i{color:var(--mint);font-size:0.95rem;display:inline-grid;place-items:center;}
+
+  /* view toggle */
+  .viewtoggle{display:inline-flex;border:1px solid var(--edge);border-radius:9px;overflow:hidden;margin-left:auto;}
+  .viewtoggle button{background:transparent;border:0;color:var(--muted);padding:7px 9px;font-size:1rem;display:grid;place-items:center;}
+  .viewtoggle button.on{background:var(--panel-2);color:var(--text);}
+
+  /* LIST VIEW — compact rows (default, app-like) */
+  #grid.listview{display:block;grid-template-columns:none;padding:4px;min-height:220px;}
+  .lhead,.lrow{display:flex;align-items:center;gap:12px;padding:8px 12px;}
+  .lhead{font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--faint);border-bottom:1px solid var(--edge);padding-bottom:9px;}
+  .lrow{border-radius:9px;border:1px solid transparent;cursor:default;}
+  .lrow:hover{background:var(--panel-2);}
+  .lrow.folder{cursor:pointer;}
+  .lrow .ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:0.95rem;flex:none;background:linear-gradient(140deg,rgba(124,91,255,0.16),rgba(46,33,112,0.28));color:#b7a6ff;border:1px solid var(--edge);}
+  .lrow.folder .ic{background:linear-gradient(140deg,rgba(138,107,255,0.32),rgba(46,33,112,0.45));color:#cbbcff;}
+  .lrow .nm{font-weight:600;font-size:0.86rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .lrow .nm .sub{display:block;font-weight:400;font-size:0.7rem;color:var(--faint);margin-top:1px;}
+  .col-type{width:56px;flex:none;color:var(--muted);font-size:0.74rem;text-transform:uppercase;}
+  .col-size{width:150px;flex:none;color:var(--muted);font-size:0.76rem;font-variant-numeric:tabular-nums;}
+  .col-share{width:74px;flex:none;display:flex;align-items:center;}
+  .col-act{width:auto;flex:none;display:flex;align-items:center;gap:4px;}
+  .lrow .shared,.lhead .shared{display:flex;align-items:center;}
+  .lrow .shared .avatar{width:22px;height:22px;font-size:0.6rem;margin-right:-7px;border:2px solid var(--task-bg);}
+  .lrow .mini.dl{font-size:0.74rem;font-weight:600;padding:5px 12px;border-radius:8px;border:0;color:#fff;background:linear-gradient(135deg,var(--violet-br),var(--violet));min-width:0;}
+  @media(max-width:640px){ .col-type,.col-size,.lhead .col-type,.lhead .col-size{display:none;} }
+  /* GRID VIEW — tightened cards */
+  #grid:not(.listview) .tile{padding:13px 12px;}
+  #grid:not(.listview) .tile .ic{width:38px;height:38px;font-size:1.15rem;margin-bottom:9px;}
+
   /* modal */
   .modal-bg{position:fixed;inset:0;background:var(--scrim);display:grid;place-items:center;z-index:30;backdrop-filter:blur(3px);}
   .modal{width:360px;background:var(--bg-2);border:1px solid var(--edge-strong);border-radius:18px;padding:22px;}
@@ -150,13 +185,15 @@
   .mini.dl.loading{pointer-events:none;opacity:.8;}
   .btnspin{display:inline-block;width:12px;height:12px;border:2px solid var(--track);border-top-color:var(--word);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;}
   /* tile kebab menu (owner file management) */
-  .tile .kebab{position:absolute;top:8px;right:8px;width:26px;height:26px;border-radius:8px;border:0;background:transparent;color:var(--faint);font-size:1rem;line-height:1;display:grid;place-items:center;opacity:0;transition:opacity .12s;}
-  .tile:hover .kebab{opacity:1;}
-  .tile .kebab:hover{background:var(--panel-2);color:var(--text);}
-  .ctx{position:fixed;z-index:45;background:var(--task-bg);border:1px solid var(--edge-strong);border-radius:11px;padding:6px;min-width:150px;box-shadow:0 14px 40px -10px rgba(0,0,0,0.55);display:flex;flex-direction:column;}
-  .ctx button{background:transparent;border:0;color:var(--text);text-align:left;padding:8px 11px;border-radius:8px;font-size:0.84rem;}
+  .kebab{border:0;background:transparent;color:var(--faint);border-radius:8px;width:28px;height:28px;display:grid;place-items:center;font-size:1rem;line-height:1;}
+  .kebab:hover{background:var(--panel-2);color:var(--text);}
+  .tile>.kebab{position:absolute;top:8px;right:8px;opacity:0;transition:opacity .12s;}
+  .tile:hover>.kebab{opacity:1;}
+  .ctx{position:fixed;z-index:45;background:var(--task-bg);border:1px solid var(--edge-strong);border-radius:11px;padding:6px;min-width:172px;box-shadow:0 14px 40px -10px rgba(0,0,0,0.55);display:flex;flex-direction:column;}
+  .ctx button{background:transparent;border:0;color:var(--text);text-align:left;padding:8px 11px;border-radius:8px;font-size:0.84rem;display:flex;align-items:center;gap:10px;}
+  .ctx button .svgi{color:var(--muted);font-size:1rem;}
   .ctx button:hover{background:var(--panel-2);}
-  .ctx button.danger{color:var(--coral);}
+  .ctx button.danger,.ctx button.danger .svgi{color:var(--coral);}
   .folderpick{max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin:12px 0;}
   .folderpick button{background:transparent;border:0;color:var(--text);text-align:left;padding:7px 10px;border-radius:8px;font-size:0.85rem;}
   .folderpick button:hover{background:var(--panel-2);}
@@ -244,6 +281,10 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
     <main class="main" id="main">
       <div class="bar">
         <div class="crumbs" id="crumbs"></div>
+        <div class="viewtoggle" id="viewtoggle">
+          <button data-layout="list" title="List view" aria-label="List view"></button>
+          <button data-layout="grid" title="Grid view" aria-label="Grid view"></button>
+        </div>
         <div class="tools" id="tools">
           <button class="btn-ghost btn" id="new-folder">New folder</button>
           <button class="btn-ghost btn" id="up-folder">Upload folder</button>
@@ -279,7 +320,17 @@ document.querySelectorAll(".theme-toggle").forEach(b=>b.addEventListener("click"
 }));
 syncThemeButtons();
 
+/* ---- grid/list view toggle (list default; persisted) ---- */
+function applyLayoutButtons(){ document.querySelectorAll("#viewtoggle button").forEach(b=>b.classList.toggle("on", b.dataset.layout===LAYOUT)); }
+document.querySelectorAll("#viewtoggle button").forEach(b=>{
+  b.innerHTML = b.dataset.layout==="list" ? svg("listv") : svg("gridv");
+  b.addEventListener("click", ()=>{ LAYOUT=b.dataset.layout; localStorage.setItem("xin-layout",LAYOUT); applyLayoutButtons(); renderGrid(LAST, LAST_MANAGE); });
+});
+applyLayoutButtons();
+
 let ME=null, OTHERS=[], VIEW="mine", CURRENT=null; // CURRENT folder id
+let LAYOUT=localStorage.getItem("xin-layout")||"list";  // list (default) | grid
+let LAST=[], LAST_MANAGE=true;                           // last rendered set, for view re-render
 
 function avatarHtml(u){ return `<span class="avatar" style="background:linear-gradient(135deg,${u.grad[0]},${u.grad[1]})">${u.initials}</span>`; }
 function fmtSize(b){ if(b==null) return ""; const u=["B","KB","MB","GB"];let i=0;while(b>=1024&&i<3){b/=1024;i++;}return b.toFixed(b<10&&i>0?1:0)+" "+u[i]; }
@@ -305,6 +356,29 @@ function typeLabel(ct){ const e=trueExt(ct); return e?e.toUpperCase():""; }
 function dlName(name, ct){ const ext=trueExt(ct); if(!ext) return name;
   if(new RegExp("\\."+ext+"$","i").test(name)) return name;
   return name.replace(/\.[A-Za-z0-9]{1,6}$/,"")+"."+ext; }
+// --- inline SVG icons (crisp, theme-aware, tiny) ---
+const ICON={
+  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>',
+  folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  file:'<path d="M14 3v5h5"/><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/>',
+  img:'<rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 18l4-4 3 3 3-3 4 4"/>',
+  vid:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/>',
+  download:'<path d="M12 3v12"/><path d="M7 11l5 4 5-4"/><path d="M4 20h16"/>',
+  share:'<circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 10.9l6.6-3.7M8.2 13.1l6.6 3.7"/>',
+  link:'<path d="M9.5 14.5l5-5"/><path d="M11 6.5l1.2-1.2a3.5 3.5 0 0 1 5 5L17 11.5"/><path d="M13 17.5l-1.2 1.2a3.5 3.5 0 0 1-5-5L7 12.5"/>',
+  pencil:'<path d="M4 20h4L18 10a2.8 2.8 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  moveto:'<path d="M5 12h13"/><path d="M12 6l6 6-6 6"/>',
+  trash:'<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/>',
+  gridv:'<rect x="4" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.4"/>',
+  listv:'<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
+  dots:'<circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/>'
+};
+function svg(name, cls){ return `<svg class="svgi${cls?" "+cls:""}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]||""}</svg>`; }
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function fileIconName(name){ const e=(name.split(".").pop()||"").toLowerCase();
+  if(["png","jpg","jpeg","gif","webp","tif","tiff","svg","bmp","heic"].includes(e)) return "img";
+  if(["mp4","mov","avi","webm","mkv","m4v"].includes(e)) return "vid";
+  return "file"; }
 function iconFor(name){ const e=(name.split(".").pop()||"").toLowerCase();
   const m={pdf:"▤",xlsx:"▦",xls:"▦",csv:"▦",mov:"▷",mp4:"▷",zip:"◫",png:"▣",jpg:"▣",jpeg:"▣",doc:"▤",docx:"▤",key:"◈",txt:"≡"};
   return m[e]||"▧"; }
@@ -423,60 +497,102 @@ function renderCrumbs(crumbs){
 }
 
 function renderGrid(children, canManage){
-  const g=$("#grid"); g.innerHTML="";
+  LAST=children; LAST_MANAGE=canManage;
+  const g=$("#grid");
+  g.classList.toggle("listview", LAYOUT==="list");
+  g.innerHTML="";
   if(!children.length){ g.innerHTML=`<div class="empty"><div class="o"></div>${canManage?"Drop files here, or use Upload.":"Nothing shared with you yet."}</div>`; return; }
+  if(LAYOUT==="list") renderList(g, children, canManage);
+  else renderCards(g, children, canManage);
+}
+
+function facepile(n){ return (n.shared_with&&n.shared_with.length)
+  ? `<span class="shared">`+n.shared_with.map(u=>avatarHtml(u)).join("")+`</span>` : ""; }
+
+/* Compact list rows (default) — the app-like layout. */
+function renderList(g, children, canManage){
+  const head=document.createElement("div"); head.className="lhead";
+  head.innerHTML=`<span style="width:30px"></span><span class="nm">Name</span>`+
+    `<span class="col-type">Type</span><span class="col-size">Security</span>`+
+    `<span class="col-share">Shared</span><span class="col-act" style="width:104px"></span>`;
+  g.appendChild(head);
   children.forEach(n=>{
+    const mine=n.owner===ME.id;
+    const r=document.createElement("div"); r.className="lrow "+n.type;
+    if(n.type==="folder"){
+      r.innerHTML=`<span class="ic">${svg("folder")}</span>`+
+        `<span class="nm">${esc(n.name)}<span class="sub">Folder${mine?"":" · from "+esc(n.owner_name)}</span></span>`+
+        `<span class="col-type">Folder</span><span class="col-size"></span>`+
+        `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
+      r.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
+    } else {
+      r.innerHTML=`<span class="ic">${svg(fileIconName(n.name))}</span>`+
+        `<span class="nm" title="${esc(n.name)}">${esc(n.name)}<span class="sub">SHA-256 ${(n.sha256||"").slice(0,12)}…</span></span>`+
+        `<span class="col-type">${typeLabel(n.content_type)||"—"}</span>`+
+        `<span class="col-size"><span class="secured-i" title="Fragmented · AES-256-GCM · on-chain permissioned">${svg("shield")}</span> ${n.frags} frags · ${fmtSize(n.size)}</span>`+
+        `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
+      const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
+      dl.onclick=()=>downloadFile(n, dl); r.querySelector(".col-act").appendChild(dl);
+      if(!mine) gateOnChain(n, dl);
+    }
+    if(canManage && mine) r.querySelector(".col-act").appendChild(kebab(n));
+    g.appendChild(r);
+  });
+}
+
+/* Grid cards — tightened, shield icon for Secured, proof moved to the kebab. */
+function renderCards(g, children, canManage){
+  children.forEach(n=>{
+    const mine=n.owner===ME.id;
     const t=document.createElement("div"); t.className="tile "+n.type;
     if(n.type==="folder"){
-      t.innerHTML=`<div class="ic">📁</div><div class="nm">${n.name}</div><div class="mt">Folder</div>`;
-      t.onclick=()=>openFolder(n.id);
-      if(canManage && n.owner===ME.id){ t.appendChild(shareBtnRow(n)); t.appendChild(kebab(n)); }
+      t.innerHTML=`<div class="ic">${svg("folder")}</div><div class="nm">${esc(n.name)}</div><div class="mt">Folder</div>`;
+      t.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
+      if(canManage && mine){
+        const acts=document.createElement("div"); acts.className="acts";
+        const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share";
+        sb.onclick=(e)=>{e.stopPropagation();openShare(n);}; acts.appendChild(sb);
+        t.appendChild(acts); t.appendChild(kebab(n));
+      }
+      if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
     } else {
-      t.innerHTML=`<div class="ic">${iconFor(n.name)}</div><div class="nm" title="${n.name}">${n.name}</div>
-        <div class="mt"><span class="secured">● Secured</span>${typeLabel(n.content_type)?` · <span title="Verified content type — captured at upload; a rename can't change it">${typeLabel(n.content_type)}</span>`:""} · ${n.frags} frags · ${fmtSize(n.size)}</div>
-        ${n.sha256?`<div class="sha" title="SHA-256 taken before encryption; re-checked on download">SHA-256 ${n.sha256.slice(0,12)}…</div>`:""}`;
+      t.innerHTML=`<div class="ic">${svg(fileIconName(n.name))}</div><div class="nm" title="${esc(n.name)}">${esc(n.name)}</div>`+
+        `<div class="mt"><span class="secured-i" title="Fragmented · AES-256-GCM · on-chain permissioned">${svg("shield")}</span> Secured`+
+        `${typeLabel(n.content_type)?` · <span title="Verified content type — a rename can't change it">${typeLabel(n.content_type)}</span>`:""} · ${n.frags} frags · ${fmtSize(n.size)}</div>`+
+        `${n.sha256?`<div class="sha" title="SHA-256 taken before encryption; re-checked on download">SHA-256 <b>${n.sha256.slice(0,12)}</b>…</div>`:""}`;
       const acts=document.createElement("div"); acts.className="acts";
       const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-      dl.onclick=()=>downloadFile(n, dl);
-      acts.appendChild(dl);
-      // Files shared TO me: don't light up Download until the on-chain grant is
-      // actually readable from the contract — a freshly-signed grant can lag on
-      // load-balanced RPC nodes, and clicking too early fails the chain check.
-      if(n.owner!==ME.id) gateOnChain(n, dl);
-      if(canManage && n.owner===ME.id){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); t.appendChild(kebab(n)); }
+      dl.onclick=()=>downloadFile(n, dl); acts.appendChild(dl);
+      if(!mine) gateOnChain(n, dl);
+      if(canManage && mine){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); t.appendChild(kebab(n)); }
       t.appendChild(acts);
-      if(n.owner!==ME.id){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
-      if(n.shared_with && n.shared_with.length){ t.appendChild(sharedAvatars(n)); }
+      if(!mine){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
+      if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
     }
     g.appendChild(t);
   });
 }
-function shareBtnRow(n){ const d=document.createElement("div"); d.className="acts";
-  const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share folder"; sb.onclick=(e)=>{e.stopPropagation();openShare(n);}; d.appendChild(sb);
-  if(n.shared_with&&n.shared_with.length){ d.appendChild(document.createTextNode("")); }
-  const wrap=document.createElement("div"); wrap.appendChild(d); if(n.shared_with&&n.shared_with.length) wrap.appendChild(sharedAvatars(n)); return wrap; }
-function sharedAvatars(n){ const s=document.createElement("div"); s.className="shared";
-  n.shared_with.forEach(u=>s.insertAdjacentHTML("beforeend",avatarHtml(u)));
-  const tx=n.shared_with[0].tx;
-  if(tx){ const full=tx.startsWith("0x")?tx:"0x"+tx; const p=document.createElement("a"); p.className="proof";
-    p.href="https://amoy.polygonscan.com/tx/"+full; p.target="_blank"; p.rel="noopener";
-    p.textContent="on-chain proof · "+full.slice(0,12)+"…"; p.title="View this grant on PolygonScan"; s.appendChild(p);} return s; }
 
 /* ---- file management: kebab menu, rename, move, delete ---- */
 function kebab(n){
-  const b=document.createElement("button"); b.className="kebab"; b.textContent="⋯"; b.title="More actions";
+  const b=document.createElement("button"); b.className="kebab"; b.innerHTML=svg("dots","dots"); b.title="More actions";
   b.onclick=(e)=>{ e.stopPropagation(); openCtx(e, n); };
   return b;
 }
 function openCtx(e, n){
   document.querySelectorAll(".ctx").forEach(el=>el.remove());
   const m=document.createElement("div"); m.className="ctx";
-  const add=(label, fn, danger)=>{ const x=document.createElement("button");
-    x.textContent=label; if(danger) x.className="danger";
+  const add=(icon, label, fn, danger)=>{ const x=document.createElement("button");
+    x.innerHTML=svg(icon)+`<span>${label}</span>`; if(danger) x.className="danger";
     x.onclick=()=>{ m.remove(); fn(); }; m.appendChild(x); };
-  add("Rename", ()=>renameItem(n));
-  add("Move to…", ()=>openMove(n));
-  add("Delete", ()=>deleteItem(n), true);
+  add("share", n.type==="folder"?"Share folder":"Share", ()=>openShare(n));
+  add("pencil", "Rename", ()=>renameItem(n));
+  add("moveto", "Move to…", ()=>openMove(n));
+  // Blockchain proof lives here now, not on the card face.
+  const tx=n.shared_with&&n.shared_with[0]&&n.shared_with[0].tx;
+  if(tx){ const full=tx.startsWith("0x")?tx:"0x"+tx;
+    add("link", "View on-chain proof ↗", ()=>window.open("https://amoy.polygonscan.com/tx/"+full,"_blank","noopener")); }
+  add("trash", "Delete", ()=>deleteItem(n), true);
   document.body.appendChild(m);
   const r=m.getBoundingClientRect();
   m.style.left=Math.min(e.clientX, innerWidth-r.width-10)+"px";
