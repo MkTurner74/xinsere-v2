@@ -150,6 +150,17 @@ tier is **meaningless without in-browser viewing**. Therefore:
      drawn *over* the rendered content by the viewer. The **only** thing that can
      trace a **screenshot/screen-record**, which is the sole exfil vector once
      download is blocked. Needed specifically for view-only mode.
+     - **CROP-RESISTANCE SPEC (Mark 2026-07-07):** a screenshot carries the mark
+       only if a *complete, readable* watermark unit is inside the grab — a partial
+       crop can dodge a single centered mark. So the overlay MUST be **densely
+       tiled** (repeat ~200-400px, diagonal, low opacity) and **every tile
+       independently self-identifying** (each encodes the party-id/session +
+       timestamp, or a short code mapping to the retrieval log). Then any useful
+       crop — even a phone photo of the screen — contains ≥1 traceable tile; a
+       crop small enough to exclude all tiles is too small to be useful. (The
+       invisible byte-level mark #1 does NOT survive a screenshot — re-
+       rasterization destroys the LSB — so this overlay is the sole screenshot
+       defense.)
 - **Visibility, per Mark's 2026-07-07 question:** the byte-level forensic mark is
   **INVISIBLE by design** in every format — for images it's spread-spectrum in the
   pixel **LSBs** ("cannot be detected by visual inspection", patent Emb. 8); for
