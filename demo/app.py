@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import io
 import os
-import time
 from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -23,13 +22,16 @@ from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
 import supa
+from authn import session as _session, ADMIN_EMAILS
 from chain import CHAIN
 from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
                    read_staged, delete_staged, MAX_INLINE_BYTES)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 SESSION_SECRET = os.environ.get("XINSERE_SESSION_SECRET", "xinsere-demo-dev-secret")
-app = FastAPI(title="Xinsere")
+# Public docs are OFF — the gated docs site (docs_site.py) re-exposes /docs,
+# /docs/guide and /openapi.json to signed-in users only.
+app = FastAPI(title="Xinsere", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=60 * 60 * 8,
                    https_only=os.environ.get("XINSERE_HTTPS_ONLY", "").lower() == "true")
 
@@ -58,22 +60,7 @@ def _public(profile: dict) -> dict:
             "grad": list(_GRADS[idx])}
 
 
-# --- session ----------------------------------------------------------------
-
-def _session(request: Request) -> dict:
-    """Return the live Supabase session, refreshing the token if near expiry."""
-    s = request.session.get("sb")
-    if not s:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    if s["expires_at"] - time.time() < 60:
-        try:
-            s = supa.session_from_grant(supa.refresh(s["refresh_token"]))
-            request.session["sb"] = s
-        except supa.SupabaseError:
-            request.session.clear()
-            raise HTTPException(status_code=401, detail="Session expired — sign in again")
-    return s
-
+# --- session (see authn.py — shared with the admin console and docs site) ----
 
 def _profiles_map(token: str) -> dict:
     return {p["id"]: p for p in supa.list_profiles(token)}
@@ -112,6 +99,15 @@ def index() -> HTMLResponse:
 def client_js() -> HTMLResponse:
     with open(os.path.join(_HERE, "frontend", "xinsere-client.js"), "r", encoding="utf-8") as f:
         return HTMLResponse(f.read(), media_type="application/javascript")
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(request: Request) -> HTMLResponse:
+    """Admin console shell. The page itself checks /api/admin/whoami and shows a
+    sign-in prompt if the session isn't a platform admin — every data route is
+    server-gated regardless."""
+    with open(os.path.join(_HERE, "frontend", "admin.html"), "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 
 @app.get("/api/warm")
@@ -192,10 +188,6 @@ def _grant_inherited(token: str, node_id: str, file_id: str) -> int:
     except Exception:
         pass
     return granted
-
-
-ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get(
-    "XINSERE_ADMIN_EMAILS", "mark.turner@entertainmenttechnologists.com").split(",") if e.strip()}
 
 
 @app.post("/api/admin/invite")
@@ -701,6 +693,19 @@ async def download(request: Request, node_id: str):
             "Access-Control-Expose-Headers": "X-Content-SHA256, X-Integrity, X-Retrieve-Timing",
         },
     )
+
+
+# --- routers: machine API, admin console, gated docs -------------------------
+# Imported here (not at the top) because v1.py's delete path reuses
+# _erase_subtree from this module — importing after it is defined keeps the
+# dependency one-way at import time.
+import v1 as _v1            # noqa: E402
+import admin as _admin      # noqa: E402
+import docs_site as _docs   # noqa: E402
+
+app.include_router(_v1.router)
+app.include_router(_admin.router)
+app.include_router(_docs.router)
 
 
 @app.exception_handler(HTTPException)

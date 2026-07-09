@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xinsere — Admin Console</title>
+<style>
+  :root{
+    --bg:#0A0713;--bg-2:#0F0B1E;--panel:rgba(255,255,255,0.035);--panel-2:rgba(146,119,255,0.06);
+    --edge:rgba(146,119,255,0.16);--edge-strong:rgba(146,119,255,0.34);
+    --violet-br:#8A6BFF;--violet:#5B3DF5;--word:#9277FF;
+    --mint:#4FE3C1;--coral:#FF8B7A;--text:#ECE9F8;--muted:#9A93B8;--faint:#6E6688;
+    --glow-a:rgba(124,91,255,0.18);--glow-b:rgba(46,33,112,0.4);
+    --input-bg:rgba(0,0,0,0.28);--task-bg:#17122b;--scrim:rgba(6,4,14,0.66);
+    --radius:16px;--font:"Poppins","Outfit","Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"Consolas",monospace;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;min-height:100%;}
+  body{font-family:var(--font);color:var(--text);
+    background:radial-gradient(120% 90% at 88% -10%,var(--glow-a),transparent 55%),
+      radial-gradient(110% 90% at 5% 110%,var(--glow-b),transparent 55%),var(--bg);
+    -webkit-font-smoothing:antialiased;}
+  button{font:inherit;cursor:pointer;}
+  input,select{font:inherit;color:var(--text);background:var(--input-bg);
+    border:1px solid var(--edge);border-radius:10px;padding:9px 12px;outline:none;}
+  input:focus,select:focus{border-color:var(--edge-strong);}
+  .hidden{display:none !important;}
+
+  header{display:flex;align-items:center;gap:12px;padding:18px 28px;
+    border-bottom:1px solid var(--edge);}
+  .word{font-weight:600;font-size:1.05rem;color:var(--word);letter-spacing:0.01em;}
+  .crumb{color:var(--faint);font-size:0.9rem;}
+  header .who{margin-left:auto;color:var(--muted);font-size:0.85rem;display:flex;gap:14px;align-items:center;}
+  .link{background:none;border:none;color:var(--word);padding:0;font-size:0.85rem;}
+
+  main{max-width:1080px;margin:0 auto;padding:32px 28px 90px;}
+  h2{font-size:1.15rem;margin:34px 0 14px;display:flex;align-items:center;gap:10px;}
+  h2 .count{color:var(--faint);font-weight:400;font-size:0.85rem;}
+
+  .panel{background:var(--panel);border:1px solid var(--edge);border-radius:var(--radius);
+    padding:18px 20px;}
+  table{border-collapse:collapse;width:100%;}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--edge);
+    font-size:0.88rem;vertical-align:middle;}
+  th{color:var(--muted);font-weight:600;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.05em;}
+  tr:last-child td{border-bottom:none;}
+  tr.click{cursor:pointer;} tr.click:hover td{background:var(--panel-2);}
+  td.mono,.mono{font-family:var(--mono);font-size:0.78rem;color:var(--muted);}
+
+  .btn{background:linear-gradient(135deg,var(--violet-br),var(--violet));color:#fff;
+    border:none;border-radius:10px;padding:9px 16px;font-weight:600;font-size:0.86rem;}
+  .btn.ghost{background:var(--panel-2);color:var(--word);border:1px solid var(--edge);}
+  .btn.danger{background:none;border:1px solid rgba(255,139,122,0.4);color:var(--coral);}
+  .btn.sm{padding:5px 10px;font-size:0.78rem;border-radius:8px;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+  .row.end{justify-content:flex-end;}
+
+  .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:0.72rem;font-weight:600;}
+  .pill.active{background:rgba(79,227,193,0.12);color:var(--mint);}
+  .pill.suspended,.pill.revoked{background:rgba(255,139,122,0.12);color:var(--coral);}
+  .pill.org_admin{background:rgba(146,119,255,0.16);color:var(--word);}
+  .pill.member{background:var(--panel-2);color:var(--muted);}
+
+  /* auth / gate screens */
+  .gate{max-width:380px;margin:12vh auto;padding:34px;background:var(--bg-2);
+    border:1px solid var(--edge);border-radius:20px;display:flex;flex-direction:column;gap:14px;}
+  .gate h1{font-size:1.3rem;margin:0;} .gate .sub{color:var(--muted);font-size:0.88rem;margin-top:-8px;}
+  .gate input{width:100%;}
+  .err{color:var(--coral);font-size:0.84rem;min-height:1em;}
+
+  /* modal */
+  .scrim{position:fixed;inset:0;background:var(--scrim);display:flex;
+    align-items:center;justify-content:center;z-index:50;}
+  .modal{background:var(--task-bg);border:1px solid var(--edge-strong);border-radius:18px;
+    padding:26px;min-width:360px;max-width:480px;display:flex;flex-direction:column;gap:14px;}
+  .modal h3{margin:0;font-size:1.05rem;}
+  .modal label{font-size:0.8rem;color:var(--muted);display:block;margin-bottom:4px;}
+  .modal input,.modal select{width:100%;}
+  .secret{background:var(--input-bg);border:1px dashed var(--edge-strong);border-radius:10px;
+    padding:12px;font-family:var(--mono);font-size:0.8rem;word-break:break-all;color:var(--mint);}
+  .warn{font-size:0.8rem;color:var(--coral);}
+  .note{font-size:0.82rem;color:var(--muted);}
+  .back{color:var(--word);background:none;border:none;font-size:0.86rem;padding:0;margin-bottom:8px;}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;margin:6px 0 14px;}
+  .empty{color:var(--faint);font-size:0.88rem;padding:14px 4px;}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="word">Xinsere</span><span class="crumb">/ Admin Console</span>
+  <div class="who hidden" id="who">
+    <span id="who-email"></span>
+    <a class="link" href="/docs/guide" target="_blank">API docs</a>
+    <button class="link" id="logout">Sign out</button>
+  </div>
+</header>
+
+<!-- sign-in gate -->
+<div class="gate hidden" id="gate-login">
+  <h1>Admin sign-in</h1>
+  <div class="sub">Platform administrators only.</div>
+  <input id="li-email" type="email" placeholder="Email" autocomplete="username">
+  <input id="li-pass" type="password" placeholder="Password" autocomplete="current-password">
+  <div class="err" id="li-err"></div>
+  <button class="btn" id="li-go">Sign in</button>
+</div>
+
+<!-- not-an-admin gate -->
+<div class="gate hidden" id="gate-denied">
+  <h1>No access</h1>
+  <div class="sub">This account isn't a platform administrator.</div>
+  <button class="btn ghost" id="denied-out">Sign out</button>
+</div>
+
+<main class="hidden" id="console">
+
+  <!-- ============ ORG LIST VIEW ============ -->
+  <section id="view-orgs">
+    <h2>Organizations <span class="count" id="org-count"></span></h2>
+    <div class="toolbar">
+      <span class="note">An organization holds members, API keys and a service identity that owns its API-stored assets.</span>
+      <button class="btn" id="new-org">New organization</button>
+    </div>
+    <div class="panel">
+      <table id="org-table">
+        <thead><tr><th>Name</th><th>Slug</th><th>Status</th><th>Members</th><th>Active keys</th><th>Created</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty hidden" id="org-empty">No organizations yet — create the first one (Xinsere itself is a fine start).</div>
+    </div>
+
+    <h2>All users <span class="count" id="user-count"></span></h2>
+    <div class="panel">
+      <table id="user-table">
+        <thead><tr><th>Name</th><th>Email</th><th>Organizations</th><th>ID (party_id)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ ORG DETAIL VIEW ============ -->
+  <section id="view-org" class="hidden">
+    <button class="back" id="back">&larr; All organizations</button>
+    <h2 id="od-name"></h2>
+    <div class="toolbar">
+      <span class="note mono" id="od-meta"></span>
+      <span class="row">
+        <button class="btn danger sm hidden" id="od-suspend">Suspend</button>
+        <button class="btn ghost sm hidden" id="od-activate">Reactivate</button>
+      </span>
+    </div>
+
+    <h2>Members <span class="count" id="mem-count"></span></h2>
+    <div class="toolbar">
+      <span class="note">New users are provisioned with a one-time password — forward it privately.</span>
+      <button class="btn" id="add-member">Add member</button>
+    </div>
+    <div class="panel">
+      <table id="mem-table">
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Added</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty hidden" id="mem-empty">No members yet.</div>
+    </div>
+
+    <h2>API keys <span class="count" id="key-count"></span></h2>
+    <div class="toolbar">
+      <span class="note">Keys are shown once at mint time; only a hash is stored.</span>
+      <button class="btn" id="mint-key">Mint key</button>
+    </div>
+    <div class="panel">
+      <table id="key-table">
+        <thead><tr><th>Name</th><th>Prefix</th><th>Scopes</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty hidden" id="key-empty">No API keys yet.</div>
+    </div>
+  </section>
+</main>
+
+<div class="scrim hidden" id="scrim"><div class="modal" id="modal"></div></div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtDate=iso=>iso?new Date(iso).toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"}):"—";
+
+async function api(path,opts={}){
+  const r=await fetch(path,opts);
+  let body={}; try{body=await r.json();}catch{}
+  if(!r.ok) throw Object.assign(new Error(body.error||body.detail||r.statusText),{status:r.status});
+  return body;
+}
+function form(data){const f=new FormData();for(const[k,v]of Object.entries(data))f.append(k,v);return f;}
+
+/* ---------- modal ---------- */
+function modal(html){$("#modal").innerHTML=html;$("#scrim").classList.remove("hidden");}
+function closeModal(){$("#scrim").classList.add("hidden");}
+$("#scrim").addEventListener("click",e=>{if(e.target.id==="scrim")closeModal();});
+
+/* ---------- boot / auth ---------- */
+async function boot(){
+  try{
+    const w=await api("/api/admin/whoami");
+    $("#who-email").textContent=w.email;
+    $("#who").classList.remove("hidden");
+    $("#gate-login").classList.add("hidden");$("#gate-denied").classList.add("hidden");
+    $("#console").classList.remove("hidden");
+    await loadOrgs();
+  }catch(e){
+    $("#console").classList.add("hidden");$("#who").classList.add("hidden");
+    if(e.status===403){$("#gate-denied").classList.remove("hidden");$("#gate-login").classList.add("hidden");}
+    else{$("#gate-login").classList.remove("hidden");$("#gate-denied").classList.add("hidden");}
+  }
+}
+$("#li-go").addEventListener("click",async()=>{
+  $("#li-err").textContent="";
+  try{
+    await api("/api/login",{method:"POST",body:form({identifier:$("#li-email").value,password:$("#li-pass").value})});
+    await boot();
+  }catch(e){$("#li-err").textContent=e.message;}
+});
+$("#li-pass").addEventListener("keydown",e=>{if(e.key==="Enter")$("#li-go").click();});
+async function signout(){await api("/api/logout",{method:"POST"});location.reload();}
+$("#logout").addEventListener("click",signout);
+$("#denied-out").addEventListener("click",signout);
+
+/* ---------- org list ---------- */
+async function loadOrgs(){
+  $("#view-org").classList.add("hidden");$("#view-orgs").classList.remove("hidden");
+  const [{orgs},{users}]=await Promise.all([api("/api/admin/orgs"),api("/api/admin/users")]);
+  $("#org-count").textContent=orgs.length;
+  const tb=$("#org-table tbody");tb.innerHTML="";
+  $("#org-empty").classList.toggle("hidden",orgs.length>0);
+  for(const o of orgs){
+    const tr=document.createElement("tr");tr.className="click";
+    tr.innerHTML=`<td><strong>${esc(o.name)}</strong></td><td class="mono">${esc(o.slug)}</td>
+      <td><span class="pill ${o.status}">${o.status}</span></td>
+      <td>${o.member_count}</td><td>${o.active_keys}</td><td>${fmtDate(o.created_at)}</td>`;
+    tr.addEventListener("click",()=>openOrg(o.id));
+    tb.appendChild(tr);
+  }
+  $("#user-count").textContent=users.length;
+  const ub=$("#user-table tbody");ub.innerHTML="";
+  for(const u of users){
+    const mem=(u.memberships||[]).map(m=>`${esc(m.org_name||"?")} <span class="pill ${m.role}">${m.role}</span>`).join("&nbsp; ")||"—";
+    ub.insertAdjacentHTML("beforeend",
+      `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${mem}</td><td class="mono">${esc(u.id)}</td></tr>`);
+  }
+}
+$("#new-org").addEventListener("click",()=>{
+  modal(`<h3>New organization</h3>
+    <div><label>Name</label><input id="m-name" placeholder="e.g. Samsyn"></div>
+    <div class="err" id="m-err"></div>
+    <div class="row end"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="m-go">Create</button></div>`);
+  $("#m-go").addEventListener("click",async()=>{
+    try{
+      const r=await api("/api/admin/orgs",{method:"POST",body:form({name:$("#m-name").value})});
+      closeModal();await openOrg(r.org.id);
+    }catch(e){$("#m-err").textContent=e.message;}
+  });
+});
+
+/* ---------- org detail ---------- */
+let CUR=null;
+async function openOrg(id){
+  const d=await api(`/api/admin/orgs/${id}`);CUR=d.org;
+  $("#view-orgs").classList.add("hidden");$("#view-org").classList.remove("hidden");
+  $("#od-name").innerHTML=`${esc(d.org.name)} <span class="pill ${d.org.status}">${d.org.status}</span>`;
+  $("#od-meta").textContent=`slug: ${d.org.slug} · service identity (party_id): ${d.org.service_user}`;
+  $("#od-suspend").classList.toggle("hidden",d.org.status!=="active");
+  $("#od-activate").classList.toggle("hidden",d.org.status!=="suspended");
+
+  $("#mem-count").textContent=d.members.length;
+  $("#mem-empty").classList.toggle("hidden",d.members.length>0);
+  const mb=$("#mem-table tbody");mb.innerHTML="";
+  for(const m of d.members){
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${esc(m.name)}</td><td>${esc(m.email)}</td>
+      <td><span class="pill ${m.role}">${m.role}</span></td><td>${fmtDate(m.created_at)}</td>
+      <td class="row end">
+        <button class="btn ghost sm" data-act="role">${m.role==="member"?"Make org admin":"Make member"}</button>
+        <button class="btn danger sm" data-act="rm">Remove</button></td>`;
+    tr.querySelector('[data-act="role"]').addEventListener("click",async()=>{
+      await api(`/api/admin/orgs/${id}/members/${m.user_id}/role`,{method:"POST",
+        body:form({role:m.role==="member"?"org_admin":"member"})});
+      openOrg(id);
+    });
+    tr.querySelector('[data-act="rm"]').addEventListener("click",async()=>{
+      if(!confirm(`Remove ${m.email} from ${CUR.name}?`))return;
+      await api(`/api/admin/orgs/${id}/members/${m.user_id}/remove`,{method:"POST"});
+      openOrg(id);
+    });
+    mb.appendChild(tr);
+  }
+
+  $("#key-count").textContent=d.keys.length;
+  $("#key-empty").classList.toggle("hidden",d.keys.length>0);
+  const kb=$("#key-table tbody");kb.innerHTML="";
+  for(const k of d.keys){
+    const revoked=!!k.revoked_at;
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${esc(k.name)}</td><td class="mono">${esc(k.prefix)}…</td>
+      <td class="mono">${(k.scopes||[]).join(" ")}</td>
+      <td>${fmtDate(k.created_at)}</td><td>${fmtDate(k.last_used_at)}</td>
+      <td><span class="pill ${revoked?"revoked":"active"}">${revoked?"revoked":"active"}</span></td>
+      <td class="row end">${revoked?"":'<button class="btn danger sm">Revoke</button>'}</td>`;
+    const btn=tr.querySelector("button");
+    if(btn)btn.addEventListener("click",async()=>{
+      if(!confirm(`Revoke key "${k.name}"? Anything using it stops working immediately.`))return;
+      await api(`/api/admin/keys/${k.id}/revoke`,{method:"POST"});openOrg(id);
+    });
+    kb.appendChild(tr);
+  }
+}
+$("#back").addEventListener("click",loadOrgs);
+$("#od-suspend").addEventListener("click",async()=>{
+  if(!confirm(`Suspend ${CUR.name}? All its API keys stop working immediately.`))return;
+  await api(`/api/admin/orgs/${CUR.id}/status`,{method:"POST",body:form({status:"suspended"})});openOrg(CUR.id);
+});
+$("#od-activate").addEventListener("click",async()=>{
+  await api(`/api/admin/orgs/${CUR.id}/status`,{method:"POST",body:form({status:"active"})});openOrg(CUR.id);
+});
+
+$("#add-member").addEventListener("click",()=>{
+  modal(`<h3>Add member to ${esc(CUR.name)}</h3>
+    <div><label>Email</label><input id="m-email" type="email" placeholder="person@company.com"></div>
+    <div><label>Name <span class="note">(required if this is a new account)</span></label>
+      <input id="m-name" placeholder="Full name"></div>
+    <div><label>Role</label><select id="m-role">
+      <option value="member">member</option><option value="org_admin">org_admin</option></select></div>
+    <div class="err" id="m-err"></div>
+    <div class="row end"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="m-go">Add</button></div>`);
+  $("#m-go").addEventListener("click",async()=>{
+    try{
+      const r=await api(`/api/admin/orgs/${CUR.id}/members`,{method:"POST",
+        body:form({email:$("#m-email").value,name:$("#m-name").value,role:$("#m-role").value})});
+      if(r.created){
+        modal(`<h3>Account created</h3>
+          <p class="note">One-time password for <strong>${esc(r.email)}</strong> — copy it now and share privately. It cannot be shown again.</p>
+          <div class="secret">${esc(r.password)}</div>
+          <div class="row end"><button class="btn" id="m-done">Done</button></div>`);
+        $("#m-done").addEventListener("click",()=>{closeModal();openOrg(CUR.id);});
+      }else{closeModal();openOrg(CUR.id);}
+    }catch(e){$("#m-err").textContent=e.message;}
+  });
+});
+
+$("#mint-key").addEventListener("click",()=>{
+  modal(`<h3>Mint API key for ${esc(CUR.name)}</h3>
+    <div><label>Key name</label><input id="m-name" placeholder="e.g. samsyn-production"></div>
+    <div class="err" id="m-err"></div>
+    <div class="row end"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="m-go">Mint</button></div>`);
+  $("#m-go").addEventListener("click",async()=>{
+    try{
+      const r=await api(`/api/admin/orgs/${CUR.id}/keys`,{method:"POST",body:form({name:$("#m-name").value})});
+      modal(`<h3>API key minted</h3>
+        <p class="note">Copy it now — only a hash is stored, so it <strong>cannot be shown again</strong>.</p>
+        <div class="secret">${esc(r.key)}</div>
+        <p class="warn">Treat it like a password. Revoke immediately if it leaks.</p>
+        <div class="row end"><button class="btn" id="m-done">Done</button></div>`);
+      $("#m-done").addEventListener("click",()=>{closeModal();openOrg(CUR.id);});
+    }catch(e){$("#m-err").textContent=e.message;}
+  });
+});
+
+boot();
+</script>
+</body>
+</html>
