@@ -72,7 +72,7 @@
   .brand .word{font-size:1.24rem;font-weight:600;letter-spacing:-0.03em;background:linear-gradient(90deg,var(--violet),var(--word));-webkit-background-clip:text;background-clip:text;color:transparent;}
   .me{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:0.86rem;}
   .avatar{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:0.68rem;font-weight:700;color:#120c26;}
-  .link{color:var(--muted);background:none;border:0;font-size:0.82rem;}
+  .link{color:var(--muted);background:none;border:0;font-size:0.82rem;text-decoration:none;cursor:pointer;}
   .link:hover{color:var(--text);}
 
   .body{display:grid;grid-template-columns:220px 1fr;min-height:0;}
@@ -279,6 +279,7 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
     <div class="brand"><span id="top-mark"></span><span class="word">Xinsere</span></div>
     <div class="me">
       <span class="avatar" id="me-av"></span><span id="me-name"></span>
+      <a class="link hidden" id="admin-link" href="/admin">Admin</a>
       <button class="theme-toggle" title="Switch light/dark mode" aria-label="Switch light/dark mode"></button>
       <button class="link" id="logout">Sign out</button>
     </div>
@@ -464,6 +465,7 @@ async function boot(){
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
   $("#me-av").outerHTML=avatarHtml(ME).replace('class="avatar"','class="avatar" id="me-av"');
   $("#me-name").textContent=ME.name;
+  $("#admin-link").classList.toggle("hidden", !d.admin);
   setView("mine");
 }
 

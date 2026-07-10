@@ -22,7 +22,7 @@ from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
 import supa
-from authn import session as _session, ADMIN_EMAILS
+from authn import session as _session, is_admin, ADMIN_EMAILS
 from chain import CHAIN
 from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
                    read_staged, delete_staged, MAX_INLINE_BYTES)
@@ -216,7 +216,7 @@ async def me(request: Request):
     token, uid = s["access_token"], s["user_id"]
     prof = supa.get_profile(token, uid) or {"id": uid}
     others = [_public(o) for o in supa.list_others(token, uid)]
-    return {"user": _public(prof), "others": others}
+    return {"user": _public(prof), "others": others, "admin": is_admin(prof)}
 
 
 # --- tree -------------------------------------------------------------------
