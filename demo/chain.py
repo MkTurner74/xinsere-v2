@@ -91,8 +91,9 @@ class Chain:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._w3 = None
-        self._contract = None
+        self._contract = None          # the shared/default contract
         self._acct = None
+        self._by_addr: dict[str, object] = {}   # per-tenant contract cache
 
     def _ensure(self):
         if self._contract is not None:
@@ -107,15 +108,32 @@ class Chain:
                 address=Web3.to_checksum_address(CONTRACT), abi=ABI)
             self._w3, self._acct = w3, acct
 
+    def _contract_for(self, address: str | None):
+        """Resolve the contract to act on. None / the shared address -> the default
+        contract; any other address -> a cached per-tenant XinserePermissions
+        instance (same ABI). This is the seam the per-tenant factory writes into —
+        see docs/per-tenant-contracts.md. Backward-compatible: callers that pass
+        nothing keep hitting the shared contract exactly as before."""
+        self._ensure()
+        if not address or address.lower() == CONTRACT.lower():
+            return self._contract
+        from web3 import Web3
+        key = Web3.to_checksum_address(address)
+        c = self._by_addr.get(key)
+        if c is None:
+            c = self._w3.eth.contract(address=key, abi=ABI)
+            self._by_addr[key] = c
+        return c
+
     @property
     def wallet(self) -> str:
         self._ensure()
         return self._acct.address
 
-    def verify(self, file_id: str, grantee_id: str) -> tuple[bool, int]:
-        """Read the contract: does grantee currently have permission to file?"""
-        self._ensure()
-        has, granted_at = self._contract.functions.verify(
+    def verify(self, file_id: str, grantee_id: str, contract_address: str | None = None) -> tuple[bool, int]:
+        """Read the contract: does grantee currently have permission to file?
+        contract_address selects a per-tenant contract (None = shared)."""
+        has, granted_at = self._contract_for(contract_address).functions.verify(
             file_hash(file_id), grantee_hash(grantee_id)).call()
         return bool(has), int(granted_at)
 
@@ -169,14 +187,15 @@ class Chain:
             raise RuntimeError(f"transaction reverted on-chain: {h}")
         return h
 
-    def grant(self, file_id: str, grantee_id: str, ptype: str = "read") -> str:
+    def grant(self, file_id: str, grantee_id: str, ptype: str = "read",
+              contract_address: str | None = None) -> str:
         """Write an on-chain grant. Returns the real transaction hash.
-        (Contract overwrites an existing record — re-granting is safe.)"""
-        self._ensure()
-        return self._send(self._contract.functions.grantPermission(
+        (Contract overwrites an existing record — re-granting is safe.)
+        contract_address selects a per-tenant contract (None = shared)."""
+        return self._send(self._contract_for(contract_address).functions.grantPermission(
             file_hash(file_id), grantee_hash(grantee_id), ptype, 0))
 
-    def revoke(self, file_id: str, grantee_id: str) -> str | None:
+    def revoke(self, file_id: str, grantee_id: str, contract_address: str | None = None) -> str | None:
         """Write an on-chain revocation. Returns the transaction hash, or None
         if there was no active grant to revoke (no-op).
 
@@ -184,11 +203,10 @@ class Chain:
         inactive/absent grant ("Permission not found or already revoked") — a
         blind revoke would burn gas on a predictable revert, and a retry after a
         partial folder revocation would brick on the already-revoked files."""
-        self._ensure()
-        has, _ = self.verify(file_id, grantee_id)
+        has, _ = self.verify(file_id, grantee_id, contract_address)
         if not has:
             return None
-        return self._send(self._contract.functions.revokePermission(
+        return self._send(self._contract_for(contract_address).functions.revokePermission(
             file_hash(file_id), grantee_hash(grantee_id)))
 
 

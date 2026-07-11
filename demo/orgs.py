@@ -17,6 +17,7 @@ chain machinery the interactive app uses — no parallel ownership model.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import secrets
 from datetime import datetime, timezone
@@ -25,6 +26,12 @@ import supa
 
 SERVICE_DOMAIN = "service.xinsere.io"   # service identities: svc-<slug>@<domain>
 KEY_PREFIX = "xin_"
+
+# Per-tenant contract factory (security audit finding 14; docs/per-tenant-contracts.md).
+# OFF by default: contract_for_owner() returns None with no DB hit, so every
+# grant/verify/revoke keeps hitting the shared contract exactly as today. Turn on
+# only after deploying per-org contracts and backfilling organizations.contract_address.
+PER_TENANT_CONTRACTS = os.environ.get("XINSERE_PER_TENANT_CONTRACTS", "").lower() == "true"
 
 DEFAULT_SCOPES = ["files:read", "files:write", "grants:manage", "verify:read"]
 
@@ -80,6 +87,32 @@ def create_org(name: str, created_by: str | None) -> dict:
                       json_body={"name": name, "slug": slug,
                                  "service_user": service_user, "created_by": created_by})
     return rows[0]
+
+
+def org_by_service_user(service_user: str) -> dict | None:
+    rows = supa._rest("GET", "/organizations", _svc(),
+                      params={"service_user": f"eq.{service_user}", "select": "*", "limit": 1})
+    return rows[0] if rows else None
+
+
+def set_org_contract(org_id: str, contract_address: str) -> dict:
+    """Record the per-tenant XinserePermissions address for an org (deploy script)."""
+    rows = supa._rest("PATCH", "/organizations", _svc(), params={"id": f"eq.{org_id}"},
+                      prefer="return=representation",
+                      json_body={"contract_address": contract_address})
+    return rows[0] if rows else {}
+
+
+def contract_for_owner(owner: str | None) -> str | None:
+    """The per-tenant contract address to act on for a file OWNED by `owner`, or
+    None to use the shared contract. The rule everywhere is 'operate on the file
+    OWNER's contract' — so a grantee verifying/downloading resolves the owner's
+    contract, not their own. OFF unless XINSERE_PER_TENANT_CONTRACTS=true, and NULL
+    for any org not yet migrated, so behaviour is unchanged until explicitly enabled."""
+    if not PER_TENANT_CONTRACTS or not owner:
+        return None
+    org = org_by_service_user(owner)
+    return (org or {}).get("contract_address") or None
 
 
 def set_org_status(org_id: str, status: str) -> dict:
