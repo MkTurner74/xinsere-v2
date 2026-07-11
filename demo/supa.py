@@ -163,6 +163,17 @@ def get_node(token: str, node_id: str) -> dict | None:
     return _node(rows[0]) if rows else None
 
 
+def get_owned_node(token: str, node_id: str, owner: str) -> dict | None:
+    """Fetch a node ONLY if it belongs to `owner`. The owner filter is applied at
+    the database (PostgREST) layer, so on the service-role plane — where RLS is
+    bypassed — this is a hard backstop: a /v1 code path that forgets its Python
+    owner check still cannot receive a foreign org's row. (Security audit finding 6.)"""
+    rows = _rest("GET", "/nodes", token,
+                 params={"id": f"eq.{node_id}", "owner": f"eq.{owner}",
+                         "select": "*", "limit": 1})
+    return _node(rows[0]) if rows else None
+
+
 def children(token: str, parent_id: str) -> list[dict]:
     # Hide trashed items from normal navigation (deleted_at IS NULL).
     rows = _rest("GET", "/nodes", token,

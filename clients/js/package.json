@@ -1,0 +1,27 @@
+{
+  "name": "xinsere-client",
+  "version": "0.1.0",
+  "description": "Official TypeScript/JavaScript client for the Xinsere v1 API — secure fragmented storage with on-chain permissions. Server-to-server, framework-free, with resilient client-side reassembly.",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["xinsere", "encryption", "storage", "blockchain", "permissions", "dpd", "security", "mcp"],
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

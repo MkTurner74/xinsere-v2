@@ -12,6 +12,8 @@ endpoints and the admin console are internal and never documented.
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
@@ -20,6 +22,15 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import authn
 
 router = APIRouter(include_in_schema=False)
+
+
+def _public_docs() -> bool:
+    """When XINSERE_PUBLIC_DOCS=true, the hand-written getting-started GUIDE is
+    readable without sign-in (the standard 'public reference docs, gated try-it/
+    keys' split — integrator feedback #6). Interactive Swagger and the raw
+    openapi.json stay gated regardless. Default off preserves the current
+    invite-only posture until Mark flips it on."""
+    return os.environ.get("XINSERE_PUBLIC_DOCS", "").lower() == "true"
 
 _DESCRIPTION = """
 Server-to-server API for securing assets with Xinsere Distributed Permissioned Data (DPD).
@@ -105,8 +116,10 @@ on-chain grants. Check your key and discover your <code>party_id</code>:</p>
 <p>The response includes the file <code>id</code> (use it in every later call) and the
 <code>sha256</code> of your original bytes. The file is now fragmented, encrypted and
 scattered — no complete copy exists anywhere, and Xinsere itself cannot read it.</p>
-<div class="note">Files over ~4&nbsp;MB: call <code>POST /v1/uploads</code> for a presigned
-URL, PUT the raw bytes there, then <code>POST /v1/files/finalize</code>.</div>
+<div class="note">The inline cap is advertised as <code>max_inline_bytes</code> in
+<code>GET /v1/ping</code> — read it rather than hardcoding. Larger files: call
+<code>POST /v1/uploads</code> for a presigned URL, PUT the raw bytes there, then
+<code>POST /v1/files/finalize</code>.</div>
 
 <h2>3 &middot; Retrieve</h2>
 <p>Two paths:</p>
@@ -142,6 +155,28 @@ current shares with their transaction hashes.</p>
 days). Add <code>?permanent=true</code> for immediate cryptographic erasure — fragments
 and keys destroyed, outstanding grants revoked on-chain.</p>
 
+<h2>7 &middot; Operability</h2>
+<p>Two helper endpoints keep integrations honest:</p>
+<table>
+<tr><th>Endpoint</th><th>Use</th></tr>
+<tr><td><code>GET /v1/chain/status</code></td><td>Signer wallet + gas health (spends no
+gas). Check <code>wallet_ok</code> / <code>est_grants_remaining</code> <em>before</em> a
+grant so it never dies mid-demo for lack of gas.</td></tr>
+<tr><td><code>GET /v1/parties?slug=</code></td><td>Resolve another organization's
+<code>party_id</code> from its slug, so machine-to-machine grants need no human to copy a
+uuid. Returns <code>{slug, name, party_id}</code> for active orgs.</td></tr>
+</table>
+
+<h2>Errors</h2>
+<p>Every error — including <code>422</code> validation errors — returns a single shape:</p>
+<pre><code>{ "error": "human-readable message [error_code]" }</code></pre>
+<p>Validation errors add an <code>errors</code> array with the field-level detail. Codes you
+may want to branch on: <code>chain_grant_failed</code>, <code>chain_revoke_failed</code>,
+<code>chain_status_unavailable</code>. The HTTP status still carries the primary signal
+(<code>401</code> bad key, <code>403</code> missing scope, <code>404</code> not found /
+hidden, <code>413</code> too large, <code>422</code> bad input, <code>502</code> chain
+write failed, <code>503</code> backend unavailable — retry).</p>
+
 <h2>Scopes</h2>
 <table>
 <tr><th>Scope</th><th>Endpoints</th></tr>
@@ -155,6 +190,9 @@ and keys destroyed, outstanding grants revoked on-chain.</p>
 
 
 @router.get("/docs/guide")
-def guide(request: Request, s: dict = Depends(authn.require_signed_in)):
+def guide(request: Request):
+    # Public when XINSERE_PUBLIC_DOCS=true; otherwise sign-in gated like the rest.
+    if not _public_docs():
+        authn.require_signed_in(request)  # raises 401 if not signed in
     base = str(request.base_url).rstrip("/")
     return HTMLResponse(_GUIDE.replace("https://BASE_URL", base))

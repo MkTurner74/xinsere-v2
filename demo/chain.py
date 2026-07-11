@@ -25,7 +25,7 @@ import threading
 RPC_URL = os.environ.get("XINSERE_RPC_URL", "https://rpc-amoy.polygon.technology")
 CHAIN_ID = int(os.environ.get("XINSERE_CHAIN_ID", "80002"))
 CONTRACT = os.environ.get("XINSERE_CONTRACT_ADDRESS", "0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD")
-SECRET_ID = os.environ.get("XINSERE_SECRET_ID", "xinsere/blockchain/polygon-mumbai/private-key")
+SECRET_ID = os.environ.get("XINSERE_SECRET_ID", "xinsere/blockchain/polygon-amoy/private-key")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 # Amoy priority-fee floor is ~25 gwei. A grant uses ~113k gas, so 200k is safe
 # headroom. Lower defaults shrink the reserve check (gas_limit x maxFee) so a
@@ -118,6 +118,33 @@ class Chain:
         has, granted_at = self._contract.functions.verify(
             file_hash(file_id), grantee_hash(grantee_id)).call()
         return bool(has), int(granted_at)
+
+    def status(self) -> dict:
+        """Read-only wallet + gas health for capacity pre-flight — spends NO gas.
+        Lets an integrator's UI warn *before* a grant dies on-stage for lack of
+        dust (integrator feedback #2). Reports the signer address, POL balance,
+        current network gas price, the per-grant cost ceiling the signer reserves
+        (gas_limit x maxFee), and a conservative count of grants still affordable."""
+        self._ensure()
+        w3 = self._w3
+        balance_wei = w3.eth.get_balance(self._acct.address)
+        try:
+            gas_price_wei = w3.eth.gas_price
+        except Exception:
+            gas_price_wei = w3.to_wei(MAXFEE_GWEI, "gwei")
+        # Cost ceiling per write matches the reserve the signer commits to.
+        per_tx_wei = GAS_LIMIT * w3.to_wei(MAXFEE_GWEI, "gwei")
+        est = int(balance_wei // per_tx_wei) if per_tx_wei else 0
+        return {
+            "wallet": self._acct.address,
+            "balance_pol": round(float(w3.from_wei(balance_wei, "ether")), 6),
+            "gas_price_gwei": round(float(w3.from_wei(gas_price_wei, "gwei")), 2),
+            "max_fee_gwei": MAXFEE_GWEI,
+            "gas_limit": GAS_LIMIT,
+            "per_grant_pol": round(float(w3.from_wei(per_tx_wei, "ether")), 6),
+            "est_grants_remaining": est,
+            "wallet_ok": est >= 1,
+        }
 
     def _send(self, fn) -> str:
         """Sign, send, and await a contract write. Returns the transaction hash."""

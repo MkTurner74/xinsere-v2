@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, UploadFile, File, Form
@@ -24,9 +25,10 @@ import orgs
 import supa
 from chain import CHAIN
 from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
-                   read_staged, delete_staged, MAX_INLINE_BYTES)
+                   read_staged, delete_staged, MAX_INLINE_BYTES, MAX_STAGED_BYTES)
 
 router = APIRouter(prefix="/v1", tags=["v1"])
+_log = logging.getLogger("xinsere.v1")
 
 
 # --- auth ---------------------------------------------------------------------
@@ -54,9 +56,11 @@ def _svc() -> str:
 
 
 def _own_node(ctx: dict, node_id: str) -> dict:
-    """The node, if it exists and is owned by the caller's service identity."""
-    node = supa.get_node(_svc(), node_id)
-    if not node or node["owner"] != ctx["service_user"]:
+    """The node, if it exists and is owned by the caller's service identity.
+    Uses a DB-level owner filter (get_owned_node) as a hard backstop on the
+    RLS-bypassed service-role plane — see security audit finding 6."""
+    node = supa.get_owned_node(_svc(), node_id, ctx["service_user"])
+    if not node:
         raise HTTPException(status_code=404, detail="File not found")
     return node
 
@@ -118,9 +122,41 @@ class UploadTicket(BaseModel):
 
 @router.get("/ping", summary="Check your API key")
 def ping(ctx: dict = Depends(api_key_auth)):
-    """Returns the organization context your key resolves to."""
+    """Returns the organization context your key resolves to, plus the effective
+    inline-upload cap so clients switch to staged uploads without guessing
+    (integrator feedback #1). Bodies larger than `max_inline_bytes` must use the
+    two-step staged upload (POST /v1/uploads then POST /v1/files/finalize)."""
     return {"ok": True, "organization": ctx["org_name"], "slug": ctx["org_slug"],
-            "party_id": ctx["service_user"], "scopes": ctx["scopes"]}
+            "party_id": ctx["service_user"], "scopes": ctx["scopes"],
+            "max_inline_bytes": MAX_INLINE_BYTES, "max_staged_bytes": MAX_STAGED_BYTES}
+
+
+@router.get("/parties", summary="Resolve a counterparty org's party_id by slug")
+def resolve_party(ctx: dict = Depends(api_key_auth),
+                  slug: str = Query(..., description="The other organization's slug, e.g. 'samsyn'")):
+    """Machine-to-machine discovery: turn a known organization slug into the
+    party_id you grant to — so workflow-bound grants need no human to read a uuid
+    out of the console (integrator feedback #3). Returns only {slug, name,
+    party_id} for ACTIVE orgs; 404 otherwise. Requires the grants:manage scope."""
+    need(ctx, "grants:manage")
+    party = orgs.resolve_party_by_slug(slug)
+    if not party:
+        raise HTTPException(status_code=404, detail="No active organization with that slug")
+    return party
+
+
+@router.get("/chain/status", summary="Wallet + gas capacity (pre-flight for grants)")
+def chain_status(ctx: dict = Depends(api_key_auth)):
+    """Read-only signer health — spends NO gas. Warn *before* a grant dies for lack
+    of dust (integrator feedback #2): `wallet_ok` false or a low
+    `est_grants_remaining` means top up before the next grant/revoke. All fields
+    are public on-chain data (the signer address already appears in every grant tx)."""
+    try:
+        return {"ok": True, **CHAIN.status()}
+    except Exception as exc:
+        _log.warning("chain status unavailable: %s", exc)
+        raise HTTPException(status_code=503,
+                            detail="Chain status unavailable [chain_status_unavailable] — retry")
 
 
 @router.get("/files", response_model=list[FileRecord], summary="List stored files")
@@ -136,18 +172,20 @@ def list_files(ctx: dict = Depends(api_key_auth),
     return [_file_view(n) for n in nodes if n["owner"] == ctx["service_user"]]
 
 
-@router.post("/files", response_model=FileRecord, summary="Store a file (inline, ≤ ~4 MB)")
+@router.post("/files", response_model=FileRecord, summary="Store a file (inline body)")
 async def store_file(ctx: dict = Depends(api_key_auth),
                      file: UploadFile = File(..., description="The bytes to secure"),
                      path: str = Form("", description="Optional folder path, e.g. 'productions/rai'")):
     """Fragments, encrypts (AES-256-GCM, per-fragment KMS-wrapped keys) and
-    scatters the file. For larger files use the two-step staged upload
-    (`POST /v1/uploads` then `POST /v1/files/finalize`)."""
+    scatters the file. This inline path reads the whole body into memory, so it is
+    capped at `max_inline_bytes` (see GET /v1/ping). For larger files use the
+    two-step staged upload (`POST /v1/uploads` then `POST /v1/files/finalize`)."""
     need(ctx, "files:write")
     content = await file.read()
     if len(content) > MAX_INLINE_BYTES:
         raise HTTPException(status_code=413,
-                            detail=f"Inline limit is {MAX_INLINE_BYTES} bytes — use POST /v1/uploads")
+                            detail=f"Inline body limit is {MAX_INLINE_BYTES} bytes "
+                                   f"(see max_inline_bytes in /v1/ping) — use POST /v1/uploads")
     uid = ctx["service_user"]
     root = supa.ensure_root(_svc(), uid)
     target = supa.ensure_path(_svc(), path, root, uid) if path else root
@@ -166,7 +204,7 @@ def start_upload(ctx: dict = Depends(api_key_auth)):
     `POST /v1/files/finalize` with the returned key."""
     need(ctx, "files:write")
     key, url = presign_put(ctx["service_user"])
-    return {"key": key, "url": url, "method": "PUT", "max_bytes": MAX_INLINE_BYTES}
+    return {"key": key, "url": url, "method": "PUT", "max_bytes": MAX_STAGED_BYTES}
 
 
 @router.post("/files/finalize", response_model=FileRecord, summary="Finalize a staged upload")
@@ -181,9 +219,10 @@ def finalize_upload(ctx: dict = Depends(api_key_auth),
         size = staged_size(key)
     except Exception:
         raise HTTPException(status_code=404, detail="Staged file not found — the upload may have failed")
-    if size > MAX_INLINE_BYTES:
+    if size > MAX_STAGED_BYTES:
         delete_staged(key)
-        raise HTTPException(status_code=413, detail=f"File too large ({size} bytes)")
+        raise HTTPException(status_code=413,
+                            detail=f"File too large ({size} bytes); staged limit is {MAX_STAGED_BYTES}")
     root = supa.ensure_root(_svc(), uid)
     target = supa.ensure_path(_svc(), path, root, uid) if path else root
     content = read_staged(key)
@@ -271,7 +310,11 @@ def grant(node_id: str, ctx: dict = Depends(api_key_auth),
     try:
         tx = CHAIN.grant(node["file_id"], party_id, "read")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"On-chain grant failed: {exc}")
+        # Log the real cause server-side; return a stable, non-leaky message.
+        _log.warning("chain grant failed node=%s grantee=%s: %s", node_id, party_id, exc)
+        raise HTTPException(status_code=502,
+                            detail="On-chain grant failed [chain_grant_failed] — retry; "
+                                   "check GET /v1/chain/status for wallet capacity")
     supa.insert_share(_svc(), node_id, party_id, tx)
     return {"ok": True, "party_id": party_id, "tx": tx}
 
@@ -285,7 +328,9 @@ def revoke(node_id: str, party_id: str, ctx: dict = Depends(api_key_auth)):
     try:
         tx = CHAIN.revoke(node["file_id"], party_id)  # None = nothing active
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"On-chain revoke failed: {exc} — retry")
+        _log.warning("chain revoke failed node=%s grantee=%s: %s", node_id, party_id, exc)
+        raise HTTPException(status_code=502,
+                            detail="On-chain revoke failed [chain_revoke_failed] — retry")
     supa.delete_share(_svc(), node_id, party_id)
     return {"ok": True, "party_id": party_id, "tx": tx, "was_active": tx is not None}
 

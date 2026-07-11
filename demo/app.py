@@ -17,23 +17,27 @@ import os
 from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
+import config
 import supa
 from authn import session as _session, is_admin, ADMIN_EMAILS
 from chain import CHAIN
 from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
-                   read_staged, delete_staged, MAX_INLINE_BYTES)
+                   read_staged, delete_staged, MAX_INLINE_BYTES, MAX_STAGED_BYTES)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-SESSION_SECRET = os.environ.get("XINSERE_SESSION_SECRET", "xinsere-demo-dev-secret")
+# Fail-closed: refuse to boot in production with a default session secret or a
+# default/absent HMAC tenant salt (security audit findings 1 & 2). No-op in dev.
+config.validate_production_config()
 # Public docs are OFF — the gated docs site (docs_site.py) re-exposes /docs,
 # /docs/guide and /openapi.json to signed-in users only.
 app = FastAPI(title="Xinsere", docs_url=None, redoc_url=None, openapi_url=None)
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=60 * 60 * 8,
-                   https_only=os.environ.get("XINSERE_HTTPS_ONLY", "").lower() == "true")
+app.add_middleware(SessionMiddleware, secret_key=config.session_secret(),
+                   max_age=60 * 60 * 8, same_site="lax", https_only=config.https_only())
 
 _GRADS = [
     ("#8A6BFF", "#5B3DF5"), ("#4FE3C1", "#2E9E8A"), ("#FF8B7A", "#B4503F"),
@@ -327,10 +331,10 @@ async def finalize_upload(request: Request, key: str = Form(...), name: str = Fo
         size = staged_size(key)
     except Exception:
         raise HTTPException(status_code=404, detail="Staged file not found — the upload may have failed")
-    if size > MAX_INLINE_BYTES:
+    if size > MAX_STAGED_BYTES:
         delete_staged(key)
         raise HTTPException(status_code=413,
-                            detail=f"File too large to process here ({size} bytes); limit is {MAX_INLINE_BYTES}")
+                            detail=f"File too large to process here ({size} bytes); limit is {MAX_STAGED_BYTES}")
     rel = (path or name).replace("\\", "/")
     subdir = os.path.dirname(rel)
     fname = os.path.basename(rel) or name
@@ -581,7 +585,11 @@ async def share(request: Request, node_id: str = Form(...), grantee: str = Form(
         for f in files:
             last_tx = CHAIN.grant(f["file_id"], grantee, "read")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"On-chain grant failed: {exc}")
+        import logging
+        logging.getLogger("xinsere.app").warning(
+            "share on-chain grant failed node=%s grantee=%s: %s", node_id, grantee, exc)
+        raise HTTPException(status_code=502,
+                            detail="On-chain grant failed [chain_grant_failed] — retry")
 
     rec = supa.insert_share(token, node_id, grantee, last_tx)
     pmap = _profiles_map(token)
@@ -713,11 +721,29 @@ async def http_exc(_request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exc(_request: Request, exc: RequestValidationError):
+    """Unify the error contract: FastAPI's default 422 body is {detail:[…]}, which
+    breaks clients that expect our {error} shape everywhere else (audit finding 5 /
+    integrator feedback #4). Return a single readable message + the structured list."""
+    errs = exc.errors()
+    first = errs[0] if errs else {}
+    loc = ".".join(str(p) for p in first.get("loc", []) if p not in ("body", "query"))
+    msg = f"{loc}: {first.get('msg')}" if loc else (first.get("msg") or "Invalid request")
+    return JSONResponse(status_code=422, content={"error": msg, "errors": errs})
+
+
 @app.exception_handler(Exception)
 async def all_exc(_request: Request, exc: Exception):
-    # TEMP debug: surface the real error to diagnose the deployed runtime. Revert.
+    # Always log the real error server-side.
+    import logging
     import traceback
-    if os.environ.get("XINSERE_DEBUG_ERRORS") == "1":
+    logging.getLogger("xinsere.app").error("unhandled: %s", traceback.format_exc()[-2000:])
+    # Debug traces are a diagnostic aid only — never leak them from production
+    # unless explicitly forced (audit finding 4).
+    debug = os.environ.get("XINSERE_DEBUG_ERRORS") == "1" and (
+        not config.is_production() or os.environ.get("XINSERE_DEBUG_ERRORS_FORCE") == "1")
+    if debug:
         return JSONResponse(status_code=500, content={
             "error": str(exc), "type": type(exc).__name__,
             "trace": traceback.format_exc()[-1800:]})

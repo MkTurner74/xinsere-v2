@@ -24,8 +24,16 @@ from xinsere_pipeline.factory import build_pipeline_from_env  # noqa: E402
 # step pulls it here, runs it through the pipeline (fragment/encrypt/scatter), and
 # deletes the staging copy. Only the tiny presign/finalize calls hit the function.
 STAGING_BUCKET = os.environ.get("XINSERE_STAGING_BUCKET", "xinsere-dev-staging")
-# Cap on what the (memory-bound) serverless function will process from staging.
-MAX_INLINE_BYTES = int(os.environ.get("XINSERE_MAX_INLINE_BYTES", str(500 * 1024 * 1024)))
+# Two distinct caps, deliberately different (security audit 2026-07-10, finding 3):
+#   MAX_INLINE_BYTES  — the DIRECT-body path (POST /v1/files, /api/upload). The bytes
+#     are read whole into the function's memory, so this must stay small (a 500 MB
+#     inline body OOMs a 1 GB function). ~8 MB comfortably clears the serverless body
+#     limit while forcing anything larger onto the staged path. Advertised to clients
+#     in /v1/ping and the 413 body so they don't have to guess.
+#   MAX_STAGED_BYTES  — the FINALIZE path (client PUT straight to S3, we then pull and
+#     fragment). Bounded by what the memory-bound function can process from staging.
+MAX_INLINE_BYTES = int(os.environ.get("XINSERE_MAX_INLINE_BYTES", str(8 * 1024 * 1024)))
+MAX_STAGED_BYTES = int(os.environ.get("XINSERE_MAX_STAGED_BYTES", str(500 * 1024 * 1024)))
 
 
 def _s3():

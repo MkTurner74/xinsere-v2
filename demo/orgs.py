@@ -122,6 +122,24 @@ def remove_member(org_id: str, user_id: str) -> None:
                params={"org_id": f"eq.{org_id}", "user_id": f"eq.{user_id}"})
 
 
+def resolve_party_by_slug(slug: str) -> dict | None:
+    """Resolve a counterparty organization's on-chain party_id from its slug — the
+    minimum machine-to-machine discovery an integrator needs to grant to another
+    org without a human reading a uuid out of the admin console (integrator
+    feedback #3). Opt-in and minimal by design: active orgs only, exact-slug match,
+    and only {slug, name, party_id} is returned — never members, keys or status."""
+    slug = (slug or "").strip().lower()
+    if not slug:
+        return None
+    rows = supa._rest("GET", "/organizations", _svc(),
+                      params={"slug": f"eq.{slug}", "status": "eq.active",
+                              "select": "slug,name,service_user", "limit": 1})
+    if not rows or not rows[0].get("service_user"):
+        return None
+    o = rows[0]
+    return {"slug": o["slug"], "name": o["name"], "party_id": o["service_user"]}
+
+
 def get_profile_by_email(email: str) -> dict | None:
     rows = supa._rest("GET", "/profiles", _svc(),
                       params={"email": f"eq.{email.strip().lower()}",
