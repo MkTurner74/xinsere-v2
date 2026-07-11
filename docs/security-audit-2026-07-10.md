@@ -37,6 +37,7 @@ mutate, grant, or infer the existence of org B's assets?**
 | 11 | LOW | Hygiene | Generated one-time passwords returned in JSON bodies | Documented |
 | 12 | LOW | Hygiene | `XINSERE_SECRET_ID` default names decommissioned `polygon-mumbai` path | **Fixed** (renamed default) |
 | 13 | INFO | Contract | `checkFileExists()` is a hardcoded `true` placeholder | Noted (unused by app) |
+| 14 | MED | Privacy | On-chain metadata exposure — shared contract + single signer co-mingle every tenant's activity on one public page | **Documented** (tiered mitigation; per-tenant contract factory building) |
 
 No **critical** finding survived review: every `/v1` endpoint was confirmed to
 enforce an owner-or-on-chain-grant check before returning or mutating a node
@@ -164,6 +165,36 @@ GET.
 `…/polygon-amoy/private-key` (cosmetic; production overrides it via env).
 
 ---
+
+### 14 — On-chain metadata exposure (MED, privacy) — Documented
+Surfaced while testing the Samsyn integration: clicking the contract on PolygonScan
+shows **every tenant's** grant/revoke activity on one page. This is inherent to a
+public chain, not a leak of the protected secrets — the event payloads are
+`SHA-256(opaque file_id)` and `HMAC-SHA256(party_id, secret salt)`, both non-reversible
+(high-entropy inputs; secret salt now enforced, findings 2), and no filename, content,
+or identity is derivable. **Confirmed:** with the salt secret, an observer who knows a
+party's `party_id` (returned by `/ping`) still cannot compute its `granteeHash`, so it
+cannot find that party's footprint.
+
+What *does* leak is **pseudonymous metadata**: total volume and timing of grants/
+revokes, an equality-clustering relationship graph (deterministic hashes reveal "this
+file → N parties", "this party → M files"), a single shared signer address on all of it,
+and `permissionType` in cleartext. No names while the salt is secret, but the structure
+is public and tenants' aggregate activity co-mingles.
+
+**Mitigation ladder (rising sensitivity):** per-tenant contract (no shared page) →
+per-tenant salt (no cross-tenant linkage) → mainnet (durable trail) → batching/time-shift
+→ permissioned chain (no public visibility) → public-anchor-only (verifiability without
+exposure). **GDPR:** reconciles cleanly because no personal data is on chain — only
+hashes; deleting the off-chain mapping anonymizes the record.
+
+**Remediation in progress:** the SaaS tier moves to a **per-tenant contract via a
+factory** so each org is on its own contract address (structural isolation), plus a
+**per-tenant HMAC salt**; the enterprise tier uses **BYO permissioned chain + public
+anchoring**. Full architecture + phased rollout: `docs/blockchain-tenancy-architecture.md`
+(and the Docs-repo memo `projects/Xinsere/blockchain-tenancy-architecture-2026-07-11.md`).
+UI: the Samsyn "smart contract ↗" link now opens the contract **Code** tab, not the
+all-transactions list; per-share proof is the per-grant `/tx/<hash>` link.
 
 ## Gate decision
 

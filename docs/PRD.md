@@ -661,6 +661,78 @@ Postgres was considered and rejected — "blockchain-immutable permission trail"
 
 ---
 
+## Multi-tenant blockchain architecture — SaaS tier vs Enterprise tier (decided 2026-07-11)
+
+*Full analysis + sources: `docs/blockchain-tenancy-architecture.md` (and the Docs-repo
+memo `projects/Xinsere/blockchain-tenancy-architecture-2026-07-11.md`). This section is
+the canonical decision; it refines the phase table above along three axes — wallet/keys,
+gas, and on-chain tenant isolation.*
+
+**Why this exists.** The v1 machine API ships with the weakest isolation pattern: a
+single platform signer writes every customer's grants/revokes to **one shared public
+contract**, so all tenants' activity (volume, timing, pseudonymous relationship graph)
+co-mingles on one PolygonScan page, and one key compromise is a whole-platform event.
+Payloads are hashed (no identity/content leaks), but the *metadata* exposure is real —
+see security audit finding 14.
+
+### Build order: SaaS-first, then "back out" the SaaS specifics for Enterprise
+
+**We are building the SaaS tier now.** The enterprise tier is a *later* deliverable
+(likely alongside the **AWS Marketplace** listing, PRD Phase 6). Critically, the two tiers
+are not additive — several SaaS design choices are **things enterprise customers will
+require us to remove**. So the SaaS build must keep those choices behind seams we can
+unplug, not bake them in. The enterprise version is largely the SaaS version with the
+platform-convenience layers *backed out* and replaced by customer-controlled equivalents:
+
+| SaaS choice (build now) | What Enterprise "backs out" to |
+|---|---|
+| Platform-held signer keys (custodial) | **BYO keys** — customer HSM/KMS/MPC (AWS KMS, Fireblocks, Turnkey); we never hold the key |
+| Platform-sponsored gas (we pay, bundled) | **BYO gas** — customer funds and pays |
+| Public Polygon chain | **BYO permissioned chain** (Hyperledger Fabric / Besu) + public Merkle-root anchoring for verifiability without exposure |
+| Platform-managed RPC | Customer-hosted nodes / enterprise RPC endpoints |
+| Our tenant identity + salt | Customer-owned identity domain |
+
+**Engineering implication (do this in the SaaS build):** put the signer, the gas payer,
+the chain/RPC target, and the contract resolution behind **interfaces** (a
+`ChainConnector` / `Signer` / `GasPolicy` seam), so enterprise = swap the implementation,
+not a rewrite. Anything that assumes "one platform wallet on public Polygon" hardcoded is
+technical debt against the enterprise tier and the Marketplace listing.
+
+### SaaS tier (building now)
+- **Per-tenant contract via a factory** — each org gets its own contract instance/address
+  (structural isolation; no shared page). *First concrete step; see below.*
+- **Per-tenant HMAC salt** — makes cross-tenant equality-linkage cryptographically
+  impossible (extends the single secret salt already enforced).
+- **Platform-sponsored gas** — customers never touch crypto; a grant on Polygon mainnet is
+  a fraction of a cent, so we absorb it and bundle into subscription. (v2 UX upgrade:
+  ERC-4337 paymaster + per-tenant smart accounts → per-tenant *sender* identity while we
+  still pay gas.)
+- **Production on Polygon PoS mainnet** — Amoy testnet is demo-only (resets, no durable
+  audit trail).
+
+### Enterprise tier (later — Phase 6 / AWS Marketplace)
+- **BYO keys / BYO gas / BYO chain** per the back-out table above.
+- **Public anchoring**: periodic Merkle-root checkpoint of the private ledger to public
+  Polygon — tamper-evident and independently verifiable without exposing any grant. (The
+  KSI / notarization pattern; matches the "public audit tier" row of the phase table.)
+- **Self-hosted** = Deployment Mode 5.
+
+### Metadata-privacy mitigation ladder (rising sensitivity)
+per-tenant contract → per-tenant salt → mainnet → batching/time-shift → permissioned chain
+→ public-anchor-only. **GDPR/right-to-erasure** reconciles because no personal data is on
+chain (hashes only); deleting the off-chain mapping anonymizes the record — a sellable
+enterprise-procurement line.
+
+### Immediate step (in progress): per-tenant contract factory
+A `XinsereFactory` deploys a per-org `XinserePermissions` instance; the org's contract
+address is stored on the `organizations` row and the chain layer targets it per-org, with
+a **fallback to the shared contract** when no per-org address is set (so existing orgs are
+unaffected until migrated). Backward-compatible and dormant until contracts are deployed +
+addresses backfilled. Deployment (needs the funded signer + is irreversible on-chain) is a
+gated, scripted step, not part of the security-audit prod merge.
+
+---
+
 ## API surface
 
 ```
