@@ -14,15 +14,15 @@
 
 create table if not exists public.api_key_usage (
     key_id     uuid   not null references public.api_keys(id) on delete cascade,
-    window     text   not null check (window in ('minute','day')),
+    win        text   not null check (win in ('minute','day')),  -- 'window' is a reserved word
     bucket     text   not null,                 -- 'YYYY-MM-DD HH:MM' (minute) or 'YYYY-MM-DD' (day)
     requests   bigint not null default 0,
     bytes      bigint not null default 0,
     files      bigint not null default 0,
     updated_at timestamptz not null default now(),
-    primary key (key_id, window, bucket)
+    primary key (key_id, win, bucket)
 );
-create index if not exists api_key_usage_bucket_idx on public.api_key_usage(window, bucket);
+create index if not exists api_key_usage_bucket_idx on public.api_key_usage(win, bucket);
 
 alter table public.api_key_usage enable row level security;
 -- deny-by-default: no policies (service-role only, like api_keys).
@@ -41,9 +41,9 @@ language plpgsql
 as $$
 begin
     return query
-    insert into public.api_key_usage as u (key_id, window, bucket, requests, bytes, files, updated_at)
+    insert into public.api_key_usage as u (key_id, win, bucket, requests, bytes, files, updated_at)
     values (p_key_id, p_window, p_bucket, p_requests, p_bytes, p_files, now())
-    on conflict (key_id, window, bucket) do update
+    on conflict (key_id, win, bucket) do update
         set requests = u.requests + excluded.requests,
             bytes    = u.bytes    + excluded.bytes,
             files    = u.files    + excluded.files,
