@@ -270,7 +270,15 @@ class PipelineService:
         s3_ms = _ms(t0)
 
         t0 = time.perf_counter()
-        data_key = self._keys.decrypt_data_key(fr.wrapped_key)
+        try:
+            data_key = self._keys.decrypt_data_key(fr.wrapped_key)
+        except InvalidTag as exc:
+            # Envelope unwrap failed authentication — a corrupted or forged wrapped
+            # key. Treat as an integrity failure, never a crashed retrieve. (The KMS
+            # backend surfaces its own operational errors distinctly.)
+            raise XinsereIntegrityError(
+                f"fragment data key failed authentication (corrupted/forged?): seq {fr.sequence}"
+            ) from exc
         kms_ms = _ms(t0)
 
         t0 = time.perf_counter()
