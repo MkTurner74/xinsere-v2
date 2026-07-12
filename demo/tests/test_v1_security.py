@@ -8,6 +8,7 @@ we are testing the /v1 authorization logic, not the backends.
 import pytest
 from fastapi.testclient import TestClient
 
+import access_log
 import app as app_module
 import orgs
 import quotas
@@ -26,6 +27,11 @@ CTX_B_NODE = {"id": "fil_bbb", "type": "file", "name": "b.pdf", "parent": "root:
 
 KEY_A = "xin_orgA"
 H = {"Authorization": f"Bearer {KEY_A}"}
+
+
+def _blocked_rest(*a, **k):
+    # Stand-in for a successful Supabase REST call (access_log insert) — no network.
+    return None
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +56,9 @@ def fakes(monkeypatch):
     # tests override _bump to simulate over-limit.
     monkeypatch.setattr(quotas, "_bump",
                         lambda *a, **k: {"requests": 0, "bytes": 0, "files": 0})
+    # Access log: stub the DB insert so recording never hits Supabase (the pure
+    # hash/merkle/OCSF logic is tested directly below).
+    monkeypatch.setattr(supa, "_rest", _blocked_rest, raising=False)
     yield
 
 
@@ -196,3 +205,65 @@ def test_quota_fails_open_when_counter_unavailable(monkeypatch):
     monkeypatch.setattr(quotas, "_bump", boom)
     quotas.enforce_request(dict(CTX_A))              # no raise
     quotas.record_and_enforce_egress(dict(CTX_A), 1)  # no raise
+
+
+# --- Tamper-evident access log (per-user audit + Merkle anchor) ---------------
+
+def test_entry_hash_is_deterministic_and_tamper_evident():
+    e = access_log.build_entry(org_id="o", actor_id="u1", actor_type="api_key",
+                               action="file.read", key_id="k1", file_id="f1", bytes=10)
+    assert e["entry_hash"] == access_log.entry_hash(
+        {k: v for k, v in e.items() if k != "entry_hash"})
+    # Altering any committed field changes the hash — you can't silently edit a row.
+    tampered = {k: v for k, v in e.items() if k != "entry_hash"}
+    tampered["bytes"] = 11
+    assert access_log.entry_hash(tampered) != e["entry_hash"]
+
+
+def test_merkle_root_deterministic_and_changes_on_any_leaf():
+    leaves = [access_log.entry_hash({"i": i}) for i in range(5)]  # odd count
+    root = access_log.merkle_root(leaves)
+    assert root == access_log.merkle_root(list(leaves))      # deterministic
+    assert access_log.merkle_root([]) == access_log.GENESIS  # empty -> genesis
+    flipped = list(leaves)
+    flipped[2] = access_log.entry_hash({"i": 999})
+    assert access_log.merkle_root(flipped) != root           # any change moves the root
+
+
+def test_build_daily_root_orders_entries_reproducibly():
+    a = access_log.build_entry(org_id="o", actor_id="u", actor_type="api_key", action="file.read")
+    b = access_log.build_entry(org_id="o", actor_id="u", actor_type="api_key", action="grant")
+    r1, n1 = access_log.build_daily_root([a, b])
+    r2, n2 = access_log.build_daily_root([b, a])  # input order shuffled
+    assert r1 == r2 and n1 == n2 == 2             # root independent of input order
+
+
+def test_ocsf_mapping_carries_individual_actor_and_anchor():
+    e = access_log.build_entry(org_id="o", actor_id="u1", actor_type="api_key",
+                               action="file.read", key_id="k9", file_id="f1", bytes=42)
+    o = access_log.to_ocsf({**e, "day": e["ts"][:10]})
+    assert o["class_uid"] == 1001 and o["activity_id"] == 2
+    assert o["actor"]["user"]["uid"] == "u1"          # scopes back to the individual
+    assert o["actor"]["session"]["uid"] == "k9"        # ...and which key
+    assert o["metadata"]["xinsere"]["entry_hash"] == e["entry_hash"]
+
+
+def test_record_is_fail_open_and_captures_actor(monkeypatch):
+    captured = {}
+
+    def capture_rest(method, path, token, *, json_body=None, **k):
+        captured.update({"path": path, "body": json_body})
+        return None
+    monkeypatch.setattr(supa, "_rest", capture_rest)
+    e = access_log.record(org_id="o", actor_id="u1", actor_type="api_key",
+                          action="file.read", key_id="k1", file_id="f1", bytes=7)
+    assert captured["path"] == "/access_log"
+    assert captured["body"]["actor_id"] == "u1" and captured["body"]["key_id"] == "k1"
+    assert captured["body"]["entry_hash"] == e["entry_hash"]
+
+    # A logging-store outage must not raise to the caller.
+    def boom(*a, **k):
+        raise RuntimeError("supabase down")
+    monkeypatch.setattr(supa, "_rest", boom)
+    assert access_log.record(org_id="o", actor_id="u1", actor_type="api_key",
+                             action="file.read") is not None  # returns entry, no raise
