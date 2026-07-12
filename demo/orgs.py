@@ -28,11 +28,20 @@ KEY_PREFIX = "xin_"
 
 # Scope vocabulary. Enforced per-route in v1.py via need(ctx, scope).
 SCOPE_FILES_READ = "files:read"
-SCOPE_FILES_WRITE = "files:write"
+SCOPE_FILES_WRITE = "files:write"       # create/upload (store, staged upload, finalize)
+SCOPE_FILES_DELETE = "files:delete"     # destructive: trash / permanent erasure
 SCOPE_GRANTS_MANAGE = "grants:manage"
 SCOPE_VERIFY_READ = "verify:read"
-# Canonical order — used to normalize any requested set.
-ALL_SCOPES = [SCOPE_FILES_READ, SCOPE_FILES_WRITE, SCOPE_GRANTS_MANAGE, SCOPE_VERIFY_READ]
+# Canonical order — used to normalize any requested set. Delete is split out of
+# write so a leaked integrator key (e.g. Samsyn, which never deletes via API)
+# cannot WIPE data — it can at most read/create/grant. Least-privilege by default.
+ALL_SCOPES = [SCOPE_FILES_READ, SCOPE_FILES_WRITE, SCOPE_FILES_DELETE,
+              SCOPE_GRANTS_MANAGE, SCOPE_VERIFY_READ]
+
+# The scope set a full storage integrator (Samsyn/OWG) actually needs: read,
+# create, grant, verify — but NOT delete. Provision integrator keys with this.
+INTEGRATOR_SCOPES = [SCOPE_FILES_READ, SCOPE_FILES_WRITE,
+                     SCOPE_GRANTS_MANAGE, SCOPE_VERIFY_READ]
 
 # Least-privilege default. A key minted without an explicit scope choice can READ
 # and VERIFY only — it cannot write, delete, or manage grants. (This reverses the

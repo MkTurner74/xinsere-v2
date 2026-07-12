@@ -297,7 +297,7 @@ def file_plan(node_id: str, ctx: dict = Depends(api_key_auth)):
 @router.delete("/files/{node_id}", summary="Delete (trash by default; permanent erasure on request)")
 def delete_file(node_id: str, ctx: dict = Depends(api_key_auth),
                 permanent: bool = Query(False, description="true = immediate cryptographic erasure + on-chain revokes")):
-    need(ctx, "files:write")
+    need(ctx, "files:delete")  # destructive — separate from files:write (create)
     node = _own_node(ctx, node_id)
     if not node.get("parent"):
         raise HTTPException(status_code=400, detail="The root folder cannot be deleted")

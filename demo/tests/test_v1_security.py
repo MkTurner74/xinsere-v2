@@ -20,7 +20,8 @@ client = TestClient(app_module.app)
 
 # Two orgs, each with its own service identity.
 CTX_A = {"key_id": "k1", "org_id": "o-a", "org_name": "Org A", "org_slug": "org-a",
-         "service_user": "svc-a", "scopes": ["files:read", "files:write", "grants:manage", "verify:read"]}
+         "service_user": "svc-a",
+         "scopes": ["files:read", "files:write", "files:delete", "grants:manage", "verify:read"]}
 CTX_B_NODE = {"id": "fil_bbb", "type": "file", "name": "b.pdf", "parent": "root:svc-b",
               "owner": "svc-b", "file_id": "fileB", "sha": "x", "size": 1, "frags": 7,
               "content_type": "application/pdf", "deleted_at": None}
@@ -147,6 +148,22 @@ def test_default_key_scopes_are_least_privilege():
     assert orgs.SCOPE_FILES_WRITE not in orgs.DEFAULT_SCOPES
     assert orgs.SCOPE_GRANTS_MANAGE not in orgs.DEFAULT_SCOPES
     assert orgs.validate_scopes(None) == [orgs.SCOPE_FILES_READ, orgs.SCOPE_VERIFY_READ]
+
+
+def test_delete_requires_files_delete_scope(monkeypatch):
+    # An integrator-style key (read/write/grants/verify, NO files:delete — the
+    # Samsyn shape) cannot delete: a leaked key can't wipe data.
+    monkeypatch.setattr(orgs, "resolve_key",
+                        lambda p: ({**CTX_A, "scopes": orgs.INTEGRATOR_SCOPES} if p == KEY_A else None))
+    r = client.delete("/v1/files/anything", headers=H)
+    assert r.status_code == 403
+    assert "files:delete" in r.json()["error"]
+
+
+def test_integrator_scopes_exclude_delete():
+    # Guard: the integrator preset must never silently include destructive delete.
+    assert orgs.SCOPE_FILES_DELETE not in orgs.INTEGRATOR_SCOPES
+    assert set(orgs.INTEGRATOR_SCOPES) == {"files:read", "files:write", "grants:manage", "verify:read"}
 
 
 def test_validate_scopes_normalizes_and_rejects():
