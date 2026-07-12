@@ -138,6 +138,53 @@ def list_profiles(token: str) -> list[dict]:
     return _rest("GET", "/profiles", token, params={"select": "id,email,name,username"})
 
 
+def search_profiles(token: str, q: str, exclude_id: str, limit: int = 8) -> list[dict]:
+    """Typeahead: profiles whose name / username / email matches `q`, excluding the
+    caller. Powers scalable share (type a few chars instead of scanning a full
+    list). `q` must be pre-sanitized by the caller (PostgREST or() is structural)."""
+    if not q:
+        return []
+    pat = f"*{q}*"
+    return _rest("GET", "/profiles", token, params={
+        "or": f"(name.ilike.{pat},username.ilike.{pat},email.ilike.{pat})",
+        "id": f"neq.{exclude_id}", "select": "id,email,name,username",
+        "order": "name", "limit": limit}) or []
+
+
+def profile_by_email(token: str, email: str) -> dict | None:
+    rows = _rest("GET", "/profiles", token,
+                 params={"email": f"eq.{email.strip().lower()}",
+                         "select": "id,email,name,username", "limit": 1})
+    return rows[0] if rows else None
+
+
+# pending share invitations (external-email sharing) ----------------------
+
+def insert_pending_share(token: str, node_id: str, email: str, invited_by: str) -> dict:
+    """Create (or keep) a pending invite for an email with no account yet. Idempotent
+    on (node_id, email) via merge-duplicates so re-inviting doesn't error."""
+    rows = _rest("POST", "/pending_shares", token,
+                 prefer="return=representation,resolution=merge-duplicates",
+                 json_body={"node_id": node_id, "email": email.strip().lower(),
+                            "invited_by": invited_by})
+    return rows[0] if rows else {"node_id": node_id, "email": email}
+
+
+def pending_shares_for_email(token: str, email: str) -> list[dict]:
+    return _rest("GET", "/pending_shares", token,
+                 params={"email": f"eq.{email.strip().lower()}",
+                         "select": "id,node_id,invited_by"}) or []
+
+
+def pending_shares_for_node(token: str, node_id: str) -> list[dict]:
+    return _rest("GET", "/pending_shares", token,
+                 params={"node_id": f"eq.{node_id}", "select": "email"}) or []
+
+
+def delete_pending_share(token: str, pending_id: str) -> None:
+    _rest("DELETE", "/pending_shares", token, params={"id": f"eq.{pending_id}"})
+
+
 # nodes -------------------------------------------------------------------
 
 def root_id(user_id: str) -> str:

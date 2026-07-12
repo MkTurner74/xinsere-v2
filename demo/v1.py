@@ -21,7 +21,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, U
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import access_log
 import orgs
+import quotas
 import supa
 from chain import CHAIN
 from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
@@ -43,12 +45,23 @@ def api_key_auth(authorization: str = Header(None, description="Bearer xin_...")
         raise HTTPException(status_code=503, detail="Authentication backend unavailable — retry")
     if not ctx:
         raise HTTPException(status_code=401, detail="Invalid, revoked or suspended API key")
+    quotas.enforce_request(ctx)  # per-key rate limit (429 if over) — anti-exfiltration
     return ctx
 
 
 def need(ctx: dict, scope: str) -> None:
     if scope not in ctx["scopes"]:
         raise HTTPException(status_code=403, detail=f"API key lacks the '{scope}' scope")
+
+
+def _audit(ctx: dict, action: str, node: dict | None = None, nbytes: int = 0,
+           meta: dict | None = None) -> None:
+    """Record a per-actor access event (fail-open). The actor is the individual
+    key acting as the org's service identity — so a breach traces to which key."""
+    access_log.record(org_id=ctx.get("org_id"), actor_id=ctx.get("service_user"),
+                      actor_type="api_key", key_id=ctx.get("key_id"), action=action,
+                      file_id=(node or {}).get("file_id"), node_id=(node or {}).get("id"),
+                      bytes=nbytes, meta=meta)
 
 
 def _svc() -> str:
@@ -246,10 +259,12 @@ def file_content(node_id: str, ctx: dict = Depends(api_key_auth)):
     Permission is decided by ownership or the on-chain contract — never the DB."""
     need(ctx, "files:read")
     node = _readable_file(ctx, node_id)
+    quotas.record_and_enforce_egress(ctx, node.get("size") or 0)  # per-day egress cap
     try:
         r = get_pipeline().retrieve(node["file_id"])
     except XinsereIntegrityError as exc:
         raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
+    _audit(ctx, "file.read", node, nbytes=len(r.content))
     return StreamingResponse(io.BytesIO(r.content), media_type=r.content_type, headers={
         "Content-Disposition": f'attachment; filename="{node["name"]}"',
         "X-Content-SHA256": node.get("sha", ""),
@@ -263,12 +278,14 @@ def file_plan(node_id: str, ctx: dict = Depends(api_key_auth)):
     the plaintext never transits Xinsere. Keys are per-fragment data keys only."""
     need(ctx, "files:read")
     node = _readable_file(ctx, node_id)
+    quotas.record_and_enforce_egress(ctx, node.get("size") or 0)  # plan hands the whole file's keys
     try:
         plan = get_pipeline().retrieval_plan(node["file_id"], url_ttl=1800)
     except NotImplementedError:
         raise HTTPException(status_code=501, detail="Client-side reassembly unavailable")
     except XinsereIntegrityError as exc:
         raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
+    _audit(ctx, "file.download_plan", node, nbytes=plan.get("size") or 0)
     return {"name": node["name"], "content_type": plan["content_type"],
             "size": plan["size"], "sha256": plan["file_sha256"],
             "fragments": [{"sequence": f["sequence"], "url": f["url"],
@@ -280,15 +297,17 @@ def file_plan(node_id: str, ctx: dict = Depends(api_key_auth)):
 @router.delete("/files/{node_id}", summary="Delete (trash by default; permanent erasure on request)")
 def delete_file(node_id: str, ctx: dict = Depends(api_key_auth),
                 permanent: bool = Query(False, description="true = immediate cryptographic erasure + on-chain revokes")):
-    need(ctx, "files:write")
+    need(ctx, "files:delete")  # destructive — separate from files:write (create)
     node = _own_node(ctx, node_id)
     if not node.get("parent"):
         raise HTTPException(status_code=400, detail="The root folder cannot be deleted")
     if permanent:
         from app import _erase_subtree
+        _audit(ctx, "file.delete", node, meta={"permanent": True})
         return {"ok": True, "erased": True, **_erase_subtree(_svc(), node_id)}
     from datetime import datetime, timezone
     supa.soft_delete(_svc(), node_id, datetime.now(timezone.utc).isoformat())
+    _audit(ctx, "file.delete", node, meta={"permanent": False})
     return {"ok": True, "trashed": True, "auto_erase_days": 30}
 
 
@@ -316,6 +335,7 @@ def grant(node_id: str, ctx: dict = Depends(api_key_auth),
                             detail="On-chain grant failed [chain_grant_failed] — retry; "
                                    "check GET /v1/chain/status for wallet capacity")
     supa.insert_share(_svc(), node_id, party_id, tx)
+    _audit(ctx, "grant", node, meta={"grantee": party_id, "tx": tx})
     return {"ok": True, "party_id": party_id, "tx": tx}
 
 
