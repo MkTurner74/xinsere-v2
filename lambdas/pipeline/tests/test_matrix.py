@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from xinsere_pipeline import PipelineService, XinsereIntegrityError, XinsereNotFoundError
 from xinsere_pipeline.backends.local import LocalIndexStore, LocalKeyManager, LocalObjectStore
+from xinsere_pipeline.backends.router import MultiCloudObjectStore
 from xinsere_pipeline.config import ROUTE_HYBRID
 from xinsere_pipeline import fragmenter
 
@@ -237,6 +238,63 @@ def group_d() -> None:
           f"{n_before}->{n_after} objects")
 
 
+# --- E. Multi-cloud storage (pluggable ObjectStore, ADR-101) ----------------
+
+def group_e() -> None:
+    section("E. Multi-cloud storage routing")
+
+    # Router unit behaviour: two providers behind one ObjectStore.
+    prov_a = LocalObjectStore(bucket_count=4)
+    prov_b = LocalObjectStore(bucket_count=4)
+    mc = MultiCloudObjectStore({"a": prov_a, "b": prov_b}, default_provider="a")
+
+    qualified = mc.buckets()
+    e1 = (len(qualified) == 8
+          and all(q.startswith("a:") for q in qualified[:4])
+          and all(q.startswith("b:") for q in qualified[4:]))
+    check("E1 buckets() returns provider-qualified names from every provider", e1,
+          f"{len(qualified)} buckets")
+
+    # Qualified put/get/delete route to the right provider; the bare key lands in
+    # that provider's store only.
+    mc.put("b:xinsere-frag-02", "k1", b"payload-b")
+    routed = (mc.get("b:xinsere-frag-02", "k1") == b"payload-b"
+              and prov_b.get("xinsere-frag-02", "k1") == b"payload-b")
+    a_untouched = all(k != "k1" for (_b, k, _d) in prov_a.all_objects())
+    check("E2 qualified op routes to the named provider only", routed and a_untouched)
+
+    # Legacy unprefixed bucket (written before multi-cloud) resolves to default.
+    mc.put("xinsere-frag-01", "legacy", b"old-fragment")
+    legacy_ok = (mc.get("xinsere-frag-01", "legacy") == b"old-fragment"
+                 and prov_a.get("xinsere-frag-01", "legacy") == b"old-fragment")
+    check("E3 legacy unprefixed bucket resolves to default provider", legacy_ok)
+
+    # Unknown provider fails loudly, not silently.
+    try:
+        mc.get("zzz:xinsere-frag-00", "k")
+        check("E4 unknown provider raises", False, "did NOT raise")
+    except KeyError:
+        check("E4 unknown provider raises", True)
+
+    # Full pipeline round-trip THROUGH the router, fragments scattered across BOTH
+    # providers — the multi-cloud security property, proven with no AWS.
+    store = MultiCloudObjectStore(
+        {"a": LocalObjectStore(bucket_count=4), "b": LocalObjectStore(bucket_count=4)},
+        default_provider="a")
+    index = LocalIndexStore()
+    svc = PipelineService(store, LocalKeyManager(), index,
+                          fragment_count=7, route_mode=ROUTE_HYBRID)
+    content = os.urandom(20_000)
+    r = svc.store(content, "application/octet-stream")
+    out = svc.retrieve(r.file_id)
+    frags = index.get_fragments(r.file_id)
+    providers_used = {f.bucket.split(":", 1)[0] for f in frags}
+    check("E5 file round-trips byte-identical through the multi-cloud router",
+          out.content == content and r.fragment_count == 7)
+    check("E6 fragments scatter across multiple providers (cross-cloud)",
+          providers_used == {"a", "b"}, f"providers={sorted(providers_used)}")
+
+
 def main() -> int:
     print("=" * 64)
     print("Xinsere file-fragment pipeline — test matrix (local backends)")
@@ -245,6 +303,7 @@ def main() -> int:
     group_b()
     group_c()
     group_d()
+    group_e()
     print("\n" + "=" * 64)
     print(f"RESULT: {_passed} passed, {_failed} failed")
     print("=" * 64)
