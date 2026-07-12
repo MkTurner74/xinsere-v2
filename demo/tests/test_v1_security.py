@@ -120,3 +120,29 @@ def test_error_shape_is_uniform():
     body = r.json()
     assert "error" in body and "detail" not in body
     assert isinstance(body.get("errors"), list)
+
+
+# --- API key scoping (2026-07-12 audit: no all-scopes-by-default) -------------
+
+def test_default_key_scopes_are_least_privilege():
+    # A key minted with no explicit scope choice must be read+verify ONLY — never
+    # write or grant management. This is the regression guard for the audit finding
+    # that one leaked key could enumerate and exfiltrate a whole org.
+    assert orgs.DEFAULT_SCOPES == orgs.READ_ONLY_SCOPES
+    assert orgs.SCOPE_FILES_WRITE not in orgs.DEFAULT_SCOPES
+    assert orgs.SCOPE_GRANTS_MANAGE not in orgs.DEFAULT_SCOPES
+    assert orgs.validate_scopes(None) == [orgs.SCOPE_FILES_READ, orgs.SCOPE_VERIFY_READ]
+
+
+def test_validate_scopes_normalizes_and_rejects():
+    # Requested subset is normalized to canonical order, deduped.
+    assert orgs.validate_scopes(["verify:read", "files:read", "files:read"]) == \
+        [orgs.SCOPE_FILES_READ, orgs.SCOPE_VERIFY_READ]
+    # A full explicit request is honored (opt-in), in canonical order.
+    assert orgs.validate_scopes(list(reversed(orgs.ALL_SCOPES))) == orgs.ALL_SCOPES
+    # Unknown scope is rejected.
+    with pytest.raises(ValueError):
+        orgs.validate_scopes(["files:read", "files:delete-everything"])
+    # An empty explicit set is rejected (None means default, [] means nothing).
+    with pytest.raises(ValueError):
+        orgs.validate_scopes([])

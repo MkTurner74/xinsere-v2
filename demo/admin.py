@@ -115,13 +115,23 @@ def member_remove(org_id: str, user_id: str, s: dict = Depends(authn.require_adm
 # --- API keys --------------------------------------------------------------------
 
 @router.post("/orgs/{org_id}/keys")
-def mint_key(org_id: str, s: dict = Depends(authn.require_admin), name: str = Form(...)):
+def mint_key(org_id: str, s: dict = Depends(authn.require_admin), name: str = Form(...),
+             scopes: str = Form("")):
     """Mint an API key for the org. The plaintext key is returned ONCE and is
-    unrecoverable afterwards — only its hash is stored."""
+    unrecoverable afterwards — only its hash is stored.
+
+    `scopes` is an optional comma-separated subset of orgs.ALL_SCOPES. Omit it for
+    the least-privilege default (read + verify only) — write/grant management must
+    be requested explicitly so a leaked key is not a blanket exfiltration tool."""
     if not orgs.get_org(org_id):
         raise HTTPException(status_code=404, detail="Organization not found")
-    key, row = orgs.mint_key(org_id, name.strip() or "unnamed", s["user_id"])
-    return {"ok": True, "key": key, "record": row}
+    requested = [x.strip() for x in scopes.split(",") if x.strip()] or None
+    try:
+        key, row = orgs.mint_key(org_id, name.strip() or "unnamed", s["user_id"],
+                                 scopes=requested)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "key": key, "record": row, "scopes": row.get("scopes")}
 
 
 @router.post("/keys/{key_id}/revoke")

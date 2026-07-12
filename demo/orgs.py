@@ -26,7 +26,34 @@ import supa
 SERVICE_DOMAIN = "service.xinsere.io"   # service identities: svc-<slug>@<domain>
 KEY_PREFIX = "xin_"
 
-DEFAULT_SCOPES = ["files:read", "files:write", "grants:manage", "verify:read"]
+# Scope vocabulary. Enforced per-route in v1.py via need(ctx, scope).
+SCOPE_FILES_READ = "files:read"
+SCOPE_FILES_WRITE = "files:write"
+SCOPE_GRANTS_MANAGE = "grants:manage"
+SCOPE_VERIFY_READ = "verify:read"
+# Canonical order — used to normalize any requested set.
+ALL_SCOPES = [SCOPE_FILES_READ, SCOPE_FILES_WRITE, SCOPE_GRANTS_MANAGE, SCOPE_VERIFY_READ]
+
+# Least-privilege default. A key minted without an explicit scope choice can READ
+# and VERIFY only — it cannot write, delete, or manage grants. (This reverses the
+# prior all-scopes default: one leaked key could enumerate + exfiltrate a whole
+# org — 2026-07-12 API security audit. Write/manage must now be opted into.)
+READ_ONLY_SCOPES = [SCOPE_FILES_READ, SCOPE_VERIFY_READ]
+DEFAULT_SCOPES = READ_ONLY_SCOPES
+
+
+def validate_scopes(scopes: list[str] | None) -> list[str]:
+    """Normalize a requested scope set to canonical order, rejecting unknown or
+    empty sets. Returns the least-privilege default when scopes is None."""
+    if scopes is None:
+        return list(DEFAULT_SCOPES)
+    requested = {s.strip() for s in scopes if s and s.strip()}
+    unknown = requested - set(ALL_SCOPES)
+    if unknown:
+        raise ValueError(f"unknown scope(s): {sorted(unknown)}; valid: {ALL_SCOPES}")
+    if not requested:
+        raise ValueError("at least one scope is required")
+    return [s for s in ALL_SCOPES if s in requested]
 
 
 def _svc() -> str:
@@ -174,9 +201,10 @@ def mint_key(org_id: str, name: str, created_by: str | None,
     """Create a key; returns (plaintext_key, row). The plaintext is NEVER stored
     or retrievable again — the caller must surface it once."""
     key = KEY_PREFIX + secrets.token_urlsafe(32)
+    granted = validate_scopes(scopes)  # least-privilege default; rejects unknown scopes
     rows = supa._rest("POST", "/api_keys", _svc(), prefer="return=representation",
                       json_body={"org_id": org_id, "name": name, "prefix": key[:12],
-                                 "key_hash": _hash(key), "scopes": scopes or DEFAULT_SCOPES,
+                                 "key_hash": _hash(key), "scopes": granted,
                                  "created_by": created_by})
     return key, rows[0]
 
