@@ -13,6 +13,7 @@ The only server-side state is the signed session cookie (the Supabase tokens).
 from __future__ import annotations
 
 import io
+import logging
 import os
 from datetime import datetime, timezone, timedelta
 
@@ -145,6 +146,7 @@ async def login(request: Request, identifier: str = Form(...), password: str = F
     request.session["sb"] = sess
     supa.ensure_root(sess["access_token"], sess["user_id"])
     prof = supa.get_profile(sess["access_token"], sess["user_id"]) or {"id": sess["user_id"]}
+    _reconcile_pending(sess["user_id"], (prof or {}).get("email") or identifier.strip().lower())
     return {"ok": True, "user": _public(prof)}
 
 
@@ -161,6 +163,7 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
         request.session["sb"] = sess
         supa.ensure_root(sess["access_token"], sess["user_id"])
         prof = supa.get_profile(sess["access_token"], sess["user_id"]) or {"id": sess["user_id"]}
+        _reconcile_pending(sess["user_id"], email.strip().lower())
         return {"ok": True, "user": _public(prof)}
     return {"ok": True, "needs_confirmation": True,
             "message": "Check your email to confirm your account, then sign in."}
@@ -192,6 +195,61 @@ def _grant_inherited(token: str, node_id: str, file_id: str) -> int:
     except Exception:
         pass
     return granted
+
+
+import re as _re
+
+_SEARCH_ALLOWED = _re.compile(r"[^a-zA-Z0-9 @._+-]")
+
+
+def clean_search_query(q: str) -> str:
+    """Strip anything that could break the PostgREST or() filter grouping (commas,
+    parentheses, wildcards, ...). Keeps letters, digits, spaces, and email chars."""
+    return _SEARCH_ALLOWED.sub("", (q or "").strip())[:64]
+
+
+def _reconcile_pending(user_id: str, email: str) -> dict:
+    """First-login materialization of external-email invites: for every pending
+    share to this email, grant the invitee on-chain (per file) and insert the real
+    share row, then drop the stub. Best-effort — a chain hiccup must not block
+    login (RLS lets them SEE shared items; the grant governs download and a re-share
+    repairs it). Runs with the service-role key."""
+    if not email:
+        return {"materialized": 0}
+    svc = supa.SERVICE_ROLE_KEY
+    done = 0
+    try:
+        pending = supa.pending_shares_for_email(svc, email)
+    except Exception:
+        return {"materialized": 0}
+    for p in pending:
+        node_id = p["node_id"]
+        try:
+            last_tx = None
+            for f in supa.files_under(svc, node_id):
+                try:
+                    last_tx = CHAIN.grant(f["file_id"], user_id, "read")
+                except Exception as exc:
+                    logging.getLogger("xinsere.app").warning(
+                        "pending-share grant failed node=%s grantee=%s: %s", node_id, user_id, exc)
+            supa.insert_share(svc, node_id, user_id, last_tx)
+            supa.delete_pending_share(svc, p["id"])
+            done += 1
+        except Exception as exc:
+            logging.getLogger("xinsere.app").warning(
+                "pending-share reconcile failed node=%s email=%s: %s", node_id, email, exc)
+    return {"materialized": done}
+
+
+@app.get("/api/users/search")
+async def users_search(request: Request, q: str = ""):
+    """Typeahead for sharing — matches name/username/email, excludes self."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    cq = clean_search_query(q)
+    if not cq:
+        return {"results": []}
+    return {"results": [_public(r) for r in supa.search_profiles(token, cq, uid, limit=8)]}
 
 
 @app.post("/api/admin/invite")
@@ -569,12 +627,33 @@ async def unshare(request: Request, node_id: str = Form(...), grantee: str = For
 # --- share / download -------------------------------------------------------
 
 @app.post("/api/share")
-async def share(request: Request, node_id: str = Form(...), grantee: str = Form(...)):
+async def share(request: Request, node_id: str = Form(...),
+                grantee: str = Form(None), email: str = Form(None)):
+    """Share an item. Provide either `grantee` (a user id picked from typeahead) or
+    `email`. An email that already has a Xinsere account resolves to an internal
+    share (granted now); an email with no account yet becomes a pending invite that
+    materializes when they join — external sharing + viral onboarding."""
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
     node = supa.get_node(token, node_id)
     if not node or node["owner"] != uid:
         raise HTTPException(status_code=403, detail="You can only share your own items")
+
+    if not grantee and email:
+        addr = email.strip().lower()
+        prof = supa.get_profile(token, uid) or {}
+        if addr == (prof.get("email") or "").lower():
+            raise HTTPException(status_code=400, detail="You can't share with yourself")
+        target = supa.profile_by_email(token, addr)
+        if target:
+            grantee = target["id"]          # existing account -> grant now (below)
+        else:
+            supa.insert_pending_share(token, node_id, addr, uid)   # no account yet -> stub, no gas
+            return {"ok": True, "invited": True, "email": addr,
+                    "message": "Invitation created — they'll get access as soon as they join Xinsere."}
+
+    if not grantee:
+        raise HTTPException(status_code=400, detail="Pick a person or enter an email")
     if grantee == uid or supa.get_profile(token, grantee) is None:
         raise HTTPException(status_code=400, detail="Unknown recipient")
 
