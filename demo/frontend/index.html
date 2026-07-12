@@ -956,44 +956,99 @@ function openShare(node){
   const bg=document.createElement("div"); bg.className="modal-bg";
   bg.innerHTML=`<div class="modal"><h3>Share “${node.name}”</h3>
     <p class="msub">${node.type==="folder"?"Everyone you add can access every file inside.":"Grant read + download access."}</p>
-    <div class="people"></div><button class="btn-ghost btn full x">Done</button></div>`;
-  const holder=bg.querySelector(".people");
-  OTHERS.forEach(u=>{
-    const already=(node.shared_with||[]).some(s=>s.id===u.id);
-    const b=document.createElement("button"); b.className="person";
-    b.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name}</span>`+(already?`<span class="st">shared ✓</span>`:``);
-    if(already){
-      // Already shared → offer revoke. On-chain revocation per file; fails
-      // closed (share kept) if any revoke tx fails.
+    <input class="share-q" type="text" autocomplete="off" placeholder="Search people by name or email…"
+      style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
+    <div class="results" style="margin:6px 0 2px;max-height:220px;overflow:auto;"></div>
+    <div class="invite-row" style="display:flex;gap:8px;margin:10px 0 4px;">
+      <input class="invite-email" type="email" autocomplete="off" placeholder="Or invite by email…"
+        style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
+      <button class="btn invite-btn" type="button">Invite</button>
+    </div>
+    <div class="current"></div>
+    <button class="btn-ghost btn full x">Done</button></div>`;
+
+  const results=bg.querySelector(".results");
+  const current=bg.querySelector(".current");
+  const close=()=>{ if(bg.parentNode) document.body.removeChild(bg); };
+  const refresh=()=>{ close(); openFolder(CURRENT); };
+
+  // Grant to an existing user id (from typeahead) — real on-chain grant.
+  async function shareUser(uid, name, btn){
+    if(btn) btn.disabled=true;
+    toast("Recording grant on-chain (Amoy)… a few seconds");
+    const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",uid);
+    const r=await api("/api/share",{method:"POST",body:fd});
+    if(r.ok){ const d=await r.json();
+      toast(`Shared with ${(name||"").split(" ")[0]} · on-chain proof ${(d.tx||"").slice(0,14)}…`); refresh(); }
+    else { toast((await r.json()).error); if(btn) btn.disabled=false; }
+  }
+
+  // Revoke an existing grantee (on-chain per file; fails closed).
+  async function revokeUser(u){
+    if(!confirm(`Revoke ${u.name.split(" ")[0]}'s access to “${node.name}”?\nThis writes an on-chain revocation for every file covered.`)) return;
+    const T=newTask(node.name); T.set(`Revoking ${u.name.split(" ")[0]}'s access on-chain…`,{indet:true});
+    const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",u.id);
+    const r=await api("/api/unshare",{method:"POST",body:fd});
+    if(r.ok){ const d=await r.json();
+      T.done(`✓ Access revoked · ${d.files_revoked} file${d.files_revoked!==1?"s":""} on-chain${d.tx?` · ${d.tx.slice(0,12)}…`:""}`); refresh(); }
+    else { T.done("✗ "+((await r.json()).error||"Revoke failed")); }
+  }
+
+  // Current grantees, each with a revoke button.
+  function renderCurrent(){
+    current.innerHTML=(node.shared_with||[]).length?`<p class="msub" style="margin:8px 0 4px;">Shared with</p>`:``;
+    (node.shared_with||[]).forEach(u=>{
+      const row=document.createElement("div"); row.className="person";
+      row.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email||u.id}</span><span class="st">shared ✓</span>`;
       const rm=document.createElement("button"); rm.className="rm"; rm.textContent="Revoke";
-      rm.onclick=async (e)=>{
-        e.stopPropagation();
-        if(!confirm(`Revoke ${u.name.split(" ")[0]}'s access to “${node.name}”?\nThis writes an on-chain revocation for every file covered.`)) return;
-        rm.disabled=true;
-        const T=newTask(node.name); T.set(`Revoking ${u.name.split(" ")[0]}'s access on-chain…`,{indet:true});
-        const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",u.id);
-        const r=await api("/api/unshare",{method:"POST",body:fd});
-        if(r.ok){ const d=await r.json();
-          T.done(`✓ Access revoked · ${d.files_revoked} file${d.files_revoked!==1?"s":""} on-chain${d.tx?` · ${d.tx.slice(0,12)}…`:""}`);
-          document.body.removeChild(bg); openFolder(CURRENT);
-        } else { T.done("✗ "+((await r.json()).error||"Revoke failed")); rm.disabled=false; }
-      };
-      b.appendChild(rm);
-      b.onclick=null;
-    } else {
-      b.onclick=async ()=>{
-        const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",u.id);
-        b.disabled=true; toast("Recording grant on-chain (Amoy)… a few seconds");
-        const r=await api("/api/share",{method:"POST",body:fd});
-        if(r.ok){ const d=await r.json(); toast(`Shared with ${u.name.split(" ")[0]} · on-chain proof ${d.tx.slice(0,14)}…`); document.body.removeChild(bg); openFolder(CURRENT); }
-        else { toast((await r.json()).error); b.disabled=false; }
-      };
-    }
-    holder.appendChild(b);
-  });
-  bg.querySelector(".x").onclick=()=>document.body.removeChild(bg);
-  bg.addEventListener("click",e=>{ if(e.target===bg) document.body.removeChild(bg); });
+      rm.onclick=(e)=>{ e.stopPropagation(); revokeUser(u); };
+      row.appendChild(rm); current.appendChild(row);
+    });
+  }
+  renderCurrent();
+
+  // Typeahead: debounced search against /api/users/search.
+  const q=bg.querySelector(".share-q"); let timer=null, seq=0;
+  const sharedIds=new Set((node.shared_with||[]).map(s=>s.id));
+  q.oninput=()=>{
+    clearTimeout(timer);
+    const term=q.value.trim(); const mine=++seq;
+    if(!term){ results.innerHTML=""; return; }
+    timer=setTimeout(async ()=>{
+      const r=await api("/api/users/search?q="+encodeURIComponent(term));
+      if(!r.ok || mine!==seq) return;
+      const {results:people}=await r.json();
+      results.innerHTML = people.length?"":`<p class="msub" style="padding:6px 2px;">No matches — invite by email below.</p>`;
+      people.forEach(u=>{
+        const b=document.createElement("button"); b.className="person"; b.type="button";
+        const already=sharedIds.has(u.id);
+        b.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email}</span>`+(already?`<span class="st">shared ✓</span>`:``);
+        if(already){ b.disabled=true; } else { b.onclick=()=>shareUser(u.id,u.name||u.email,b); }
+        results.appendChild(b);
+      });
+    },220);
+  };
+
+  // Invite by email: existing account grants now; unknown email -> pending stub.
+  const inv=bg.querySelector(".invite-email"); const invBtn=bg.querySelector(".invite-btn");
+  async function invite(){
+    const email=inv.value.trim(); if(!email) return;
+    invBtn.disabled=true;
+    const fd=new FormData(); fd.append("node_id",node.id); fd.append("email",email);
+    const r=await api("/api/share",{method:"POST",body:fd});
+    if(r.ok){ const d=await r.json();
+      toast(d.invited ? `Invitation created for ${d.email} — they’ll get access when they join Xinsere.`
+                      : `Shared with ${d.grantee?.name||email} · on-chain proof ${(d.tx||"").slice(0,14)}…`);
+      refresh();
+    } else { toast((await r.json()).error); invBtn.disabled=false; }
+  }
+  invBtn.onclick=invite;
+  inv.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); invite(); } };
+
+  bg.querySelector(".x").onclick=close;
+  bg.addEventListener("click",e=>{ if(e.target===bg) close(); });
   document.body.appendChild(bg);
+  setTimeout(()=>q.focus(),40);
 }
 
 /* ---- grid/list view toggle (list default; persisted) ---- */
