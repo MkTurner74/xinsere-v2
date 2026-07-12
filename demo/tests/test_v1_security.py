@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import orgs
+import quotas
 import supa
 import v1
 from chain import CHAIN
@@ -44,6 +45,11 @@ def fakes(monkeypatch):
     monkeypatch.setattr(supa, "get_node", lambda _svc, nid: dict(CTX_B_NODE) if nid == CTX_B_NODE["id"] else None)
     # No on-chain grant to anyone by default.
     monkeypatch.setattr(CHAIN, "verify", lambda fid, party: (False, 0))
+    # Quota counters: stub the atomic RPC so tests never hit Supabase. Default is
+    # "well under limit" so enforcement runs for real but always passes; specific
+    # tests override _bump to simulate over-limit.
+    monkeypatch.setattr(quotas, "_bump",
+                        lambda *a, **k: {"requests": 0, "bytes": 0, "files": 0})
     yield
 
 
@@ -146,3 +152,47 @@ def test_validate_scopes_normalizes_and_rejects():
     # An empty explicit set is rejected (None means default, [] means nothing).
     with pytest.raises(ValueError):
         orgs.validate_scopes([])
+
+
+# --- Per-key quotas (anti-exfiltration rate + egress limits) ------------------
+
+def test_rate_limit_returns_429_end_to_end(monkeypatch):
+    # Over the per-minute request cap -> the auth dependency rejects with 429,
+    # before any endpoint logic runs.
+    monkeypatch.setattr(quotas, "_bump",
+                        lambda *a, **k: {"requests": quotas.RATE_PER_MIN + 1, "bytes": 0, "files": 0})
+    r = client.get("/v1/ping", headers=H)
+    assert r.status_code == 429
+    assert "rate_limited" in r.json()["error"].lower()
+
+
+def test_rate_limit_passes_when_under(monkeypatch):
+    monkeypatch.setattr(quotas, "_bump",
+                        lambda *a, **k: {"requests": quotas.RATE_PER_MIN, "bytes": 0, "files": 0})
+    quotas.enforce_request(dict(CTX_A))  # exactly at limit -> allowed (over is > limit)
+
+
+def test_egress_quota_enforced_on_bytes(monkeypatch):
+    monkeypatch.setattr(quotas, "_bump",
+                        lambda *a, **k: {"requests": 0, "bytes": quotas.EGRESS_BYTES_PER_DAY + 1, "files": 1})
+    with pytest.raises(Exception) as exc:
+        quotas.record_and_enforce_egress(dict(CTX_A), 1)
+    assert getattr(exc.value, "status_code", None) == 429
+    assert "egress_quota" in str(exc.value.detail)
+
+
+def test_egress_quota_enforced_on_file_count(monkeypatch):
+    monkeypatch.setattr(quotas, "_bump",
+                        lambda *a, **k: {"requests": 0, "bytes": 1, "files": quotas.EGRESS_FILES_PER_DAY + 1})
+    with pytest.raises(Exception) as exc:
+        quotas.record_and_enforce_egress(dict(CTX_A), 1)
+    assert getattr(exc.value, "status_code", None) == 429
+
+
+def test_quota_fails_open_when_counter_unavailable(monkeypatch):
+    # A counter-store outage must not break legitimate traffic (fail-open).
+    def boom(*a, **k):
+        raise RuntimeError("supabase down")
+    monkeypatch.setattr(quotas, "_bump", boom)
+    quotas.enforce_request(dict(CTX_A))              # no raise
+    quotas.record_and_enforce_egress(dict(CTX_A), 1)  # no raise

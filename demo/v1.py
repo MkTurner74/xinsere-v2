@@ -22,6 +22,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import orgs
+import quotas
 import supa
 from chain import CHAIN
 from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
@@ -43,6 +44,7 @@ def api_key_auth(authorization: str = Header(None, description="Bearer xin_...")
         raise HTTPException(status_code=503, detail="Authentication backend unavailable — retry")
     if not ctx:
         raise HTTPException(status_code=401, detail="Invalid, revoked or suspended API key")
+    quotas.enforce_request(ctx)  # per-key rate limit (429 if over) — anti-exfiltration
     return ctx
 
 
@@ -246,6 +248,7 @@ def file_content(node_id: str, ctx: dict = Depends(api_key_auth)):
     Permission is decided by ownership or the on-chain contract — never the DB."""
     need(ctx, "files:read")
     node = _readable_file(ctx, node_id)
+    quotas.record_and_enforce_egress(ctx, node.get("size") or 0)  # per-day egress cap
     try:
         r = get_pipeline().retrieve(node["file_id"])
     except XinsereIntegrityError as exc:
@@ -263,6 +266,7 @@ def file_plan(node_id: str, ctx: dict = Depends(api_key_auth)):
     the plaintext never transits Xinsere. Keys are per-fragment data keys only."""
     need(ctx, "files:read")
     node = _readable_file(ctx, node_id)
+    quotas.record_and_enforce_egress(ctx, node.get("size") or 0)  # plan hands the whole file's keys
     try:
         plan = get_pipeline().retrieval_plan(node["file_id"], url_ttl=1800)
     except NotImplementedError:
