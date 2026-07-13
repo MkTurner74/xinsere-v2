@@ -172,6 +172,49 @@ class DropboxClient:
         }
         return _resilient("POST", f"{CONTENT_API}/files/download", headers=h, timeout=300).content
 
+    def folder_acls(self, under: str) -> dict[str, set[str]]:
+        """Map each SHARED folder at or below `under` to the set of collaborator
+        emails on it (component 5 — permission preservation). Keyed by the folder's
+        team-root-relative, lowercased path (e.g. 'founders/legal agreements') so it
+        lines up with the migrated Supabase tree. Uses sharing/list_folders (+continue)
+        then list_folder_members per folder. Owner's own membership is left in — the
+        caller resolves the owner and skips self-grants."""
+        under_l = under.strip("/").lower()
+        acls: dict[str, set[str]] = {}
+        r = self._post(f"{API}/sharing/list_folders", {"limit": 1000})
+        while True:
+            for e in r.get("entries", []):
+                path_lower = (e.get("path_lower") or "").strip("/")
+                if not path_lower:
+                    continue  # not mounted at a resolvable path — skip
+                if path_lower == under_l or path_lower.startswith(under_l + "/"):
+                    acls[path_lower] = self._folder_members(e["shared_folder_id"])
+            cur = r.get("cursor")
+            if not cur:
+                break
+            r = self._post(f"{API}/sharing/list_folders/continue", {"cursor": cur})
+        return acls
+
+    def _folder_members(self, shared_folder_id: str) -> set[str]:
+        """All collaborator emails on a shared folder: confirmed users + pending
+        invitees. Paginates via list_folder_members/continue."""
+        emails: set[str] = set()
+        r = self._post(f"{API}/sharing/list_folder_members", {"shared_folder_id": shared_folder_id})
+        while True:
+            for u in r.get("users", []):
+                em = (u.get("user") or {}).get("email")
+                if em:
+                    emails.add(em.strip().lower())
+            for iv in r.get("invitees", []):
+                em = (iv.get("invitee") or {}).get("email")
+                if em:
+                    emails.add(em.strip().lower())
+            cur = r.get("cursor")
+            if not cur:
+                break
+            r = self._post(f"{API}/sharing/list_folder_members/continue", {"cursor": cur})
+        return emails
+
 
 # --- Migration report ------------------------------------------------------
 @dataclass
@@ -208,7 +251,13 @@ class MigrationRunner:
         small = sum(1 for f in files if f.size < 128 * 1024)
         return files, small
 
-    def run(self, folder: str, *, limit: int | None, full: bool) -> Report:
+    def run(self, folder: str, *, limit: int | None, full: bool, grants: bool = False):
+        if grants:
+            # Permission-preservation pass over the already-migrated tree. The path
+            # setup mirrors --full (needs Supabase + chain env), but moves no bytes.
+            sys.path.insert(0, "../lambdas/pipeline")
+            return self.preserve_permissions(folder)
+
         rep = Report()
 
         if not full:
@@ -241,6 +290,89 @@ class MigrationRunner:
             if limit and rep.sourced >= limit:
                 break
         return rep
+
+    def preserve_permissions(self, folder: str) -> dict:
+        """Component 5 — recreate Dropbox share ACLs as Xinsere permissions over the
+        ALREADY-MIGRATED tree, using the Merkle aggregate batch-grant (one flat-gas
+        tx per <=cap grants). Internal collaborators (existing Xinsere users) get
+        real on-chain grants; external emails become no-gas pending invite stubs.
+
+        Reads:  Dropbox sharing ACLs for `folder` + the migrated Supabase subtree.
+        Writes: batched on-chain grants + proof cache; pending_shares for externals."""
+        import os
+        import supa  # type: ignore
+        import batch_grant
+
+        token = os.environ["XINSERE_SUPABASE_SERVICE_KEY"]
+        owner = os.environ["XINSERE_MIGRATION_OWNER"]
+        root_node = os.environ["XINSERE_MIGRATION_ROOT"]
+        # Emails that ARE the owner — never self-grant. The canonical Xinsere identity
+        # plus any override list (comma-separated) covers the dual @xinsere/@enttech case.
+        owner_emails = {e.strip().lower() for e in
+                        os.environ.get("XINSERE_OWNER_EMAILS", "").split(",") if e.strip()}
+
+        acls = self.client.folder_acls(folder)  # {relpath_lower: {emails}}
+        print(f"Dropbox ACLs: {len(acls)} shared folders under {folder}",
+              file=sys.stderr, flush=True)
+
+        # Resolve every collaborator email once: internal uid (grant) or external (stub).
+        all_emails = {e for emails in acls.values() for e in emails} - owner_emails
+        resolved: dict[str, str | None] = {}  # email -> uid or None(=external)
+        for em in all_emails:
+            prof = supa.profile_by_email(token, em)
+            uid = prof["id"] if prof else None
+            if uid == owner:
+                continue  # owner resolved by email -> skip self-grant
+            resolved[em] = uid
+
+        # Walk the migrated subtree; attach each file to the grantees covering its path.
+        grants: list = []            # batch_grant.Grant (internal, on-chain)
+        stubs: dict[str, set[str]] = {}   # node_id -> {external emails}
+        counts = {"files": 0, "internal_pairs": 0, "external_pairs": 0}
+
+        def covering_emails(relpath_lower: str) -> set[str]:
+            out: set[str] = set()
+            for k, emails in acls.items():
+                if relpath_lower == k or relpath_lower.startswith(k + "/"):
+                    out |= emails
+            return out - owner_emails
+
+        def walk(node_id: str, relpath: str) -> None:
+            for n in supa.children(token, node_id):
+                if n["type"] == "folder":
+                    child_rel = f"{relpath}/{n['name']}".strip("/").lower()
+                    walk(n["id"], child_rel)
+                elif n["type"] == "file" and n.get("file_id"):
+                    counts["files"] += 1
+                    for em in covering_emails(relpath.lower()):
+                        uid = resolved.get(em)
+                        if uid:
+                            grants.append(batch_grant.Grant(n["file_id"], uid))
+                            counts["internal_pairs"] += 1
+                        else:
+                            stubs.setdefault(n["id"], set()).add(em)
+                            counts["external_pairs"] += 1
+
+        walk(root_node, "")
+
+        # Internal grants -> Merkle aggregate batches (the aggregate wallet).
+        result = batch_grant.preserve(grants, supa=supa, token=token,
+                                      source="dropbox", scope=folder)
+
+        # External emails -> no-gas pending invite stubs (viral onboarding, ADR-105).
+        stub_written = 0
+        for node_id, emails in stubs.items():
+            for em in emails:
+                try:
+                    supa.insert_pending_share(token, node_id, em, owner)
+                    stub_written += 1
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  stub FAIL {node_id} {em}: {exc}", file=sys.stderr, flush=True)
+
+        return {"acl_folders": len(acls), **counts,
+                "batches": result.batches, "grants_anchored": result.grants,
+                "batch_failures": result.failed, "tx_hashes": result.tx_hashes,
+                "external_stubs": stub_written}
 
     def _ingest_one(self, f: DbxFile, pipeline, supa, token, owner, root_node, rep: Report) -> None:
         import os  # noqa: F401 (kept local; run() owns the imports)
@@ -281,11 +413,17 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None, help="Cap files (test runs)")
     ap.add_argument("--full", action="store_true",
                     help="Actually store+index+verify (default: enumerate-only)")
+    ap.add_argument("--grants", action="store_true",
+                    help="Permission-preservation pass: recreate Dropbox share ACLs as "
+                         "Merkle-batched on-chain grants over the already-migrated tree")
     args = ap.parse_args()
 
     runner = MigrationRunner(DropboxClient(DropboxAuth()))
-    rep = runner.run(args.folder, limit=args.limit, full=args.full)
-    print(json.dumps(rep.as_dict(rep.sourced, 0), indent=2))
+    rep = runner.run(args.folder, limit=args.limit, full=args.full, grants=args.grants)
+    if args.grants:
+        print(json.dumps(rep, indent=2))       # preserve_permissions returns a dict
+    else:
+        print(json.dumps(rep.as_dict(rep.sourced, 0), indent=2))
 
 
 if __name__ == "__main__":

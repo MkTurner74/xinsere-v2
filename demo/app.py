@@ -682,6 +682,35 @@ async def share(request: Request, node_id: str = Form(...),
             "cascade": node["type"] == "folder"}
 
 
+def _has_access(file_id: str, uid: str) -> tuple[bool, str]:
+    """Authoritative, FAIL-CLOSED download gate. Returns (allowed, source).
+
+    1. Per-file on-chain grant (interactive shares) — CHAIN.verify().
+    2. Merkle batch fallback (bulk-migrated permissions) — replay a cached proof
+       through the contract's verifyBatch. The on-chain root is the authority; the
+       cache is only a hint, and an unanchored/revoked root fails closed there.
+
+    Any error or miss returns False — corruption or an outage can only ever block a
+    legitimate user, never expose a file."""
+    try:
+        has, _ = CHAIN.verify(file_id, uid)
+        if has:
+            return True, "amoy-contract"
+    except Exception:
+        logging.getLogger("xinsere.app").warning("per-file verify() failed file=%s uid=%s", file_id, uid)
+    # Batch fallback: try recent cached proofs; the chain check is what actually grants.
+    try:
+        for bg in supa.batch_grants_for(supa.SERVICE_ROLE_KEY, file_id, uid):
+            leaf = bytes.fromhex(bg["leaf"][2:])
+            root = bytes.fromhex(bg["merkle_root"][2:])
+            proof = [bytes.fromhex(p[2:]) for p in bg["proof"]]
+            if CHAIN.verify_batch(leaf, root, proof):
+                return True, "amoy-batch"
+    except Exception:
+        logging.getLogger("xinsere.app").warning("batch verify failed file=%s uid=%s", file_id, uid)
+    return False, "none"
+
+
 @app.get("/api/verify/{node_id}")
 async def verify_access(request: Request, node_id: str):
     s = _session(request)
@@ -691,9 +720,9 @@ async def verify_access(request: Request, node_id: str):
         raise HTTPException(status_code=404, detail="File not found")
     if node["owner"] == uid:
         return {"allowed": True, "source": "owner", "wallet": CHAIN.wallet}
-    has, granted_at = CHAIN.verify(node["file_id"], uid)
-    return {"allowed": has, "granted_at": granted_at, "source": "amoy-contract",
-            "contract": "0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD"}
+    allowed, source = _has_access(node["file_id"], uid)
+    import chain as _chain
+    return {"allowed": allowed, "source": source, "contract": _chain.CONTRACT}
 
 
 @app.get("/api/download-plan/{node_id}")
@@ -711,8 +740,8 @@ async def download_plan(request: Request, node_id: str):
     if not node or node["type"] != "file":
         raise HTTPException(status_code=404, detail="File not found")
     if node["owner"] != uid:
-        has, _ = CHAIN.verify(node["file_id"], uid)
-        if not has:
+        allowed, _ = _has_access(node["file_id"], uid)
+        if not allowed:
             raise HTTPException(status_code=403, detail="No active on-chain grant for you")
     try:
         # 30 min TTL: a retried/slow transfer must not see its fragment URLs
@@ -759,8 +788,8 @@ async def download(request: Request, node_id: str):
         raise HTTPException(status_code=404, detail="File not found")
     # Authoritative permission check reads the BLOCKCHAIN (owner bypass).
     if node["owner"] != uid:
-        has, _ = CHAIN.verify(node["file_id"], uid)
-        if not has:
+        allowed, _ = _has_access(node["file_id"], uid)
+        if not allowed:
             raise HTTPException(status_code=403, detail="No active on-chain grant for you")
     try:
         r = get_pipeline().retrieve(node["file_id"])

@@ -362,3 +362,50 @@ def shared_with(token: str, user_id: str) -> list[dict]:
         if n and not n.get("deleted_at"):   # a trashed item is hidden from recipients
             out.append(n)
     return out
+
+
+# permission batches (Merkle aggregate batch-grant — ADR-2026-07-13) ---------
+# All service-role only (RLS deny-by-default, migration 0007). The proof cache is
+# rebuildable from the manifest; the on-chain root is the source of truth.
+
+def insert_permission_batch(token: str, merkle_root: str, leaf_count: int,
+                            source: str, scope: str | None) -> dict:
+    """Create the batch header (status='pending'). Idempotent on merkle_root so a
+    re-run of the same tree resumes rather than duplicating."""
+    rows = _rest("POST", "/permission_batches", token,
+                 prefer="return=representation,resolution=merge-duplicates",
+                 json_body={"merkle_root": merkle_root, "leaf_count": leaf_count,
+                            "source": source, "scope": scope, "status": "pending"})
+    return rows[0] if rows else {"merkle_root": merkle_root}
+
+
+def set_batch_status(token: str, merkle_root: str, status: str, *,
+                     tx_hash: str | None = None, anchored_at: str | None = None) -> None:
+    body: dict = {"status": status}
+    if tx_hash is not None:
+        body["tx_hash"] = tx_hash
+    if anchored_at is not None:
+        body["anchored_at"] = anchored_at
+    _rest("PATCH", "/permission_batches", token,
+          params={"merkle_root": f"eq.{merkle_root}"}, json_body=body)
+
+
+def insert_batch_grants(token: str, rows: list[dict]) -> None:
+    """Bulk-insert the per-(file,grantee) proof rows for one batch. Idempotent on
+    (file_id, grantee_id, merkle_root)."""
+    if not rows:
+        return
+    _rest("POST", "/batch_grants", token, prefer="return=minimal,resolution=merge-duplicates",
+          json_body=rows)
+
+
+def batch_grants_for(token: str, file_id: str, grantee_id: str, limit: int = 5) -> list[dict]:
+    """Download-gate lookup: recent batch grants (proof + root) for (file, grantee),
+    newest first. The caller replays each through the contract's verifyBatch and
+    accepts the first that passes — the ON-CHAIN check is the authority (an
+    unanchored, pending, or revoked root fails closed there), so we deliberately
+    do NOT filter on the cached status and can't be fooled by a stale one."""
+    return _rest("GET", "/batch_grants", token, params={
+        "file_id": f"eq.{file_id}", "grantee_id": f"eq.{grantee_id}",
+        "select": "merkle_root,leaf,proof", "order": "created_at.desc",
+        "limit": limit}) or []

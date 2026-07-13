@@ -70,6 +70,13 @@ contract XinserePermissions {
     // Stored for efficient verification without scanning all events
     mapping(bytes32 => mapping(bytes32 => PermissionRecord)) public permissions;
 
+    // Anchored batch Merkle roots: root => timestamp anchored (0 = not anchored).
+    // ONE storage slot per batch regardless of how many (file, grantee) leaves it
+    // covers — this is what makes bulk permission-preservation flat-gas and scalable.
+    // The tree is built off-chain; only the root lives here. A grant is proven at
+    // verify time with a Merkle proof against an anchored root (see verifyBatch).
+    mapping(bytes32 => uint256) public batchRoots;
+
     // Owner/admin addresses (who can call grant/revoke)
     // For now, only the contract deployer. In production, this would be a Lambda role.
     mapping(address => bool) public admins;
@@ -170,6 +177,81 @@ contract XinserePermissions {
         emit FilePermissionRevoked(fileHash, granteeHash, block.timestamp);
 
         return keccak256(abi.encodePacked(fileHash, granteeHash, block.timestamp));
+    }
+
+    // ============================================================================
+    // BATCH PERMISSION MANAGEMENT (Merkle aggregate — bulk migration path)
+    // ============================================================================
+
+    /**
+     * @dev Anchor a batch of permission grants as a single Merkle root.
+     *
+     * One transaction, one storage write, ANY number of (fileHash, granteeHash)
+     * leaves — gas is flat regardless of batch size. The tree is built off-chain;
+     * each grant is later proven with a Merkle proof against this root (verifyBatch).
+     *
+     * Callers SHOULD cap leaves-per-root (e.g. 1,000) so a single bad root can only
+     * ever affect that chunk, never the whole migration. The cap is a client policy;
+     * the contract only records the root and the declared size for the audit event.
+     *
+     * @param merkleRoot Root of the off-chain Merkle tree over the batch's leaves,
+     *        where leaf = keccak256(abi.encodePacked(fileHash, granteeHash)) and
+     *        internal nodes = keccak256 of the two children in ascending order.
+     * @param batchSize Number of leaves in the batch (informational, for the event).
+     */
+    function grantBatch(bytes32 merkleRoot, uint256 batchSize)
+        external onlyAdmin returns (bytes32)
+    {
+        require(merkleRoot != bytes32(0), "Merkle root cannot be zero");
+        // Idempotency guard: never silently re-anchor. A repeat is a caller bug or a
+        // replay — reject it so the audit trail stays one-anchor-per-root.
+        require(batchRoots[merkleRoot] == 0, "Batch root already anchored");
+
+        batchRoots[merkleRoot] = block.timestamp;
+
+        emit BatchPermissionGranted(merkleRoot, batchSize, block.timestamp);
+        return merkleRoot;
+    }
+
+    /**
+     * @dev Emergency kill of a suspect/corrupt anchored root. Every grant proven
+     * against it immediately fails closed (verifyBatch returns false), so a bad
+     * root is a contained, recoverable incident: revoke it and re-anchor a correct
+     * one. Does not touch per-file grants.
+     */
+    function revokeBatchRoot(bytes32 merkleRoot) external onlyAdmin {
+        require(batchRoots[merkleRoot] != 0, "Root not anchored");
+        batchRoots[merkleRoot] = 0;
+        emit FilePermissionRevoked(merkleRoot, bytes32(0), block.timestamp);
+    }
+
+    /**
+     * @dev Verify a single grant against an anchored batch root using a Merkle proof.
+     * No file access, no gas (view). Fails closed: an unanchored root, a wrong proof,
+     * or a corrupted off-chain cache all return false — corruption can only ever
+     * block a legitimate user, never wrongly expose a file.
+     *
+     * @param leaf keccak256(abi.encodePacked(fileHash, granteeHash)).
+     * @param root The anchored batch root the caller claims this grant lives under.
+     * @param proof Sibling hashes from leaf to root (OpenZeppelin-style, sorted pairs).
+     * @return True iff `root` is anchored AND `proof` reconstructs `root` from `leaf`.
+     */
+    function verifyBatch(bytes32 leaf, bytes32 root, bytes32[] calldata proof)
+        external view returns (bool)
+    {
+        if (batchRoots[root] == 0) {
+            return false; // root not anchored (or revoked) -> fail closed
+        }
+        bytes32 computed = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 sib = proof[i];
+            // Commutative hashing: order children so proofs are position-independent
+            // (matches OpenZeppelin MerkleProof and the off-chain merkle.py builder).
+            computed = computed <= sib
+                ? keccak256(abi.encodePacked(computed, sib))
+                : keccak256(abi.encodePacked(sib, computed));
+        }
+        return computed == root;
     }
 
     // ============================================================================

@@ -35,9 +35,14 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 # headroom. Lower defaults shrink the reserve check (gas_limit x maxFee) so a
 # near-empty wallet can still transact: 200k x 30 gwei = 0.006 POL/grant vs the
 # old 300k x 50 = 0.015. Env-overridable.
-PRIORITY_GWEI = int(os.environ.get("XINSERE_PRIORITY_FEE_GWEI", "26"))
-MAXFEE_GWEI = int(os.environ.get("XINSERE_MAX_FEE_GWEI", "30"))
+PRIORITY_GWEI = int(os.environ.get("XINSERE_PRIORITY_FEE_GWEI", "30"))
+# Amoy base fee drifts (seen ~36 gwei) and a maxFee below base gets the tx rejected/
+# stuck. 60 keeps ample headroom over the priority floor while the reserve check
+# (gas_limit x maxFee) stays modest: 200k x 60 = 0.012 POL/grant. Env-overridable.
+MAXFEE_GWEI = int(os.environ.get("XINSERE_MAX_FEE_GWEI", "60"))
 GAS_LIMIT = int(os.environ.get("XINSERE_GAS_LIMIT", "200000"))
+# Anchoring a batch root is a single SSTORE + event — far cheaper than a full grant.
+BATCH_GAS_LIMIT = int(os.environ.get("XINSERE_BATCH_GAS_LIMIT", "120000"))
 
 ABI = [
     {"inputs": [{"type": "bytes32"}, {"type": "bytes32"}, {"type": "string"}, {"type": "uint256"}],
@@ -47,6 +52,15 @@ ABI = [
     {"inputs": [{"type": "bytes32"}, {"type": "bytes32"}], "name": "verify",
      "outputs": [{"name": "hasPermission", "type": "bool"}, {"name": "grantedAt", "type": "uint256"}],
      "stateMutability": "view", "type": "function"},
+    # --- Merkle aggregate batch-grant path (ADR-2026-07-13) ---
+    {"inputs": [{"type": "bytes32"}, {"type": "uint256"}], "name": "grantBatch",
+     "outputs": [{"type": "bytes32"}], "stateMutability": "nonpayable", "type": "function"},
+    {"inputs": [{"type": "bytes32"}], "name": "revokeBatchRoot",
+     "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+    {"inputs": [{"type": "bytes32"}, {"type": "bytes32"}, {"type": "bytes32[]"}], "name": "verifyBatch",
+     "outputs": [{"type": "bool"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"type": "bytes32"}], "name": "batchRoots",
+     "outputs": [{"type": "uint256"}], "stateMutability": "view", "type": "function"},
 ]
 
 
@@ -150,7 +164,7 @@ class Chain:
             "wallet_ok": est >= 1,
         }
 
-    def _send(self, fn) -> str:
+    def _send(self, fn, gas: int = GAS_LIMIT) -> str:
         """Sign, send, and await a contract write. Returns the transaction hash."""
         w3, acct = self._w3, self._acct
         tx = fn.build_transaction({
@@ -159,7 +173,7 @@ class Chain:
             "chainId": CHAIN_ID,
             "maxPriorityFeePerGas": w3.to_wei(PRIORITY_GWEI, "gwei"),  # Amoy >=25 gwei floor
             "maxFeePerGas": w3.to_wei(MAXFEE_GWEI, "gwei"),
-            "gas": GAS_LIMIT,
+            "gas": gas,
         })
         signed = w3.eth.account.sign_transaction(tx, acct.key)
         raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
@@ -194,6 +208,40 @@ class Chain:
             return None
         return self._send(self._contract.functions.revokePermission(
             file_hash(file_id), grantee_hash(grantee_id)))
+
+    # --- Merkle aggregate batch-grant (ADR-2026-07-13) ----------------------
+
+    def grant_batch(self, root: bytes, size: int) -> str:
+        """Anchor a batch Merkle root on-chain in ONE transaction — flat gas
+        regardless of how many (file, grantee) leaves the root covers. `root` is
+        the 32-byte root from merkle.root(); `size` is the leaf count (recorded in
+        the event for audit). Callers cap `size` per root (blast-radius bound).
+        Returns the real tx hash."""
+        self._ensure()
+        if len(root) != 32:
+            raise ValueError("root must be 32 bytes")
+        return self._send(self._contract.functions.grantBatch(root, int(size)),
+                          gas=BATCH_GAS_LIMIT)
+
+    def verify_batch(self, leaf: bytes, root: bytes, proof: list[bytes]) -> bool:
+        """Read the contract: is `leaf` proven under an anchored `root`? View call,
+        no gas. Fails closed — an unanchored/revoked root or a bad proof returns
+        False, so a corrupted off-chain proof cache can only block, never expose."""
+        self._ensure()
+        return bool(self._contract.functions.verifyBatch(leaf, root, proof).call())
+
+    def root_anchored(self, root: bytes) -> int:
+        """Timestamp a batch root was anchored (0 = not anchored / revoked). Used
+        by the connector's post-anchor read-back gate before a batch is trusted."""
+        self._ensure()
+        return int(self._contract.functions.batchRoots(root).call())
+
+    def revoke_batch_root(self, root: bytes) -> str:
+        """Emergency kill of a suspect/corrupt anchored root — every grant proven
+        against it immediately fails closed. Re-anchor a corrected root after."""
+        self._ensure()
+        return self._send(self._contract.functions.revokeBatchRoot(root),
+                          gas=BATCH_GAS_LIMIT)
 
 
 CHAIN = Chain()
