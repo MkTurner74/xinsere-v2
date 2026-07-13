@@ -126,34 +126,44 @@ def get_profile(token: str, user_id: str) -> dict | None:
     return rows[0] if rows else None
 
 
+# Cross-profile reads go through SECURITY DEFINER RPCs (migration 0010): the base
+# profiles SELECT policy is now self-only, so a raw GET can no longer dump the
+# directory (Finding 3). Each RPC returns MINIMAL fields for an EXPLICIT, SCOPED
+# query and uses auth.uid() internally for the identity scope.
+
+def profiles_visible_to_me(token: str) -> list[dict]:
+    """Profiles the caller can legitimately see (self, co-org members, share
+    counterparties) — the exact set needed to render owner/grantee names. Never a
+    bulk table dump."""
+    return _rest("POST", "/rpc/profiles_visible_to_me", token, json_body={}) or []
+
+
 def list_others(token: str, user_id: str) -> list[dict]:
-    return _rest("GET", "/profiles", token,
-                 params={"id": f"neq.{user_id}", "select": "id,email,name,username", "order": "name"})
+    """Visible profiles excluding the caller (share-picker fallback; the primary
+    picker is the typeahead search)."""
+    return [p for p in profiles_visible_to_me(token) if p.get("id") != user_id]
 
 
 def list_profiles(token: str) -> list[dict]:
-    """All profiles the caller can see (RLS: any authenticated user). For rendering
-    owner/grantee display info when listing nodes."""
-    return _rest("GET", "/profiles", token, params={"select": "id,email,name,username"})
+    """Visible profiles, for rendering owner/grantee display info when listing
+    nodes. Scoped by profiles_visible_to_me (was a whole-table SELECT)."""
+    return profiles_visible_to_me(token)
 
 
 def search_profiles(token: str, q: str, exclude_id: str, limit: int = 8) -> list[dict]:
-    """Typeahead: profiles whose name / username / email matches `q`, excluding the
-    caller. Powers scalable share (type a few chars instead of scanning a full
-    list). `q` must be pre-sanitized by the caller (PostgREST or() is structural)."""
+    """Typeahead: co-org members matching `q`, or an exact full-email match (to
+    invite an external party). Scoped + capped by the search_profiles_min RPC —
+    no bulk enumeration, and the structural-or() injection surface is gone."""
     if not q:
         return []
-    pat = f"*{q}*"
-    return _rest("GET", "/profiles", token, params={
-        "or": f"(name.ilike.{pat},username.ilike.{pat},email.ilike.{pat})",
-        "id": f"neq.{exclude_id}", "select": "id,email,name,username",
-        "order": "name", "limit": limit}) or []
+    return _rest("POST", "/rpc/search_profiles_min", token,
+                 json_body={"q": q, "lim": limit}) or []
 
 
 def profile_by_email(token: str, email: str) -> dict | None:
-    rows = _rest("GET", "/profiles", token,
-                 params={"email": f"eq.{email.strip().lower()}",
-                         "select": "id,email,name,username", "limit": 1})
+    """Resolve one exact email to an existing account (share-by-email flow)."""
+    rows = _rest("POST", "/rpc/profile_by_email_min", token,
+                 json_body={"addr": email.strip().lower()})
     return rows[0] if rows else None
 
 
@@ -459,6 +469,32 @@ def list_permission_batches(token: str, limit: int = 200) -> list[dict]:
 def _now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+# share_batches — maps an interactive share (node -> grantee) to the batch root(s)
+# it anchored, so unshare/erase/move can revoke EXACTLY those roots (Finding 2,
+# migration 0011). Service-role only.
+
+def insert_share_batch(token: str, node_id: str, grantee: str, merkle_root: str) -> None:
+    """Record that an interactive share of (node_id -> grantee) anchored `merkle_root`.
+    Idempotent on (node_id, grantee, merkle_root)."""
+    _rest("POST", "/share_batches", token,
+          prefer="return=minimal,resolution=merge-duplicates",
+          json_body={"node_id": node_id, "grantee": grantee, "merkle_root": merkle_root})
+
+
+def share_batch_roots(token: str, node_id: str, grantee: str) -> list[str]:
+    """The batch root(s) anchored for the (node_id -> grantee) interactive share."""
+    rows = _rest("GET", "/share_batches", token,
+                 params={"node_id": f"eq.{node_id}", "grantee": f"eq.{grantee}",
+                         "select": "merkle_root"}) or []
+    return [r["merkle_root"] for r in rows]
+
+
+def delete_share_batch(token: str, node_id: str, grantee: str, merkle_root: str) -> None:
+    _rest("DELETE", "/share_batches", token,
+          params={"node_id": f"eq.{node_id}", "grantee": f"eq.{grantee}",
+                  "merkle_root": f"eq.{merkle_root}"})
 
 
 def batch_grants_for(token: str, file_id: str, grantee_id: str, limit: int = 5) -> list[dict]:

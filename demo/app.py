@@ -24,6 +24,7 @@ from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
 import config
+import share_grants
 import supa
 from authn import session as _session, is_platform_admin
 from chain import CHAIN
@@ -170,22 +171,25 @@ async def logout(request: Request):
 
 
 def _grant_inherited(token: str, node_id: str, file_id: str) -> int:
-    """Grant-on-add: a file added to a folder that is already shared must be
-    readable by the existing grantees — the on-chain contract is per-file, so
-    each inherited share needs its own grant tx. Best-effort: a chain failure
-    must not fail the upload (RLS already lets grantees SEE the file; the grant
-    governs download, and a re-share repairs it)."""
+    """Grant-on-add: a file added to an already-shared folder must be readable by
+    that folder's grantees. Batched (Finding 2) — one flat-gas Merkle root per
+    covering share, recorded under that share so a later unshare revokes it too,
+    instead of one on-chain tx per grantee. Best-effort: a chain failure must not
+    fail the upload (RLS still lets grantees SEE the file; the grant governs
+    download, and a re-share repairs it)."""
+    svc = supa.SERVICE_ROLE_KEY
+    if not svc:
+        return 0
     granted = 0
+    file_node = {"file_id": file_id}
     try:
-        grantees = {sh["grantee"] for sh in supa.shares_covering(token, node_id)}
-        for g in grantees:
+        for sh in supa.shares_covering(token, node_id):
             try:
-                CHAIN.grant(file_id, g, "read")
+                share_grants.grant_share(svc, [file_node], sh["grantee"], sh["node_id"], "grant-on-add")
                 granted += 1
             except Exception as exc:
-                import logging
                 logging.getLogger("xinsere.app").warning(
-                    "grant-on-add failed node=%s grantee=%s: %s", node_id, g, exc)
+                    "grant-on-add failed node=%s grantee=%s: %s", node_id, sh["grantee"], exc)
     except Exception:
         pass
     return granted
@@ -219,13 +223,14 @@ def _reconcile_pending(user_id: str, email: str) -> dict:
     for p in pending:
         node_id = p["node_id"]
         try:
+            files = supa.files_under(svc, node_id)
             last_tx = None
-            for f in supa.files_under(svc, node_id):
-                try:
-                    last_tx = CHAIN.grant(f["file_id"], user_id, "read")
-                except Exception as exc:
-                    logging.getLogger("xinsere.app").warning(
-                        "pending-share grant failed node=%s grantee=%s: %s", node_id, user_id, exc)
+            try:
+                res = share_grants.grant_share(svc, files, user_id, node_id, "reconcile-invite")
+                last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
+            except Exception as exc:
+                logging.getLogger("xinsere.app").warning(
+                    "pending-share grant failed node=%s grantee=%s: %s", node_id, user_id, exc)
             supa.insert_share(svc, node_id, user_id, last_tx)
             supa.delete_pending_share(svc, p["id"])
             done += 1
@@ -437,28 +442,29 @@ async def move(request: Request, node_id: str = Form(...), new_parent: str = For
         if new_parent == node_id or any(a["id"] == node_id for a in supa.ancestors(token, new_parent)):
             raise HTTPException(status_code=400, detail="Cannot move a folder into itself")
 
-    # Inherited-share reconciliation: the contract is per-file, so moving between
-    # differently-shared folders must revoke grants the file leaves behind and
-    # add the ones it gains (direct shares on the node itself always survive).
-    before = {sh["grantee"] for sh in supa.shares_covering(token, node_id)}
+    # Inherited-share reconciliation: moving between differently-shared folders
+    # changes which ancestor folder-shares cover this subtree. Batched (Finding 2):
+    # instead of a per-file grant/revoke storm, we RE-ANCHOR each affected ancestor
+    # share over its CURRENT subtree — after the move, files_under(share_node)
+    # naturally includes (gained) or excludes (lost) the moved subtree, so a single
+    # revoke+re-grant per (share_node, grantee) restores the correct grant set.
+    # Tracked as (share_node, grantee) pairs so we reanchor the right root.
+    before = {(sh["node_id"], sh["grantee"]) for sh in supa.shares_covering(token, node_id)}
     updated = supa.move_node(token, node_id, new_parent)
-    after = {sh["grantee"] for sh in supa.shares_covering(token, node_id)}
-    rec = {"granted": 0, "revoked": 0, "errors": 0}
-    if before != after:
-        files = supa.files_under(token, node_id)
-        for f in files:
-            for g in after - before:
-                try:
-                    CHAIN.grant(f["file_id"], g, "read")
-                    rec["granted"] += 1
-                except Exception:
-                    rec["errors"] += 1   # fail-closed: no grant -> no download for them
-            for g in before - after:
-                try:
-                    if CHAIN.revoke(f["file_id"], g):   # None = nothing active to revoke
-                        rec["revoked"] += 1
-                except Exception:
-                    rec["errors"] += 1   # surfaced to the UI; lingering grant is RLS-blocked but must be retried
+    after = {(sh["node_id"], sh["grantee"]) for sh in supa.shares_covering(token, node_id)}
+    rec = {"reanchored": 0, "revoked": 0, "errors": 0}
+    changed = before ^ after   # shares this subtree gained or lost by moving
+    svc = supa.SERVICE_ROLE_KEY
+    if changed and svc:
+        for share_node, g in changed:
+            try:
+                files = supa.files_under(svc, share_node)
+                r = share_grants.reanchor_share(svc, share_node, g, files, "move")
+                rec["reanchored"] += 1
+                rec["revoked"] += r.get("revoked", 0)
+                rec["errors"] += r.get("revoke_errors", 0)
+            except Exception:
+                rec["errors"] += 1   # surfaced to the UI; owner can retry the move
     view = node_view(updated, uid, token, _profiles_map(token))
     view["reconciliation"] = rec
     return view
@@ -472,6 +478,18 @@ def _erase_subtree(token: str, node_id: str) -> dict:
     service-role key (auto-purge cron)."""
     files = supa.files_under(token, node_id)
     revoked, revoke_errors = 0, 0
+    # Batch-granted interactive shares (Finding 2): revoke the recorded root(s) for
+    # direct shares on this node. Best-effort — the crypto-erasure below destroys the
+    # bytes regardless, so this is on-chain hygiene, not the access gate.
+    svc = supa.SERVICE_ROLE_KEY
+    if svc:
+        try:
+            for sh in supa.shares_for_node(token, node_id):
+                r = share_grants.revoke_share(svc, node_id, sh["grantee"])
+                revoked += r["revoked"]
+                revoke_errors += r["errors"]
+        except Exception:
+            revoke_errors += 1
     for f in files:
         try:
             for sh in supa.shares_covering(token, f["id"]):
@@ -601,7 +619,16 @@ async def unshare(request: Request, node_id: str = Form(...), grantee: str = For
     if not node or node["owner"] != uid:
         raise HTTPException(status_code=403, detail="You can only manage shares on your own items")
     files = supa.files_under(token, node_id)
+    svc = supa.SERVICE_ROLE_KEY
     last_tx, revoked, errors = None, 0, 0
+    # Batch-granted interactive shares (Finding 2): revoke the recorded root(s) —
+    # one revokeBatchRoot per root, exact because interactive roots are single-grantee.
+    if svc:
+        br = share_grants.revoke_share(svc, node_id, grantee)
+        revoked += br["revoked"]
+        errors += br["errors"]
+    # Legacy per-file grants (pre-batch shares / v1 API grants) — verify-first revoke,
+    # a no-op for files that carry only a batch grant.
     for f in files:
         try:
             tx = CHAIN.revoke(f["file_id"], grantee)  # None = already inactive (retry-safe skip)
@@ -610,11 +637,11 @@ async def unshare(request: Request, node_id: str = Form(...), grantee: str = For
         except Exception:
             errors += 1
     if errors:
-        # Fail closed: keep the share row so the owner can see it and retry.
-        # Already-revoked files are skipped on retry (verify-first), so a retry
-        # only re-attempts the failures — it can never brick on prior successes.
+        # Fail closed: keep the share row (and any un-revoked batch mapping) so the
+        # owner can see it and retry. Batch roots already revoked and per-file grants
+        # already inactive are skipped on retry — it can never brick on prior successes.
         raise HTTPException(status_code=502,
-                            detail=f"On-chain revoke failed for {errors}/{len(files)} files — share kept; retry")
+                            detail=f"On-chain revoke failed ({errors} error(s)) — share kept; retry")
     supa.delete_share(token, node_id, grantee)
     return {"ok": True, "files_revoked": revoked, "files_covered": len(files), "tx": last_tx}
 
@@ -657,14 +684,18 @@ async def share(request: Request, node_id: str = Form(...),
     if grantee == uid or supa.get_profile(token, grantee) is None:
         raise HTTPException(status_code=400, detail="Unknown recipient")
 
-    # Real on-chain grant per file (permission is enforced per-file by the contract).
+    # Batched on-chain grant (Finding 2): one flat-gas Merkle root per <=1,000 files
+    # instead of one tx per file — a folder share can no longer drain the shared gas
+    # wallet. The root(s) are recorded under (node, grantee) so unshare revokes them.
+    svc = supa.SERVICE_ROLE_KEY
+    if not svc:
+        raise HTTPException(status_code=500, detail="Service role key not configured")
     files = supa.files_under(token, node_id)
     last_tx = None
     try:
-        for f in files:
-            last_tx = CHAIN.grant(f["file_id"], grantee, "read")
+        res = share_grants.grant_share(svc, files, grantee, node_id, "share")
+        last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
     except Exception as exc:
-        import logging
         logging.getLogger("xinsere.app").warning(
             "share on-chain grant failed node=%s grantee=%s: %s", node_id, grantee, exc)
         raise HTTPException(status_code=502,
