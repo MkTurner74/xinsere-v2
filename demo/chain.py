@@ -25,7 +25,11 @@ import threading
 RPC_URL = os.environ.get("XINSERE_RPC_URL", "https://rpc-amoy.polygon.technology")
 CHAIN_ID = int(os.environ.get("XINSERE_CHAIN_ID", "80002"))
 CONTRACT = os.environ.get("XINSERE_CONTRACT_ADDRESS", "0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD")
-SECRET_ID = os.environ.get("XINSERE_SECRET_ID", "xinsere/blockchain/polygon-amoy/private-key")
+# The signer key secret. NB: the secret is (legacy-)named "polygon-mumbai" even
+# though the chain is Amoy — matches lambdas/blockchain/config.ts and the actual
+# Secrets Manager entry. The prior "polygon-amoy" default didn't exist and 500'd
+# every chain call (verify + share). Override with XINSERE_SECRET_ID if renamed.
+SECRET_ID = os.environ.get("XINSERE_SECRET_ID", "xinsere/blockchain/polygon-mumbai/private-key")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 # Amoy priority-fee floor is ~25 gwei. A grant uses ~113k gas, so 200k is safe
 # headroom. Lower defaults shrink the reserve check (gas_limit x maxFee) so a
