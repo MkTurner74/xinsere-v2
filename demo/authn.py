@@ -15,7 +15,8 @@ from fastapi import HTTPException, Request
 import supa
 
 ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get(
-    "XINSERE_ADMIN_EMAILS", "mark.turner@entertainmenttechnologists.com").split(",") if e.strip()}
+    "XINSERE_ADMIN_EMAILS",
+    "mark.turner@entertainmenttechnologists.com,mark.turner@xinsere.com").split(",") if e.strip()}
 
 
 def session(request: Request) -> dict:
