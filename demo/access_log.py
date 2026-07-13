@@ -145,3 +145,49 @@ def record(*, org_id, actor_id, actor_type, action,
         _log.warning("access_log insert failed (fail-open) actor=%s action=%s: %s",
                      actor_id, action, exc)
     return entry
+
+
+# --- daily on-chain anchor (Finding 6: makes the log actually tamper-evident) ---
+
+def _day_entries(token: str, day: str) -> list[dict]:
+    return supa._rest("GET", "/access_log", token,
+                      params={"day": f"eq.{day}", "select": "id,ts,entry_hash",
+                              "order": "ts.asc"}) or []
+
+
+def get_anchor(token: str, day: str) -> dict | None:
+    rows = supa._rest("GET", "/access_log_anchors", token,
+                      params={"day": f"eq.{day}", "select": "*", "limit": 1})
+    return rows[0] if rows else None
+
+
+def _upsert_anchor(token: str, day: str, root: str, count: int,
+                   tx: str | None = None, anchored_at: str | None = None) -> None:
+    supa._rest("POST", "/access_log_anchors", token,
+               prefer="return=minimal,resolution=merge-duplicates",
+               json_body={"day": day, "merkle_root": root, "entry_count": count,
+                          "tx_hash": tx, "anchored_at": anchored_at})
+
+
+def anchor_day(token: str, day: str, chain_client=None) -> dict:
+    """Build the Merkle root over `day`'s entry_hashes and anchor it on-chain, so
+    no row from that day can be altered/deleted without breaking the immutable
+    root. Idempotent: an already-anchored day (tx present) is returned untouched;
+    an empty day records the genesis root without spending gas."""
+    existing = get_anchor(token, day)
+    if existing and existing.get("tx_hash"):
+        return {"day": day, "root": existing["merkle_root"], "count": existing["entry_count"],
+                "tx": existing["tx_hash"], "status": "already-anchored"}
+    entries = _day_entries(token, day)
+    root, count = build_daily_root(entries)
+    _upsert_anchor(token, day, root, count)          # pending row first
+    if count == 0:
+        return {"day": day, "root": root, "count": 0, "tx": None, "status": "empty-no-anchor"}
+    if chain_client is None:
+        from chain import CHAIN as chain_client
+    # grantBatch anchors any 32-byte root immutably on-chain (flat gas). Access-log
+    # roots carry no (file,grantee) leaves, so they never affect the permission gate.
+    tx = chain_client.grant_batch(bytes.fromhex(root), count)
+    _upsert_anchor(token, day, root, count, tx=tx, anchored_at=_now_iso())
+    _log.info("anchored access log day=%s entries=%d root=%s tx=%s", day, count, root[:12], tx)
+    return {"day": day, "root": root, "count": count, "tx": tx, "status": "anchored"}

@@ -112,6 +112,7 @@
   <a class="home" href="/" title="Back to Xinsere"><span class="word">Xinsere</span></a><span class="crumb">/ Admin Console</span>
   <div class="who hidden" id="who">
     <button class="link" id="nav-orgs">Organizations</button>
+    <button class="link" id="nav-superadmins">Super admins</button>
     <button class="link" id="nav-imports">Imports</button>
     <span id="who-email"></span>
     <a class="link" href="/docs/guide" target="_blank">API docs</a>
@@ -156,7 +157,22 @@
     <h2>All users <span class="count" id="user-count"></span></h2>
     <div class="panel">
       <table id="user-table">
-        <thead><tr><th>Name</th><th>Email</th><th>Organizations</th><th>ID (party_id)</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Organizations</th><th>2FA</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ SUPER ADMINS VIEW ============ -->
+  <section id="view-superadmins" class="hidden">
+    <h2>Super admins <span class="count" id="sa-count"></span></h2>
+    <div class="toolbar">
+      <span class="note">The highest tier — <strong>Xinsere staff only</strong>. Super admins operate the whole platform: create/suspend organizations, mint API keys, view every import. They do <em>not</em> get to read any customer's files. Grant sparingly. Org (tenant) admins — like EntTech or Samsyn's own admin — are managed inside each organization.</span>
+      <button class="btn" id="add-sa">Add super admin</button>
+    </div>
+    <div class="panel">
+      <table id="sa-table">
+        <thead><tr><th>Name</th><th>Email</th><th>Added</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -285,9 +301,44 @@ function showView(which){
   $("#view-orgs").classList.toggle("hidden",which!=="orgs");
   $("#view-org").classList.add("hidden");
   $("#view-imports").classList.toggle("hidden",which!=="imports");
+  $("#view-superadmins").classList.toggle("hidden",which!=="superadmins");
 }
 $("#nav-orgs").addEventListener("click",()=>{showView("orgs");loadOrgs();});
+$("#nav-superadmins").addEventListener("click",()=>{showView("superadmins");loadSuperAdmins();});
 $("#nav-imports").addEventListener("click",()=>{showView("imports");loadImports();});
+
+/* ---------- super admins (platform_admins — Xinsere staff) ---------- */
+async function loadSuperAdmins(){
+  showView("superadmins");
+  const {super_admins}=await api("/api/admin/platform-admins");
+  $("#sa-count").textContent=super_admins.length;
+  const tb=$("#sa-table tbody");tb.innerHTML="";
+  for(const a of super_admins){
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td><strong>${esc(a.name||"—")}</strong></td><td>${esc(a.email||a.user_id)}</td>
+      <td class="note">${fmtDate(a.created_at)}</td>
+      <td class="row end"><button class="btn danger sm">Remove</button></td>`;
+    tr.querySelector("button").addEventListener("click",async()=>{
+      if(!confirm(`Remove Super-Admin access for ${a.email||a.user_id}?`))return;
+      try{await api(`/api/admin/platform-admins/${a.user_id}/remove`,{method:"POST"});loadSuperAdmins();}
+      catch(e){alert(e.message);}
+    });
+    tb.appendChild(tr);
+  }
+}
+$("#add-sa").addEventListener("click",()=>{
+  modal(`<h3>Add super admin</h3>
+    <p class="note">Grant platform-wide (Xinsere staff) access to an <strong>existing</strong> account. If they don't have one yet, add them as a user in an org first, then promote them here.</p>
+    <div><label>Email</label><input id="sa-email" type="email" placeholder="person@xinsere.com"></div>
+    <div class="err" id="sa-err"></div>
+    <div class="row end"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" id="sa-go">Add</button></div>`);
+  $("#sa-go").addEventListener("click",async()=>{
+    try{await api("/api/admin/platform-admins",{method:"POST",body:form({email:$("#sa-email").value})});
+      closeModal();loadSuperAdmins();}
+    catch(e){$("#sa-err").textContent=e.message;}
+  });
+});
 $("#imp-refresh").addEventListener("click",loadImports);
 
 async function loadImports(){
@@ -359,9 +410,23 @@ async function loadOrgs(){
   $("#user-count").textContent=users.length;
   const ub=$("#user-table tbody");ub.innerHTML="";
   for(const u of users){
-    const mem=(u.memberships||[]).map(m=>`${esc(m.org_name||"?")} <span class="pill ${m.role}">${m.role}</span>`).join("&nbsp; ")||"—";
-    ub.insertAdjacentHTML("beforeend",
-      `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${mem}</td><td class="mono">${esc(u.id)}</td></tr>`);
+    const mem=(u.memberships||[]).map(m=>`${esc(m.org_name||"?")} <span class="pill ${m.role}">${m.role==="org_admin"?"Admin":"Member"}</span>`).join("&nbsp; ")||"—";
+    const role=u.super_admin?`<span class="pill org_admin">Super&nbsp;Admin</span>`
+      :((u.memberships||[]).some(m=>m.role==="org_admin")?`<span class="pill member">Org&nbsp;Admin</span>`:`<span class="pill">User</span>`);
+    const twofa=u.mfa_enabled?`<span class="pill active">on</span>`:`<span class="pill">off</span>`;
+    const forced=u.must_change_password?` <span class="pill revoked">must reset pw</span>`:"";
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${esc(u.name)}</td><td>${esc(u.email)}${forced}</td><td>${role}</td>
+      <td>${mem}</td><td>${twofa}</td>
+      <td class="row end"><button class="btn ghost sm" data-act="forcepw">${u.must_change_password?"Clear reset":"Force pw reset"}</button></td>`;
+    tr.querySelector('[data-act="forcepw"]').addEventListener("click",async()=>{
+      const on=!u.must_change_password;
+      const path=on?"force-password-change":"clear-force-password-change";
+      if(on&&!confirm(`Require ${u.email} to set a new password at next sign-in?`))return;
+      try{await api(`/api/admin/users/${u.id}/${path}`,{method:"POST"});loadOrgs();}
+      catch(e){alert(e.message);}
+    });
+    ub.appendChild(tr);
   }
 }
 $("#new-org").addEventListener("click",()=>{

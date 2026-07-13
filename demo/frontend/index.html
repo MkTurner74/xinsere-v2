@@ -279,6 +279,7 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
     <div class="brand"><span id="top-mark"></span><span class="word">Xinsere</span></div>
     <div class="me">
       <span class="avatar" id="me-av"></span><span id="me-name"></span>
+      <a class="link" id="security-link" href="/security">Security</a>
       <a class="link hidden" id="admin-link" href="/admin">Admin</a>
       <button class="theme-toggle" title="Switch light/dark mode" aria-label="Switch light/dark mode"></button>
       <button class="link" id="logout">Sign out</button>
@@ -441,6 +442,11 @@ $("#login-form").addEventListener("submit", async (e)=>{
   const fd=new FormData(); fd.append("identifier",$("#u").value); fd.append("password",$("#p").value);
   const r=await api("/api/login",{method:"POST",body:fd});
   if(!r.ok){ $("#login-err").textContent=(await r.json()).error||"Sign-in failed"; return; }
+  const d=await r.json();
+  // Security step-ups are handled on the dedicated /security page (2FA challenge,
+  // forced password change) so the main app never renders half-authenticated.
+  if(d.mfa_required){ location.href="/security?step=mfa"; return; }
+  if(d.must_change_password){ location.href="/security?step=pw"; return; }
   await boot();
 });
 $("#signup-form").addEventListener("submit", async (e)=>{

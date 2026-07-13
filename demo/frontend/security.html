@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Security · Xinsere</title>
+<style>
+  :root{--bg:#0b0d1a;--panel:#141830;--panel-2:#1b2040;--edge:#2a3060;--text:#eef1ff;--muted:#9aa3c7;--brand:#8A6BFF;--mint:#4FE3C1;--rose:#FF8B7A;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+  .wrap{max-width:560px;margin:0 auto;padding:40px 20px;}
+  h1{font-size:1.5rem;margin:0 0 4px} h2{font-size:1.05rem;margin:0 0 12px}
+  a.link{color:var(--brand);text-decoration:none} a.link:hover{text-decoration:underline}
+  .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:14px;padding:22px;margin-bottom:18px}
+  .note{color:var(--muted);font-size:0.9rem}
+  label{display:block;font-size:0.85rem;color:var(--muted);margin:12px 0 4px}
+  input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--edge);background:var(--panel-2);color:var(--text);font-size:1rem}
+  .btn{background:linear-gradient(135deg,var(--brand),#5B3DF5);color:#fff;border:0;border-radius:10px;padding:11px 16px;font-size:0.95rem;cursor:pointer;margin-top:14px}
+  .btn.ghost{background:var(--panel-2);border:1px solid var(--edge)} .btn.danger{background:#3a1520;border:1px solid #7a2e3e;color:#ffb4be}
+  .btn:disabled{opacity:.5;cursor:default}
+  .err{color:var(--rose);font-size:0.9rem;min-height:1.2em;margin-top:8px}
+  .ok{color:var(--mint);font-size:0.9rem;min-height:1.2em;margin-top:8px}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:0.78rem;background:var(--panel-2);border:1px solid var(--edge)}
+  .pill.on{background:rgba(79,227,193,.15);border-color:#2E9E8A;color:var(--mint)}
+  .banner{background:rgba(255,139,122,.12);border:1px solid #7a3e3e;border-radius:12px;padding:14px 16px;margin-bottom:18px;color:#ffcabf}
+  .qr{background:#fff;border-radius:12px;padding:14px;display:inline-block;margin:12px 0}
+  .qr svg,.qr img{display:block;width:180px;height:180px}
+  .secret{font-family:ui-monospace,monospace;background:var(--panel-2);border:1px solid var(--edge);border-radius:8px;padding:8px 10px;word-break:break-all;font-size:0.9rem}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>Account security</h1>
+    <a class="link" href="/">&larr; Back to files</a>
+  </div>
+
+  <div id="forced" class="banner hidden">Your administrator requires you to set a new password before continuing.</div>
+
+  <!-- 2FA login step-up -->
+  <div class="card hidden" id="step-mfa">
+    <h2>Two-factor verification</h2>
+    <p class="note">Enter the 6-digit code from your authenticator app to finish signing in.</p>
+    <input id="mfa-login-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" maxlength="6">
+    <div class="err" id="mfa-login-err"></div>
+    <button class="btn" id="mfa-login-go">Verify</button>
+  </div>
+
+  <!-- change password -->
+  <div class="card" id="card-pw">
+    <h2>Change password</h2>
+    <label>Current password</label><input id="pw-cur" type="password" autocomplete="current-password">
+    <label>New password <span class="note">(at least 8 characters)</span></label>
+    <input id="pw-new" type="password" autocomplete="new-password">
+    <label>Confirm new password</label><input id="pw-new2" type="password" autocomplete="new-password">
+    <div class="err" id="pw-err"></div><div class="ok" id="pw-ok"></div>
+    <button class="btn" id="pw-go">Update password</button>
+  </div>
+
+  <!-- two-factor management -->
+  <div class="card" id="card-2fa">
+    <h2>Two-factor authentication <span class="pill" id="mfa-state">off</span></h2>
+    <p class="note">Add a second step at sign-in using an authenticator app (Google Authenticator, 1Password, Authy…). Strongly recommended, and required for admins.</p>
+    <div id="mfa-off">
+      <button class="btn" id="mfa-enroll">Enable two-factor</button>
+    </div>
+    <div id="mfa-enrolling" class="hidden">
+      <p class="note">Scan this with your authenticator app, then enter the 6-digit code it shows.</p>
+      <div class="qr" id="mfa-qr"></div>
+      <p class="note">Can't scan? Enter this key manually:</p>
+      <div class="secret" id="mfa-secret"></div>
+      <label>Code from your app</label>
+      <input id="mfa-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" maxlength="6">
+      <div class="err" id="mfa-err"></div>
+      <button class="btn" id="mfa-verify">Confirm & turn on</button>
+    </div>
+    <div id="mfa-on" class="hidden">
+      <p class="ok">Two-factor is on for your account.</p>
+      <button class="btn danger" id="mfa-disable">Turn off two-factor</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+function form(d){const f=new FormData();for(const[k,v]of Object.entries(d))f.append(k,v);return f;}
+async function api(path,opts={}){
+  const r=await fetch(path,opts);
+  let b={}; try{b=await r.json();}catch{}
+  if(r.status===401){ location.href="/"; throw new Error("signed out"); }
+  if(!r.ok) throw Object.assign(new Error(b.error||b.detail||r.statusText),{status:r.status});
+  return b;
+}
+const step=new URLSearchParams(location.search).get("step");
+let FACTOR=null;
+
+async function load(){
+  let st={};
+  try{ st=await api("/api/account/security-status"); }catch(e){ if(e.message==="signed out")return; }
+  $("#forced").classList.toggle("hidden", !st.must_change_password);
+  // 2FA state
+  const on=!!st.mfa_enabled;
+  $("#mfa-state").textContent=on?"on":"off";
+  $("#mfa-state").classList.toggle("on",on);
+  $("#mfa-off").classList.toggle("hidden",on);
+  $("#mfa-on").classList.toggle("hidden",!on);
+  FACTOR=(st.factors||[]).find(f=>f.status==="verified")||(st.factors||[])[0]||null;
+  // login step-up
+  if(step==="mfa" && FACTOR){ $("#step-mfa").classList.remove("hidden"); $("#mfa-login-code").focus(); }
+  if(step==="pw"){ $("#pw-cur").focus(); }
+}
+
+/* ---- 2FA login step-up ---- */
+$("#mfa-login-go").addEventListener("click", async ()=>{
+  $("#mfa-login-err").textContent="";
+  try{
+    await api("/api/account/mfa/verify",{method:"POST",body:form({factor_id:FACTOR.id,code:$("#mfa-login-code").value.trim()})});
+    location.href="/";
+  }catch(e){ $("#mfa-login-err").textContent=e.message; }
+});
+
+/* ---- change password ---- */
+$("#pw-go").addEventListener("click", async ()=>{
+  $("#pw-err").textContent=""; $("#pw-ok").textContent="";
+  if($("#pw-new").value!==$("#pw-new2").value){ $("#pw-err").textContent="New passwords don't match."; return; }
+  try{
+    await api("/api/account/change-password",{method:"POST",body:form({current_password:$("#pw-cur").value,new_password:$("#pw-new").value})});
+    $("#pw-ok").textContent="Password updated.";
+    $("#pw-cur").value=$("#pw-new").value=$("#pw-new2").value="";
+    $("#forced").classList.add("hidden");
+    if(step==="pw"){ setTimeout(()=>location.href="/",700); }
+  }catch(e){ $("#pw-err").textContent=e.message; }
+});
+
+/* ---- 2FA enroll ---- */
+$("#mfa-enroll").addEventListener("click", async ()=>{
+  try{
+    const r=await api("/api/account/mfa/enroll",{method:"POST",body:form({name:"Authenticator"})});
+    FACTOR={id:r.factor_id};
+    $("#mfa-qr").innerHTML=r.qr_code||"";      // GoTrue returns an inline SVG
+    $("#mfa-secret").textContent=r.secret||"";
+    $("#mfa-off").classList.add("hidden");
+    $("#mfa-enrolling").classList.remove("hidden");
+    $("#mfa-code").focus();
+  }catch(e){ alert(e.message); }
+});
+$("#mfa-verify").addEventListener("click", async ()=>{
+  $("#mfa-err").textContent="";
+  try{
+    await api("/api/account/mfa/verify",{method:"POST",body:form({factor_id:FACTOR.id,code:$("#mfa-code").value.trim()})});
+    load();
+    $("#mfa-enrolling").classList.add("hidden");
+  }catch(e){ $("#mfa-err").textContent=e.message; }
+});
+$("#mfa-disable").addEventListener("click", async ()=>{
+  if(!confirm("Turn off two-factor authentication?"))return;
+  try{ await api("/api/account/mfa/disable",{method:"POST"}); load(); }catch(e){ alert(e.message); }
+});
+
+load();
+</script>
+</body>
+</html>

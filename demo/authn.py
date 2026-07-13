@@ -47,18 +47,17 @@ def _email_bootstrap_admin(profile: dict | None) -> bool:
 
 
 def is_platform_admin(user_id: str, profile: dict | None) -> bool:
-    """Authoritative platform-admin decision: durable registry first, env
-    bootstrap fallback second."""
+    """Authoritative platform-admin decision: durable registry first; the env
+    bootstrap fallback ONLY when the registry is still empty (Finding 10), so once
+    seeded a stray env value can't confer admin."""
     if user_id and supa.is_platform_admin(user_id):
         return True
-    return _email_bootstrap_admin(profile)
+    return _email_bootstrap_admin(profile) and supa.platform_admins_empty()
 
 
 # Back-compat alias for callers that only render an "is this user an admin?" flag.
 def is_admin(profile: dict | None, user_id: str | None = None) -> bool:
-    if user_id and supa.is_platform_admin(user_id):
-        return True
-    return _email_bootstrap_admin(profile)
+    return is_platform_admin(user_id or "", profile)
 
 
 def require_admin(request: Request) -> dict:

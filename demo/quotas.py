@@ -32,6 +32,13 @@ RATE_PER_MIN = int(os.environ.get("XINSERE_RATE_PER_MIN", "300"))
 EGRESS_BYTES_PER_DAY = int(os.environ.get("XINSERE_EGRESS_BYTES_PER_DAY", str(20 * 1024 ** 3)))  # 20 GiB
 EGRESS_FILES_PER_DAY = int(os.environ.get("XINSERE_EGRESS_FILES_PER_DAY", "5000"))
 
+# Per-ORG daily ceilings (Finding 8): egress can't be multiplied across an org's
+# keys, and ingest is bounded so a self-serve connector can't run up unbounded cost.
+EGRESS_BYTES_PER_DAY_ORG = int(os.environ.get("XINSERE_EGRESS_BYTES_PER_DAY_ORG", str(200 * 1024 ** 3)))  # 200 GiB
+EGRESS_FILES_PER_DAY_ORG = int(os.environ.get("XINSERE_EGRESS_FILES_PER_DAY_ORG", "50000"))
+INGEST_BYTES_PER_DAY_ORG = int(os.environ.get("XINSERE_INGEST_BYTES_PER_DAY_ORG", str(500 * 1024 ** 3)))  # 500 GiB
+INGEST_FILES_PER_DAY_ORG = int(os.environ.get("XINSERE_INGEST_FILES_PER_DAY_ORG", "200000"))
+
 
 def _bump(key_id: str, window: str, bucket: str,
           requests: int = 0, nbytes: int = 0, files: int = 0) -> dict:
@@ -84,3 +91,41 @@ def record_and_enforce_egress(ctx: dict, nbytes: int) -> None:
             detail=(f"Daily egress quota exceeded "
                     f"({EGRESS_FILES_PER_DAY} files / {EGRESS_BYTES_PER_DAY} bytes) "
                     f"[egress_quota] — try again tomorrow or contact your admin"))
+    _enforce_org(ctx, egress_bytes=int(nbytes or 0), egress_files=1)
+
+
+def _bump_org(org_id: str, bucket: str, **counts) -> dict:
+    rows = supa._rest("POST", "/rpc/xinsere_bump_org_usage", supa.SERVICE_ROLE_KEY,
+                      json_body={"p_org_id": org_id, "p_bucket": bucket,
+                                 **{f"p_{k}": int(v) for k, v in counts.items()}})
+    return (rows[0] if isinstance(rows, list) and rows else rows) or {}
+
+
+def _enforce_org(ctx: dict, *, egress_bytes: int = 0, egress_files: int = 0,
+                 ingest_bytes: int = 0, ingest_files: int = 0) -> None:
+    """Count this op against the org's daily ceilings; 429 if over. Fail-open on a
+    counter hiccup (per-key limits + the on-chain access log are the backstops)."""
+    org_id = ctx.get("org_id")
+    if not org_id:
+        return
+    bucket = _now().strftime("%Y-%m-%d")
+    try:
+        u = _bump_org(org_id, bucket, egress_bytes=egress_bytes, egress_files=egress_files,
+                      ingest_bytes=ingest_bytes, ingest_files=ingest_files)
+    except Exception as exc:
+        _log.warning("org usage counter unavailable (fail-open) org=%s: %s", org_id, exc)
+        return
+    if int(u.get("egress_bytes", 0)) > EGRESS_BYTES_PER_DAY_ORG or \
+            int(u.get("egress_files", 0)) > EGRESS_FILES_PER_DAY_ORG:
+        raise HTTPException(status_code=429,
+                            detail="Organization daily egress quota exceeded [org_egress_quota]")
+    if int(u.get("ingest_bytes", 0)) > INGEST_BYTES_PER_DAY_ORG or \
+            int(u.get("ingest_files", 0)) > INGEST_FILES_PER_DAY_ORG:
+        raise HTTPException(status_code=429,
+                            detail="Organization daily ingest quota exceeded [org_ingest_quota]")
+
+
+def record_and_enforce_ingest(ctx: dict, nbytes: int) -> None:
+    """Count a stored file (one file, `nbytes`) against the org's per-day ingest
+    ceiling; 429 if over. Call before the pipeline stores an uploaded file."""
+    _enforce_org(ctx, ingest_bytes=int(nbytes or 0), ingest_files=1)

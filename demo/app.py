@@ -108,6 +108,14 @@ def client_js() -> HTMLResponse:
         return HTMLResponse(f.read(), media_type="application/javascript")
 
 
+@app.get("/security", response_class=HTMLResponse)
+def security_page() -> HTMLResponse:
+    """Self-contained account-security page (change password, 2FA, login step-ups).
+    Gated client-side against /api/account/security-status (redirects to sign-in)."""
+    with open(os.path.join(_HERE, "frontend", "security.html"), "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request) -> HTMLResponse:
     """Admin console shell. The page itself checks /api/admin/whoami and shows a
@@ -144,12 +152,36 @@ async def login(request: Request, identifier: str = Form(...), password: str = F
         grant = supa.sign_in(identifier.strip().lower(), password)
     except supa.SupabaseError:
         raise HTTPException(status_code=401, detail="Wrong email or password")
+    user = grant.get("user") or {}
+    email_verified = bool(user.get("email_confirmed_at") or user.get("confirmed_at"))
+    # Email-verification gate (opt-in hard block via env so no one is locked out
+    # before every account is confirmed; the flag is surfaced to the client either way).
+    if not email_verified and os.environ.get("XINSERE_REQUIRE_EMAIL_VERIFIED", "").lower() == "true":
+        raise HTTPException(status_code=403,
+                            detail="Please verify your email before signing in — check your inbox.")
     sess = supa.session_from_grant(grant)
     request.session["sb"] = sess
     supa.ensure_root(sess["access_token"], sess["user_id"])
     prof = supa.get_profile(sess["access_token"], sess["user_id"]) or {"id": sess["user_id"]}
     _reconcile_pending(sess["user_id"], (prof or {}).get("email") or identifier.strip().lower())
-    return {"ok": True, "user": _public(prof)}
+    # Security posture for the client: forced rotation, 2FA step-up, email status.
+    must_change, mfa_factor = False, None
+    try:
+        must_change = bool(supa.get_account_security(
+            supa.SERVICE_ROLE_KEY, sess["user_id"]).get("must_change_password"))
+    except Exception:
+        pass
+    try:
+        verified = [f for f in supa.mfa_list_factors(sess["access_token"])
+                    if f.get("status") == "verified"]
+        mfa_factor = verified[0].get("id") if verified else None
+    except Exception:
+        pass
+    return {"ok": True, "user": _public(prof),
+            "must_change_password": must_change,
+            "email_verified": email_verified,
+            "mfa_required": bool(mfa_factor),
+            "mfa_factor_id": mfa_factor}
 
 
 @app.post("/api/signup")
@@ -631,6 +663,33 @@ async def purge_expired(request: Request):
     return {"ok": True, "purged": erased, "batch_limit": limit, "more_likely": len(rows) == limit}
 
 
+@app.get("/api/anchor-access-log")
+async def anchor_access_log(request: Request):
+    """Daily on-chain Merkle anchor of the access log (Finding 6) — makes the
+    'tamper-evident' claim real: once a day's root is anchored, no row from that
+    day can be altered/deleted without breaking the immutable on-chain root.
+
+    Auth: same cron/manual-secret gate as purge-expired. A daily Vercel cron calls
+    it; anchors yesterday (UTC) by default, or ?day=YYYY-MM-DD for a backfill."""
+    cron_secret = os.environ.get("CRON_SECRET")
+    manual_secret = os.environ.get("XINSERE_PURGE_SECRET")
+    authed = ((cron_secret and request.headers.get("authorization") == f"Bearer {cron_secret}")
+              or (manual_secret and request.headers.get("x-purge-secret") == manual_secret))
+    if not authed:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    svc = supa.SERVICE_ROLE_KEY
+    if not svc:
+        raise HTTPException(status_code=501, detail="Service role key not configured")
+    day = request.query_params.get("day") or \
+        (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    import access_log
+    try:
+        return {"ok": True, **access_log.anchor_day(svc, day)}
+    except Exception as exc:
+        logging.getLogger("xinsere.app").error("access-log anchor failed day=%s: %s", day, exc)
+        raise HTTPException(status_code=502, detail=f"Anchor failed for {day} — retry")
+
+
 @app.post("/api/unshare")
 async def unshare(request: Request, node_id: str = Form(...), grantee: str = Form(...)):
     """Revoke a share: on-chain revocation per file under the node, then remove
@@ -887,10 +946,12 @@ async def download(request: Request, node_id: str):
 # dependency one-way at import time.
 import v1 as _v1            # noqa: E402
 import admin as _admin      # noqa: E402
+import account as _account  # noqa: E402
 import docs_site as _docs   # noqa: E402
 
 app.include_router(_v1.router)
 app.include_router(_admin.router)
+app.include_router(_account.router)
 app.include_router(_docs.router)
 
 

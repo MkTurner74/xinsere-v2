@@ -204,6 +204,7 @@ async def store_file(ctx: dict = Depends(api_key_auth),
     target = supa.ensure_path(_svc(), path, root, uid) if path else root
     name = file.filename or "file"
     ctype = file.content_type or "application/octet-stream"
+    quotas.record_and_enforce_ingest(ctx, len(content))  # per-org daily ingest ceiling
     res = get_pipeline().store(content, ctype, label=name)
     node = supa.insert_file(_svc(), name, target, uid, file_id=res.file_id,
                             sha256=res.file_sha256, size=len(content),
@@ -239,6 +240,7 @@ def finalize_upload(ctx: dict = Depends(api_key_auth),
     root = supa.ensure_root(_svc(), uid)
     target = supa.ensure_path(_svc(), path, root, uid) if path else root
     content = read_staged(key)
+    quotas.record_and_enforce_ingest(ctx, len(content))  # per-org daily ingest ceiling
     res = get_pipeline().store(content, content_type, label=name)
     node = supa.insert_file(_svc(), name, target, uid, file_id=res.file_id,
                             sha256=res.file_sha256, size=len(content),

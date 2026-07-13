@@ -88,6 +88,93 @@ def session_from_grant(grant: dict) -> dict:
     }
 
 
+# --- Account security (password + MFA) via GoTrue ---------------------------
+# These act on the authenticated USER (their access token); the gateway apikey is
+# the anon key, the Authorization bearer is the user's token.
+
+def _gotrue(method: str, path: str, token: str, *, body: dict | None = None,
+            params: dict | None = None) -> Any:
+    r = requests.request(
+        method, f"{SUPABASE_URL}/auth/v1{path}",
+        headers={"apikey": ANON_KEY, "Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"},
+        params=params or {}, json=body, timeout=_TIMEOUT)
+    if r.status_code >= 400:
+        try:
+            j = r.json()
+            msg = j.get("msg") or j.get("error_description") or j.get("error") or r.text
+        except Exception:
+            msg = r.text
+        raise SupabaseError(r.status_code, msg)
+    return r.json() if r.content else None
+
+
+def get_auth_user(access_token: str) -> dict:
+    """The GoTrue auth user (has email, email_confirmed_at, factors, ...)."""
+    return _gotrue("GET", "/user", access_token) or {}
+
+
+def update_password(access_token: str, new_password: str) -> dict:
+    """Self-serve password change (GoTrue PUT /user). Requires the user's token."""
+    return _gotrue("PUT", "/user", access_token, body={"password": new_password})
+
+
+def request_password_reset(email: str) -> None:
+    """Send a password-reset email (GoTrue /recover). Public; needs SMTP configured
+    in Supabase. Never reveals whether the address exists (caller returns 200 always)."""
+    r = requests.post(
+        f"{SUPABASE_URL}/auth/v1/recover",
+        headers={"apikey": ANON_KEY, "Content-Type": "application/json"},
+        json={"email": email.strip().lower()}, timeout=_TIMEOUT)
+    if r.status_code >= 400 and r.status_code != 422:  # 422 = unknown email; stay quiet
+        raise SupabaseError(r.status_code, r.text)
+
+
+def mfa_list_factors(access_token: str) -> list[dict]:
+    data = _gotrue("GET", "/factors", access_token) or {}
+    # GoTrue returns {"all": [...], "totp": [...]} on newer versions; tolerate both.
+    if isinstance(data, dict):
+        return data.get("all") or data.get("totp") or []
+    return data or []
+
+
+def mfa_enroll(access_token: str, friendly_name: str = "Authenticator") -> dict:
+    """Begin TOTP enrollment. Returns {id, type, totp:{qr_code(svg), secret, uri}}."""
+    return _gotrue("POST", "/factors", access_token,
+                   body={"factor_type": "totp", "friendly_name": friendly_name})
+
+
+def mfa_challenge(access_token: str, factor_id: str) -> dict:
+    """Create a challenge for a factor. Returns {id: challenge_id, ...}."""
+    return _gotrue("POST", f"/factors/{factor_id}/challenge", access_token)
+
+
+def mfa_verify(access_token: str, factor_id: str, challenge_id: str, code: str) -> dict:
+    """Verify a TOTP code against a challenge; on success GoTrue returns AAL2 tokens."""
+    return _gotrue("POST", f"/factors/{factor_id}/verify", access_token,
+                   body={"challenge_id": challenge_id, "code": code})
+
+
+def mfa_unenroll(access_token: str, factor_id: str) -> dict:
+    return _gotrue("DELETE", f"/factors/{factor_id}", access_token)
+
+
+# --- account_security app state (migration 0013, service-role) --------------
+
+def get_account_security(token: str, user_id: str) -> dict:
+    rows = _rest("GET", "/account_security", token,
+                 params={"user_id": f"eq.{user_id}", "select": "*", "limit": 1})
+    return rows[0] if rows else {"user_id": user_id, "must_change_password": False,
+                                 "mfa_enabled": False}
+
+
+def set_account_security(token: str, user_id: str, fields: dict) -> None:
+    """Upsert the user's security state (service-role). Idempotent on user_id."""
+    _rest("POST", "/account_security", token,
+          prefer="return=minimal,resolution=merge-duplicates",
+          json_body={"user_id": user_id, **fields, "updated_at": _now_iso()})
+
+
 # --- Data (PostgREST, RLS-scoped by the user's token) -----------------------
 
 def _rest(method: str, path: str, token: str, *, params: dict | None = None,
@@ -185,6 +272,39 @@ def is_platform_admin(user_id: str) -> bool:
     except SupabaseError:
         return False
     return bool(rows)
+
+
+def list_platform_admins(token: str) -> list[dict]:
+    """Super-Admins (Xinsere staff) with their profile info, for the admin console."""
+    return _rest("GET", "/platform_admins", token,
+                 params={"select": "user_id,created_at,profiles(id,email,name)",
+                         "order": "created_at.asc"}) or []
+
+
+def add_platform_admin(token: str, user_id: str, added_by: str | None) -> None:
+    _rest("POST", "/platform_admins", token,
+          prefer="return=minimal,resolution=merge-duplicates",
+          json_body={"user_id": user_id, "added_by": added_by})
+
+
+def remove_platform_admin(token: str, user_id: str) -> None:
+    _rest("DELETE", "/platform_admins", token, params={"user_id": f"eq.{user_id}"})
+
+
+def platform_admins_empty() -> bool:
+    """True only if the platform_admins registry has NO rows (genuine first-boot).
+    Gates the env-email bootstrap fallback so a stray XINSERE_ADMIN_EMAILS value
+    can't shadow the durable registry once it's seeded (Finding 10). If it can't be
+    checked, returns False in production (don't trust the fallback blindly) but True
+    in local dev (bootstrap convenience)."""
+    if not SERVICE_ROLE_KEY:
+        return os.environ.get("XINSERE_BACKEND", "local").lower() != "aws"
+    try:
+        rows = _rest("GET", "/platform_admins", SERVICE_ROLE_KEY,
+                     params={"select": "user_id", "limit": 1})
+    except SupabaseError:
+        return False
+    return not rows
 
 
 # pending share invitations (external-email sharing) ----------------------

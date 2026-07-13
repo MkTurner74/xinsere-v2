@@ -86,6 +86,16 @@ def _tenant_salt() -> str:
             return salt
     except Exception:
         pass
+    # Finding 7: in production NEVER fall back to the public dev salt — grantee
+    # privacy (anti-inference) and cross-service verify both depend on the real
+    # salt, and grants written under two different salts don't verify against each
+    # other. Fail CLOSED at sign/verify time (safer than bricking boot on a
+    # transient Secrets Manager hiccup: the app still serves non-chain routes).
+    if os.environ.get("XINSERE_BACKEND", "local").lower() == "aws":
+        raise RuntimeError(
+            "tenant salt unavailable in production — refusing to hash grantees with the "
+            "public dev salt (on-chain grantee privacy). Set XINSERE_TENANT_SALT or "
+            "hmac_party_id_salt in the tenant secret.")
     return "dev-tenant-salt-change-me"  # local-only fallback
 
 

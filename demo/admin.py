@@ -169,8 +169,79 @@ def revoke_key(key_id: str, s: dict = Depends(authn.require_admin)):
     return {"ok": True}
 
 
+# --- Super-Admins (platform_admins — Xinsere staff only) --------------------------
+
+@router.get("/platform-admins")
+def list_super_admins(s: dict = Depends(authn.require_admin)):
+    """The Super-Admin tier: Xinsere staff who operate the platform. Distinct from
+    org (Tenant) Admins, who administer a single customer org."""
+    rows = supa.list_platform_admins(supa.SERVICE_ROLE_KEY)
+    out = [{"user_id": r["user_id"],
+            "email": (r.get("profiles") or {}).get("email"),
+            "name": (r.get("profiles") or {}).get("name"),
+            "created_at": r.get("created_at")} for r in rows]
+    return {"super_admins": out}
+
+
+@router.post("/platform-admins")
+def add_super_admin(s: dict = Depends(authn.require_admin), email: str = Form(...)):
+    """Promote an existing user to Super-Admin by email. The account must already
+    exist (invite them first) — we never mint an admin from a bare email."""
+    email = email.strip().lower()
+    prof = orgs.get_profile_by_email(email)
+    if not prof:
+        raise HTTPException(status_code=404,
+                            detail="No account with that email — invite the user first, then promote them.")
+    supa.add_platform_admin(supa.SERVICE_ROLE_KEY, prof["id"], s["user_id"])
+    return {"ok": True, "user_id": prof["id"], "email": email, "name": prof.get("name")}
+
+
+@router.post("/platform-admins/{user_id}/remove")
+def remove_super_admin(user_id: str, s: dict = Depends(authn.require_admin)):
+    """Demote a Super-Admin. Guard against removing the last one (lockout)."""
+    current = supa.list_platform_admins(supa.SERVICE_ROLE_KEY)
+    if len(current) <= 1 and any(r["user_id"] == user_id for r in current):
+        raise HTTPException(status_code=400,
+                            detail="Can't remove the last Super-Admin — promote another first.")
+    if user_id == s["user_id"]:
+        raise HTTPException(status_code=400, detail="You can't remove your own Super-Admin access here.")
+    supa.remove_platform_admin(supa.SERVICE_ROLE_KEY, user_id)
+    return {"ok": True}
+
+
+# --- force a user password change -------------------------------------------------
+
+@router.post("/users/{user_id}/force-password-change")
+def force_password_change(user_id: str, s: dict = Depends(authn.require_admin)):
+    """Flag a user to change their password on next sign-in (e.g. after a shared or
+    compromised credential). Cleared automatically when they change it."""
+    supa.set_account_security(supa.SERVICE_ROLE_KEY, user_id, {"must_change_password": True})
+    return {"ok": True}
+
+
+@router.post("/users/{user_id}/clear-force-password-change")
+def clear_force_password_change(user_id: str, s: dict = Depends(authn.require_admin)):
+    supa.set_account_security(supa.SERVICE_ROLE_KEY, user_id, {"must_change_password": False})
+    return {"ok": True}
+
+
 # --- user directory ---------------------------------------------------------------
 
 @router.get("/users")
 def users(s: dict = Depends(authn.require_admin)):
-    return {"users": orgs.list_all_users()}
+    """All users + their org memberships + security state (2FA, forced-change) so the
+    console can show role and account posture at a glance."""
+    users = orgs.list_all_users()
+    try:
+        sec = {r["user_id"]: r for r in (supa._rest(
+            "GET", "/account_security", supa.SERVICE_ROLE_KEY,
+            params={"select": "user_id,must_change_password,mfa_enabled"}) or [])}
+    except Exception:
+        sec = {}
+    admins = {r["user_id"] for r in supa.list_platform_admins(supa.SERVICE_ROLE_KEY)}
+    for u in users:
+        srow = sec.get(u["id"], {})
+        u["mfa_enabled"] = bool(srow.get("mfa_enabled"))
+        u["must_change_password"] = bool(srow.get("must_change_password"))
+        u["super_admin"] = u["id"] in admins
+    return {"users": users}
