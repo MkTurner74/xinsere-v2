@@ -76,6 +76,7 @@ def build_daily_root(entries: list[dict]) -> tuple[str, int]:
 _OCSF_ACTIVITY = {
     "file.read": 2,           # Read
     "file.download_plan": 2,  # Read (keys handed out)
+    "file.import": 1,         # Create (cloud-to-cloud migration ingest)
     "file.delete": 4,         # Delete
     "grant": 6,               # (Access) — mapped to a permission change
     "revoke": 6,

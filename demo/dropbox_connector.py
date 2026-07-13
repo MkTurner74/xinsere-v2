@@ -307,10 +307,19 @@ class MigrationRunner:
         import supa  # type: ignore
         import os
 
+        import access_log  # type: ignore
+
         pipeline = build_pipeline_from_env()
         token = os.environ["XINSERE_SUPABASE_SERVICE_KEY"]
         owner = os.environ["XINSERE_MIGRATION_OWNER"]  # Mark's Xinsere user id
         root_node = os.environ["XINSERE_MIGRATION_ROOT"]  # target root folder node id
+        # Audit identity: attribute this migration to the INITIATING USER (Mark), so the
+        # tamper-evident access log — and its daily on-chain Merkle anchor — carry real,
+        # person-attributed provenance for every imported file (not an anonymous service).
+        # This is what makes the blockchain audit trail realistic. Defaults to the owner.
+        self._actor = os.environ.get("XINSERE_MIGRATION_ACTOR", owner)
+        self._org = os.environ.get("XINSERE_MIGRATION_ORG") or None
+        self._access_log = access_log
 
         # RESUME: scan what's already under the import root so a re-run (after a crash,
         # a 500 wave, or a --limit batch) skips migrated files instead of duplicating
@@ -519,11 +528,23 @@ class MigrationRunner:
             rel = f.path.lstrip("/")
             rel_dir, name = rel.rsplit("/", 1) if "/" in rel else ("", rel)
             parent = self._resolve_parent(supa, token, rel_dir, root_node, owner)
-            supa.insert_file(token, name, parent, owner, file_id=res.file_id,
-                             sha256=res.file_sha256, size=f.size,
-                             frags=res.fragment_count, content_type=_content_type(f.path))
+            node = supa.insert_file(token, name, parent, owner, file_id=res.file_id,
+                                    sha256=res.file_sha256, size=f.size,
+                                    frags=res.fragment_count, content_type=_content_type(f.path))
             with self._rep_lock:
                 rep.verified += 1
+            # Person-attributed, tamper-evident audit record (feeds the daily on-chain
+            # Merkle anchor). Best-effort/fail-open — audit logging never blocks ingest.
+            actor = getattr(self, "_actor", None)
+            if actor:
+                try:
+                    self._access_log.record(
+                        org_id=getattr(self, "_org", None), actor_id=actor,
+                        actor_type="user", action="file.import", file_id=res.file_id,
+                        node_id=node.get("id"), bytes=len(data),
+                        meta={"source": "dropbox", "path": f.path})
+                except Exception:  # noqa: BLE001
+                    pass
             print(f"  OK  {f.path}  ({len(data):,} B)", file=sys.stderr, flush=True)
         except Exception as e:  # noqa: BLE001 -- per-file isolation; run continues
             with self._rep_lock:
