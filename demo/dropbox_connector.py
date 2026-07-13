@@ -210,13 +210,13 @@ class MigrationRunner:
 
     def run(self, folder: str, *, limit: int | None, full: bool) -> Report:
         rep = Report()
-        files, small = self.enumerate(folder)
-        rep.sourced = len(files)
-        print(f"Manifest: {len(files)} files, {small} under 128KB "
-              f"({100 * small / max(len(files), 1):.0f}%), "
-              f"{sum(f.size for f in files) / 1e9:.2f} GB", file=sys.stderr)
 
         if not full:
+            files, small = self.enumerate(folder)
+            rep.sourced = len(files)
+            print(f"Manifest: {len(files)} files, {small} under 128KB "
+                  f"({100 * small / max(len(files), 1):.0f}%), "
+                  f"{sum(f.size for f in files) / 1e9:.2f} GB", file=sys.stderr, flush=True)
             return rep  # enumerate-only: manifest built, nothing moved
 
         # Lazy imports: the store path needs the pipeline env (KMS/Dynamo/S3) and
@@ -230,33 +230,44 @@ class MigrationRunner:
         token = os.environ["XINSERE_SUPABASE_SERVICE_KEY"]
         owner = os.environ["XINSERE_MIGRATION_OWNER"]  # Mark's Xinsere user id
         root_node = os.environ["XINSERE_MIGRATION_ROOT"]  # target root folder node id
+        print("pipeline + supabase wired; streaming files...", file=sys.stderr, flush=True)
 
-        for f in files[: limit or len(files)]:
-            try:
-                data = self.client.download(f.path)
-                rep.bytes_in += len(data)
-                # L3 reference cross-check (independent of our own hashing)
-                if dropbox_content_hash(data) != f.content_hash:
-                    raise ValueError("Dropbox content_hash mismatch on download")
-                res = pipeline.store(data, _content_type(f.path), label=f.path.rsplit("/", 1)[-1])
-                rep.stored += 1
-                # Recreate the tree: /Founders/sub/x.pdf -> folders under root_node
-                rel = f.path.lstrip("/")
-                rel_dir, name = (rel.rsplit("/", 1) + [""])[:2] if "/" in rel else ("", rel)
-                parent = supa.ensure_path(token, rel_dir, root_node, owner) if rel_dir else root_node
-                supa.insert_file(token, name, parent, owner, file_id=res.file_id,
-                                 sha256=res.file_sha256, size=f.size,
-                                 frags=res.fragment_count, content_type=_content_type(f.path))
-                # L2: reassemble + re-hash through the real retrieve path
-                got = pipeline.retrieve(res.file_id)
-                if got.file_sha256 != res.file_sha256:
-                    raise ValueError("L2 reassembly SHA-256 mismatch")
-                rep.verified += 1
-                print(f"  OK  {f.path}  ({len(data)} B)", file=sys.stderr)
-            except Exception as e:  # noqa: BLE001 -- per-file isolation; run continues
-                rep.failed.append((f.path, str(e)))
-                print(f"  FAIL {f.path}: {e}", file=sys.stderr)
+        # STREAM: process each file as we walk (start work on file 1 immediately;
+        # never block on enumerating the whole tree first — matters under Dropbox's
+        # 500 waves and makes limited test runs fast).
+        for f in self.client.walk(folder):
+            rep.sourced += 1
+            self._ingest_one(f, pipeline, supa, token, owner, root_node, rep)
+            if limit and rep.sourced >= limit:
+                break
         return rep
+
+    def _ingest_one(self, f: DbxFile, pipeline, supa, token, owner, root_node, rep: Report) -> None:
+        import os  # noqa: F401 (kept local; run() owns the imports)
+        try:
+            data = self.client.download(f.path)
+            rep.bytes_in += len(data)
+            # L3 reference cross-check (independent of our own hashing)
+            if dropbox_content_hash(data) != f.content_hash:
+                raise ValueError("Dropbox content_hash mismatch on download")
+            res = pipeline.store(data, _content_type(f.path), label=f.path.rsplit("/", 1)[-1])
+            rep.stored += 1
+            # Recreate the tree: /Founders/sub/x.pdf -> folders under root_node
+            rel = f.path.lstrip("/")
+            rel_dir, name = rel.rsplit("/", 1) if "/" in rel else ("", rel)
+            parent = supa.ensure_path(token, rel_dir, root_node, owner) if rel_dir else root_node
+            supa.insert_file(token, name, parent, owner, file_id=res.file_id,
+                             sha256=res.file_sha256, size=f.size,
+                             frags=res.fragment_count, content_type=_content_type(f.path))
+            # L2: reassemble + re-hash through the real retrieve path
+            got = pipeline.retrieve(res.file_id)
+            if got.file_sha256 != res.file_sha256:
+                raise ValueError("L2 reassembly SHA-256 mismatch")
+            rep.verified += 1
+            print(f"  OK  {f.path}  ({len(data):,} B)", file=sys.stderr, flush=True)
+        except Exception as e:  # noqa: BLE001 -- per-file isolation; run continues
+            rep.failed.append((f.path, str(e)))
+            print(f"  FAIL {f.path}: {e}", file=sys.stderr, flush=True)
 
 
 def _content_type(path: str) -> str:
