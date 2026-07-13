@@ -711,6 +711,22 @@ def _has_access(file_id: str, uid: str) -> tuple[bool, str]:
     return False, "none"
 
 
+def _authorize(node: dict, uid: str) -> tuple[bool, str]:
+    """Access decision for a file node. Brand promise: EVERYONE is verified on-chain —
+    the owner is NOT bypassed; they hold an on-chain self-grant like any grantee. The
+    owner is only ever let through as a logged FALLBACK if no grant has been anchored yet
+    (e.g. a fresh upload before its grant lands), so an owner is never locked out of their
+    own file, but the default, expected path is an on-chain verify even for them."""
+    allowed, source = _has_access(node["file_id"], uid)
+    if allowed:
+        return True, source
+    if node["owner"] == uid:
+        logging.getLogger("xinsere.app").info(
+            "owner on-chain grant missing — allowing via fallback file=%s", node["file_id"])
+        return True, "owner-fallback"
+    return False, "none"
+
+
 @app.get("/api/verify/{node_id}")
 async def verify_access(request: Request, node_id: str):
     s = _session(request)
@@ -718,9 +734,7 @@ async def verify_access(request: Request, node_id: str):
     node = supa.get_node(token, node_id)
     if not node or node["type"] != "file":
         raise HTTPException(status_code=404, detail="File not found")
-    if node["owner"] == uid:
-        return {"allowed": True, "source": "owner", "wallet": CHAIN.wallet}
-    allowed, source = _has_access(node["file_id"], uid)
+    allowed, source = _authorize(node, uid)  # owner verified on-chain too (no bypass)
     import chain as _chain
     return {"allowed": allowed, "source": source, "contract": _chain.CONTRACT}
 
@@ -739,10 +753,9 @@ async def download_plan(request: Request, node_id: str):
     node = supa.get_node(token, node_id)
     if not node or node["type"] != "file":
         raise HTTPException(status_code=404, detail="File not found")
-    if node["owner"] != uid:
-        allowed, _ = _has_access(node["file_id"], uid)
-        if not allowed:
-            raise HTTPException(status_code=403, detail="No active on-chain grant for you")
+    allowed, _ = _authorize(node, uid)   # owner verified on-chain too (no bypass)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="No active on-chain grant for you")
     try:
         # 30 min TTL: a retried/slow transfer must not see its fragment URLs
         # expire mid-download (an expired URL 403s on the Range resume).
@@ -786,11 +799,10 @@ async def download(request: Request, node_id: str):
     node = supa.get_node(token, node_id)
     if not node or node["type"] != "file":
         raise HTTPException(status_code=404, detail="File not found")
-    # Authoritative permission check reads the BLOCKCHAIN (owner bypass).
-    if node["owner"] != uid:
-        allowed, _ = _has_access(node["file_id"], uid)
-        if not allowed:
-            raise HTTPException(status_code=403, detail="No active on-chain grant for you")
+    # Authoritative permission check reads the BLOCKCHAIN for EVERYONE (owner included).
+    allowed, _ = _authorize(node, uid)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="No active on-chain grant for you")
     try:
         r = get_pipeline().retrieve(node["file_id"])
     except XinsereIntegrityError as exc:

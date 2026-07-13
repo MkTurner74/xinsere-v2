@@ -88,17 +88,25 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
         root = merkle.root(leaves)
         root_hex = merkle.hx(root)
         try:
-            supa.insert_permission_batch(token, root_hex, len(chunk), source, scope)
+            batch = supa.insert_permission_batch(token, root_hex, len(chunk), source, scope)
+            batch_id = batch.get("id")
 
-            # 1 tx, flat gas — anchor the root.
-            tx = chain_client.grant_batch(root, len(chunk))
-            supa.set_batch_status(token, root_hex, "pending", tx_hash=tx)
+            # 1 tx, flat gas — anchor the root. If a prior partial run already anchored
+            # this exact root (crash after the tx, before caching proofs), DON'T re-anchor:
+            # the contract reverts on a duplicate root. Resume by (re)caching proofs +
+            # read-back instead — makes the whole pass idempotent/resumable.
+            if chain_client.root_anchored(root) == 0:
+                tx = chain_client.grant_batch(root, len(chunk))
+                supa.set_batch_status(token, root_hex, "pending", tx_hash=tx)
+            else:
+                tx = batch.get("tx_hash") or "already-anchored"
 
             # Store the proof cache (rebuildable, but cached for the hot path).
             rows = []
             for idx, g in enumerate(chunk):
                 pf = merkle.proof(leaves, idx)
                 rows.append({
+                    "batch_id": batch_id,
                     "merkle_root": root_hex, "file_id": g.file_id,
                     "grantee_id": g.grantee_id, "leaf": merkle.hx(leaves[idx]),
                     "leaf_index": idx, "proof": [merkle.hx(p) for p in pf],

@@ -203,7 +203,8 @@ class DropboxClient:
                 path_lower = (e.get("path_lower") or "").strip("/")
                 if not path_lower:
                     continue  # not mounted at a resolvable path — skip
-                if path_lower == under_l or path_lower.startswith(under_l + "/"):
+                # under_l == "" (whole team root) matches every shared folder.
+                if not under_l or path_lower == under_l or path_lower.startswith(under_l + "/"):
                     acls[path_lower] = self._folder_members(e["shared_folder_id"])
             cur = r.get("cursor")
             if not cur:
@@ -459,7 +460,11 @@ class MigrationRunner:
         # Walk the migrated subtree; attach each file to the grantees covering its path.
         grants: list = []            # batch_grant.Grant (internal, on-chain)
         stubs: dict[str, set[str]] = {}   # node_id -> {external emails}
-        counts = {"files": 0, "internal_pairs": 0, "external_pairs": 0}
+        counts = {"files": 0, "owner_grants": 0, "internal_pairs": 0, "external_pairs": 0}
+        # Brand promise: EVERY file's access is verified on-chain — the owner included, not
+        # bypassed. So we self-grant the owner on every file (batched, ~flat gas), and the
+        # download gate checks the chain for owners too. Toggle off with XINSERE_GRANT_OWNER=0.
+        grant_owner = os.environ.get("XINSERE_GRANT_OWNER", "1") != "0"
 
         def covering_emails(relpath_lower: str) -> set[str]:
             out: set[str] = set()
@@ -475,6 +480,9 @@ class MigrationRunner:
                     walk(n["id"], child_rel)
                 elif n["type"] == "file" and n.get("file_id"):
                     counts["files"] += 1
+                    if grant_owner:
+                        grants.append(batch_grant.Grant(n["file_id"], owner))  # owner on-chain too
+                        counts["owner_grants"] += 1
                     for em in covering_emails(relpath.lower()):
                         uid = resolved.get(em)
                         if uid:
