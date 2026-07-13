@@ -25,6 +25,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import config
 import share_grants
+import share_quota
 import supa
 from authn import session as _session, is_platform_admin
 from chain import CHAIN
@@ -168,6 +169,27 @@ async def signup(request: Request):
 async def logout(request: Request):
     request.session.clear()
     return {"ok": True}
+
+
+def _wallet_guard() -> None:
+    """Low-balance pre-flight for the shared gas wallet (Finding 2 alarm). If the
+    signer clearly can't afford a batch-anchor tx, fail fast with a clear 503 (and
+    a log line ops can alarm on) instead of letting the on-chain send die mid-share.
+    Best-effort: a status-check error is NOT fatal (fail-open) — the anchor itself
+    surfaces any real problem — but a KNOWN-empty wallet is rejected up front."""
+    try:
+        st = CHAIN.status()
+    except Exception as exc:
+        logging.getLogger("xinsere.app").warning("wallet status check failed (fail-open): %s", exc)
+        return
+    if not st.get("wallet_ok", True):
+        logging.getLogger("xinsere.app").error(
+            "GAS WALLET LOW balance_pol=%s est_grants_remaining=%s — shares blocked until top-up",
+            st.get("balance_pol"), st.get("est_grants_remaining"))
+        raise HTTPException(
+            status_code=503,
+            detail="The grant wallet is low on gas — sharing is paused until it's topped up. "
+                   "Try again shortly. [wallet_low]")
 
 
 def _grant_inherited(token: str, node_id: str, file_id: str) -> int:
@@ -683,6 +705,11 @@ async def share(request: Request, node_id: str = Form(...),
         raise HTTPException(status_code=400, detail="Pick a person or enter an email")
     if grantee == uid or supa.get_profile(token, grantee) is None:
         raise HTTPException(status_code=400, detail="Unknown recipient")
+
+    # Finding 2 defense-in-depth before spending gas: cap the per-user share rate
+    # (stops a drain loop) and refuse up front if the shared wallet is depleted.
+    share_quota.enforce_share_rate(uid)
+    _wallet_guard()
 
     # Batched on-chain grant (Finding 2): one flat-gas Merkle root per <=1,000 files
     # instead of one tx per file — a folder share can no longer drain the shared gas

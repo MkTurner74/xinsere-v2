@@ -22,9 +22,20 @@ def _load_supabase() -> None:
     sm = boto3.client("secretsmanager", region_name=region)
     s = json.loads(sm.get_secret_value(SecretId="xinsere/supabase/service-role")["SecretString"])
     os.environ["SUPABASE_URL"] = s["url"]
-    os.environ["SUPABASE_ANON_KEY"] = s["service_role_key"]
     os.environ["SUPABASE_SERVICE_ROLE_KEY"] = s["service_role_key"]
     os.environ["XINSERE_SUPABASE_SERVICE_KEY"] = s["service_role_key"]
+    # Do NOT alias the "anon" key to the service-role key (audit finding 11): that
+    # silently makes the anon plane god-mode in this process. The gateway apikey
+    # header just needs a VALID project key, and the anon key is public/safe — use
+    # the REAL anon key (from the secret, else a task-def env). Only if neither is
+    # available do we fall back to the service key, and we say so loudly.
+    anon = s.get("anon_key") or os.environ.get("SUPABASE_ANON_KEY")
+    if not anon:
+        anon = s["service_role_key"]
+        print("WARN: no anon key available — SUPABASE_ANON_KEY falls back to the "
+              "service-role key. Add `anon_key` to the xinsere/supabase/service-role "
+              "secret (or set SUPABASE_ANON_KEY in the task def) to remove this.", flush=True)
+    os.environ["SUPABASE_ANON_KEY"] = anon
 
 
 def main() -> None:
