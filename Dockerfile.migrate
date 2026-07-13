@@ -1,0 +1,15 @@
+# Cloud-to-cloud Dropbox -> Xinsere migration worker (Fargate).
+# Minimal: the content-ingest path needs only boto3 + requests + cryptography
+# (no web3 / fastapi). Runs the connector from /app/demo so its relative
+# "../lambdas/pipeline" path resolves.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app/demo
+
+RUN pip install --no-cache-dir "boto3>=1.34" "requests>=2.31" "cryptography>=42.0"
+
+COPY demo/ /app/demo/
+COPY lambdas/ /app/lambdas/
+
+CMD ["python", "fargate_entrypoint.py"]

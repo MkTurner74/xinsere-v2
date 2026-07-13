@@ -6,3 +6,6 @@
 .git
 **/.env
 contracts
+**/.pytest_cache
+demo/frontend
+lambdas/blockchain
