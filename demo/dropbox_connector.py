@@ -147,21 +147,34 @@ class DropboxClient:
         return _resilient("POST", url, headers=self._headers(), data=json.dumps(body)).json()
 
     def walk(self, path: str) -> Iterator[DbxFile]:
-        """Recursively yield every file under `path` (folders skipped), applying
-        the top-level personal exclusions."""
-        r = self._post(f"{API}/files/list_folder", {"path": path, "recursive": True, "limit": 2000})
-        while True:
-            for e in r["entries"]:
-                if e[".tag"] != "file":
-                    continue
-                disp = e["path_display"]
-                top = disp.strip("/").split("/", 1)[0]
-                if top in EXCLUDE_TOP:
-                    continue
-                yield DbxFile(disp, e["id"], e["size"], e["content_hash"])
-            if not r.get("has_more"):
-                break
-            r = self._post(f"{API}/files/list_folder/continue", {"cursor": r["cursor"]})
+        """Yield every file under `path`, descending folder-by-folder with
+        NON-recursive list_folder calls.
+
+        Recursive team-namespace listing returns erratic tiny pages and stalls on
+        Dropbox's sustained 500 waves — the documented blocker for full-folder runs.
+        Per-folder listing returns reliable bulk pages and isolates a flaky folder to
+        itself (a 500 wave on one subfolder is retried by _resilient without wedging
+        the whole walk). Personal top-level folders are pruned as we descend. Still
+        streams: files are yielded as each folder page arrives, so ingest starts
+        immediately and never waits on a full tree enumeration."""
+        stack = [path]
+        while stack:
+            folder = stack.pop()
+            seg = folder.strip("/").split("/", 1)[0] if folder.strip("/") else ""
+            if seg in EXCLUDE_TOP:
+                continue  # personal backups — never enumerate or migrate
+            r = self._post(f"{API}/files/list_folder",
+                           {"path": folder, "recursive": False, "limit": 2000})
+            while True:
+                for e in r["entries"]:
+                    tag = e[".tag"]
+                    if tag == "folder":
+                        stack.append(e["path_display"])   # descend later
+                    elif tag == "file":
+                        yield DbxFile(e["path_display"], e["id"], e["size"], e["content_hash"])
+                if not r.get("has_more"):
+                    break
+                r = self._post(f"{API}/files/list_folder/continue", {"cursor": r["cursor"]})
 
     def download(self, path: str) -> bytes:
         """Stream a file's bytes straight from Dropbox to this worker."""
@@ -222,6 +235,7 @@ class Report:
     sourced: int = 0
     stored: int = 0
     verified: int = 0
+    skipped: int = 0  # already migrated on a prior run (resume)
     failed: list[tuple[str, str]] = field(default_factory=list)  # (path, reason)
     bytes_in: int = 0
     started: float = field(default_factory=time.time)
@@ -233,6 +247,7 @@ class Report:
             "sourced": self.sourced,
             "stored": self.stored,
             "verified": self.verified,
+            "skipped": self.skipped,
             "failed": self.failed,
             "bytes_in": self.bytes_in,
             "gb_in": round(self.bytes_in / 1e9, 3),
@@ -279,17 +294,44 @@ class MigrationRunner:
         token = os.environ["XINSERE_SUPABASE_SERVICE_KEY"]
         owner = os.environ["XINSERE_MIGRATION_OWNER"]  # Mark's Xinsere user id
         root_node = os.environ["XINSERE_MIGRATION_ROOT"]  # target root folder node id
-        print("pipeline + supabase wired; streaming files...", file=sys.stderr, flush=True)
+
+        # RESUME: scan what's already under the import root so a re-run (after a crash,
+        # a 500 wave, or a --limit batch) skips migrated files instead of duplicating
+        # them. A node exists in the tree only AFTER L2 verify (see _ingest_one), so
+        # "present" reliably means "fully verified" — safe to skip.
+        existing = self._existing_paths(supa, token, root_node)
+        print(f"pipeline + supabase wired; {len(existing)} files already present; "
+              f"streaming...", file=sys.stderr, flush=True)
 
         # STREAM: process each file as we walk (start work on file 1 immediately;
-        # never block on enumerating the whole tree first — matters under Dropbox's
-        # 500 waves and makes limited test runs fast).
+        # never block on enumerating the whole tree first).
+        attempted = 0
         for f in self.client.walk(folder):
             rep.sourced += 1
+            if f.path.lstrip("/").lower() in existing:
+                rep.skipped += 1
+                continue
             self._ingest_one(f, pipeline, supa, token, owner, root_node, rep)
-            if limit and rep.sourced >= limit:
+            attempted += 1
+            if limit and attempted >= limit:  # cap NEW files this run (resume-friendly)
                 break
         return rep
+
+    def _existing_paths(self, supa, token, root_node) -> set[str]:
+        """Lowercased team-root-relative 'dir/name' of every file already under the
+        import root — the resume set. Walks the Supabase tree once up front."""
+        seen: set[str] = set()
+
+        def descend(node_id: str, rel: str) -> None:
+            for n in supa.children(token, node_id):
+                child_rel = f"{rel}/{n['name']}".strip("/")
+                if n["type"] == "folder":
+                    descend(n["id"], child_rel)
+                elif n["type"] == "file":
+                    seen.add(child_rel.lower())
+
+        descend(root_node, "")
+        return seen
 
     def preserve_permissions(self, folder: str) -> dict:
         """Component 5 — recreate Dropbox share ACLs as Xinsere permissions over the
@@ -384,6 +426,12 @@ class MigrationRunner:
                 raise ValueError("Dropbox content_hash mismatch on download")
             res = pipeline.store(data, _content_type(f.path), label=f.path.rsplit("/", 1)[-1])
             rep.stored += 1
+            # L2: reassemble + re-hash through the real retrieve path BEFORE recording
+            # the node — so a node in the tree always means a fully verified file, and
+            # a resumed run can trust "present == done" (see _existing_paths).
+            got = pipeline.retrieve(res.file_id)
+            if got.file_sha256 != res.file_sha256:
+                raise ValueError("L2 reassembly SHA-256 mismatch")
             # Recreate the tree: /Founders/sub/x.pdf -> folders under root_node
             rel = f.path.lstrip("/")
             rel_dir, name = rel.rsplit("/", 1) if "/" in rel else ("", rel)
@@ -391,10 +439,6 @@ class MigrationRunner:
             supa.insert_file(token, name, parent, owner, file_id=res.file_id,
                              sha256=res.file_sha256, size=f.size,
                              frags=res.fragment_count, content_type=_content_type(f.path))
-            # L2: reassemble + re-hash through the real retrieve path
-            got = pipeline.retrieve(res.file_id)
-            if got.file_sha256 != res.file_sha256:
-                raise ValueError("L2 reassembly SHA-256 mismatch")
             rep.verified += 1
             print(f"  OK  {f.path}  ({len(data):,} B)", file=sys.stderr, flush=True)
         except Exception as e:  # noqa: BLE001 -- per-file isolation; run continues
