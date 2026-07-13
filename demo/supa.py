@@ -43,12 +43,11 @@ def _auth(path: str, body: dict, params: dict | None = None) -> dict:
 
 
 def sign_up(email: str, password: str, name: str, username: str | None = None) -> dict:
-    """Create an account. With email confirmation ON, no session is returned
-    until the user confirms — the caller should prompt them to check their inbox."""
-    data = {"name": name}
-    if username:
-        data["username"] = username
-    return _auth("/signup", {"email": email, "password": password, "data": data})
+    """DISABLED. Xinsere is invite-only; the public /api/signup route fails closed
+    (security audit finding 5). This helper is retained only for the future
+    self-serve onboarding flow, which must ship with findings 1/3/8/9 closed. Do
+    not wire it into a live route without that hardening."""
+    raise SupabaseError(403, "Public signup is disabled — Xinsere is invite-only")
 
 
 def admin_create_user(email: str, password: str, name: str) -> dict:
@@ -156,6 +155,26 @@ def profile_by_email(token: str, email: str) -> dict | None:
                  params={"email": f"eq.{email.strip().lower()}",
                          "select": "id,email,name,username", "limit": 1})
     return rows[0] if rows else None
+
+
+# platform admins (Super-Admin tier — migration 0009) --------------------
+# The durable source of truth for platform-admin status. Read on the service-role
+# plane (deny-by-default RLS) so a user cannot influence the answer. Replaces the
+# old "email matches XINSERE_ADMIN_EMAILS" check, which was self-promotable
+# because profiles.email used to be user-writable (security audit finding 1).
+
+def is_platform_admin(user_id: str) -> bool:
+    """True if user_id is in the platform_admins registry. Fails closed on any
+    error or missing service-role key (the env-var bootstrap fallback in authn
+    covers first-admin provisioning)."""
+    if not SERVICE_ROLE_KEY or not user_id:
+        return False
+    try:
+        rows = _rest("GET", "/platform_admins", SERVICE_ROLE_KEY,
+                     params={"user_id": f"eq.{user_id}", "select": "user_id", "limit": 1})
+    except SupabaseError:
+        return False
+    return bool(rows)
 
 
 # pending share invitations (external-email sharing) ----------------------

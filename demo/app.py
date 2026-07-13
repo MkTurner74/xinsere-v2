@@ -25,7 +25,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import config
 import supa
-from authn import session as _session, is_admin, ADMIN_EMAILS
+from authn import session as _session, is_platform_admin
 from chain import CHAIN
 from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
                    read_staged, delete_staged, MAX_INLINE_BYTES, MAX_STAGED_BYTES)
@@ -151,22 +151,16 @@ async def login(request: Request, identifier: str = Form(...), password: str = F
 
 
 @app.post("/api/signup")
-async def signup(request: Request, email: str = Form(...), password: str = Form(...),
-                 name: str = Form(...)):
-    try:
-        res = supa.sign_up(email.strip().lower(), password, name.strip())
-    except supa.SupabaseError as exc:
-        raise HTTPException(status_code=400, detail=exc.detail or "Sign-up failed")
-    # With email confirmation on, no session is returned until the user confirms.
-    if res.get("access_token"):
-        sess = supa.session_from_grant(res)
-        request.session["sb"] = sess
-        supa.ensure_root(sess["access_token"], sess["user_id"])
-        prof = supa.get_profile(sess["access_token"], sess["user_id"]) or {"id": sess["user_id"]}
-        _reconcile_pending(sess["user_id"], email.strip().lower())
-        return {"ok": True, "user": _public(prof)}
-    return {"ok": True, "needs_confirmation": True,
-            "message": "Check your email to confirm your account, then sign in."}
+async def signup(request: Request):
+    """Public self-service signup is DISABLED and the invariant is enforced HERE,
+    in code — not by an out-of-band Supabase dashboard toggle (security audit
+    finding 5). Xinsere is invite-only: accounts are provisioned by a platform
+    admin (POST /api/admin/invite) or a tenant admin (org member add). Until the
+    self-serve onboarding flow ships with its own hardening (findings 1/3/8/9
+    closed), this route fails closed."""
+    raise HTTPException(
+        status_code=403,
+        detail="Public signup is disabled. Xinsere is invite-only — ask an administrator for an invitation.")
 
 
 @app.post("/api/logout")
@@ -254,13 +248,13 @@ async def users_search(request: Request, q: str = ""):
 
 @app.post("/api/admin/invite")
 async def admin_invite(request: Request, email: str = Form(...), name: str = Form(...)):
-    """Invite a user (public signup is disabled). Admin-only: the signed-in
-    caller's profile email must be in XINSERE_ADMIN_EMAILS. Generates a strong
-    password and returns it ONCE — forward it privately."""
+    """Invite a user (public signup is disabled). Platform-admin only, decided by
+    the durable platform_admins registry (migration 0009), NOT a mutable email
+    match. Generates a strong password and returns it ONCE — forward it privately."""
     import secrets as _secrets
     s = _session(request)
     prof = supa.get_profile(s["access_token"], s["user_id"]) or {}
-    if (prof.get("email") or "").lower() not in ADMIN_EMAILS:
+    if not is_platform_admin(s["user_id"], prof):
         raise HTTPException(status_code=403, detail="Admin only")
     password = _secrets.token_urlsafe(12)
     try:
@@ -278,7 +272,8 @@ async def me(request: Request):
     token, uid = s["access_token"], s["user_id"]
     prof = supa.get_profile(token, uid) or {"id": uid}
     others = [_public(o) for o in supa.list_others(token, uid)]
-    return {"user": _public(prof), "others": others, "admin": is_admin(prof)}
+    return {"user": _public(prof), "others": others,
+            "admin": is_platform_admin(uid, prof)}
 
 
 # --- tree -------------------------------------------------------------------

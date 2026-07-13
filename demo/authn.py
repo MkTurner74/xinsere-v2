@@ -1,9 +1,15 @@
 """Session authentication helpers shared by the app, admin and docs routes.
 
 The interactive planes all authenticate the same way: a signed session cookie
-holding Supabase tokens (see app.py module docstring). Platform-admin status is
-decided by XINSERE_ADMIN_EMAILS — the bootstrap identity list; org-level roles
-live in org_members and are managed from the admin console.
+holding Supabase tokens (see app.py module docstring).
+
+Platform-admin (Super-Admin tier) status is decided by the durable
+`platform_admins` registry (service-role-only table, migration 0009).
+XINSERE_ADMIN_EMAILS is now only a BOOTSTRAP fallback for the very first admin
+before the registry is seeded — safe because profiles.email became immutable to
+the authenticated role in 0009, so it can no longer be self-set to an admin
+address (security audit finding 1). Org-level roles (Tenant Admin / member) live
+in org_members and are managed from the admin console.
 """
 from __future__ import annotations
 
@@ -34,8 +40,25 @@ def session(request: Request) -> dict:
     return s
 
 
-def is_admin(profile: dict | None) -> bool:
+def _email_bootstrap_admin(profile: dict | None) -> bool:
+    """Bootstrap fallback ONLY: email in the env admin list. Safe now that
+    profiles.email is immutable to the authenticated role (migration 0009)."""
     return bool(profile) and (profile.get("email") or "").lower() in ADMIN_EMAILS
+
+
+def is_platform_admin(user_id: str, profile: dict | None) -> bool:
+    """Authoritative platform-admin decision: durable registry first, env
+    bootstrap fallback second."""
+    if user_id and supa.is_platform_admin(user_id):
+        return True
+    return _email_bootstrap_admin(profile)
+
+
+# Back-compat alias for callers that only render an "is this user an admin?" flag.
+def is_admin(profile: dict | None, user_id: str | None = None) -> bool:
+    if user_id and supa.is_platform_admin(user_id):
+        return True
+    return _email_bootstrap_admin(profile)
 
 
 def require_admin(request: Request) -> dict:
@@ -43,7 +66,7 @@ def require_admin(request: Request) -> dict:
     with the admin's profile attached."""
     s = session(request)
     prof = supa.get_profile(s["access_token"], s["user_id"]) or {}
-    if not is_admin(prof):
+    if not is_platform_admin(s["user_id"], prof):
         raise HTTPException(status_code=403, detail="Admin only")
     return {**s, "profile": prof}
 
