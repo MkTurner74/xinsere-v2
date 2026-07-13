@@ -23,9 +23,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import hashlib
 import json
+import os
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Iterator
@@ -262,9 +265,16 @@ class Report:
 
 
 # --- Runner ----------------------------------------------------------------
+DEFAULT_WORKERS = int(os.environ.get("XINSERE_MIGRATION_WORKERS", "8"))
+
+
 class MigrationRunner:
     def __init__(self, client: DropboxClient):
         self.client = client
+        # Concurrency guards (used only on the --full parallel path).
+        self._rep_lock = threading.Lock()     # serialize Report mutations across workers
+        self._path_lock = threading.Lock()    # serialize folder creation (avoid dup folders)
+        self._path_cache: dict[str, str] = {}  # rel_dir(lower) -> parent node id (memoized)
 
     def enumerate(self, folder: str) -> tuple[list[DbxFile], int]:
         """Build the manifest (L1 source of truth). Returns (files, small<128KB)."""
@@ -272,7 +282,8 @@ class MigrationRunner:
         small = sum(1 for f in files if f.size < 128 * 1024)
         return files, small
 
-    def run(self, folder: str, *, limit: int | None, full: bool, grants: bool = False):
+    def run(self, folder: str, *, limit: int | None, full: bool, grants: bool = False,
+            workers: int = DEFAULT_WORKERS):
         if grants:
             # Permission-preservation pass over the already-migrated tree. The path
             # setup mirrors --full (needs Supabase + chain env), but moves no bytes.
@@ -307,21 +318,57 @@ class MigrationRunner:
         # "present" reliably means "fully verified" — safe to skip.
         existing = self._existing_paths(supa, token, root_node)
         print(f"pipeline + supabase wired; {len(existing)} files already present; "
-              f"streaming...", file=sys.stderr, flush=True)
+              f"streaming with {workers} workers...", file=sys.stderr, flush=True)
 
-        # STREAM: process each file as we walk (start work on file 1 immediately;
-        # never block on enumerating the whole tree first).
+        # CONCURRENT STREAM: each file (download -> L3 -> store -> L2 -> index) is
+        # independent, so we run `workers` of them at once. The heavy per-file cost is
+        # network + crypto, not CPU, so threads scale it well. A semaphore bounds
+        # in-flight work to ~2x workers (backpressure), so even a million-file walk
+        # never queues more than a couple of batches in memory. Folder creation is
+        # memoized under a lock (see _resolve_parent) so concurrent files in the same
+        # directory can't create duplicate folders. Still streams — work starts on the
+        # first file, never waits for full enumeration.
         attempted = 0
-        for f in self.client.walk(folder):
-            rep.sourced += 1
-            if f.path.lstrip("/").lower() in existing:
-                rep.skipped += 1
-                continue
-            self._ingest_one(f, pipeline, supa, token, owner, root_node, rep)
-            attempted += 1
-            if limit and attempted >= limit:  # cap NEW files this run (resume-friendly)
-                break
+        sem = threading.Semaphore(workers * 2)
+
+        def _task(f: DbxFile) -> None:
+            try:
+                self._ingest_one(f, pipeline, supa, token, owner, root_node, rep)
+            finally:
+                sem.release()
+
+        with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+            for f in self.client.walk(folder):
+                rep.sourced += 1  # main thread only
+                if f.path.lstrip("/").lower() in existing:
+                    rep.skipped += 1
+                    continue
+                sem.acquire()                       # backpressure before submitting
+                ex.submit(_task, f)
+                attempted += 1
+                if limit and attempted >= limit:    # cap NEW files this run (resume-friendly)
+                    break
+            # executor exit waits for all in-flight tasks
         return rep
+
+    def _resolve_parent(self, supa, token, rel_dir: str, root_node: str, owner: str) -> str:
+        """Memoized, race-safe folder resolution. Concurrent files in the same
+        directory must not each create the folder (nodes have no unique (parent,name)
+        constraint, so a race would make duplicates). Double-checked lock: cache hit is
+        lock-free; only a miss serializes on _path_lock while ensure_path creates."""
+        if not rel_dir:
+            return root_node
+        key = rel_dir.lower()
+        cached = self._path_cache.get(key)
+        if cached:
+            return cached
+        with self._path_lock:
+            cached = self._path_cache.get(key)
+            if cached:
+                return cached
+            parent = supa.ensure_path(token, rel_dir, root_node, owner)
+            self._path_cache[key] = parent
+            return parent
 
     def _existing_paths(self, supa, token, root_node) -> set[str]:
         """Lowercased team-root-relative 'dir/name' of every file already under the
@@ -423,15 +470,18 @@ class MigrationRunner:
                 "external_stubs": stub_written}
 
     def _ingest_one(self, f: DbxFile, pipeline, supa, token, owner, root_node, rep: Report) -> None:
-        import os  # noqa: F401 (kept local; run() owns the imports)
+        # Thread-safe: this runs concurrently across workers. Only Report mutations and
+        # folder creation are serialized (short locks); the heavy work (download, store,
+        # retrieve) runs fully in parallel.
         try:
             data = self.client.download(f.path)
-            rep.bytes_in += len(data)
             # L3 reference cross-check (independent of our own hashing)
             if dropbox_content_hash(data) != f.content_hash:
                 raise ValueError("Dropbox content_hash mismatch on download")
             res = pipeline.store(data, _content_type(f.path), label=f.path.rsplit("/", 1)[-1])
-            rep.stored += 1
+            with self._rep_lock:
+                rep.bytes_in += len(data)
+                rep.stored += 1        # fragments landed; stored > verified => orphans to triage
             # L2: reassemble + re-hash through the real retrieve path BEFORE recording
             # the node — so a node in the tree always means a fully verified file, and
             # a resumed run can trust "present == done" (see _existing_paths).
@@ -441,14 +491,16 @@ class MigrationRunner:
             # Recreate the tree: /Founders/sub/x.pdf -> folders under root_node
             rel = f.path.lstrip("/")
             rel_dir, name = rel.rsplit("/", 1) if "/" in rel else ("", rel)
-            parent = supa.ensure_path(token, rel_dir, root_node, owner) if rel_dir else root_node
+            parent = self._resolve_parent(supa, token, rel_dir, root_node, owner)
             supa.insert_file(token, name, parent, owner, file_id=res.file_id,
                              sha256=res.file_sha256, size=f.size,
                              frags=res.fragment_count, content_type=_content_type(f.path))
-            rep.verified += 1
+            with self._rep_lock:
+                rep.verified += 1
             print(f"  OK  {f.path}  ({len(data):,} B)", file=sys.stderr, flush=True)
         except Exception as e:  # noqa: BLE001 -- per-file isolation; run continues
-            rep.failed.append((f.path, str(e)))
+            with self._rep_lock:
+                rep.failed.append((f.path, str(e)))
             print(f"  FAIL {f.path}: {e}", file=sys.stderr, flush=True)
 
 
@@ -466,10 +518,14 @@ def main() -> None:
     ap.add_argument("--grants", action="store_true",
                     help="Permission-preservation pass: recreate Dropbox share ACLs as "
                          "Merkle-batched on-chain grants over the already-migrated tree")
+    ap.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
+                    help=f"Concurrent ingest workers (default {DEFAULT_WORKERS}; "
+                         "env XINSERE_MIGRATION_WORKERS)")
     args = ap.parse_args()
 
     runner = MigrationRunner(DropboxClient(DropboxAuth()))
-    rep = runner.run(args.folder, limit=args.limit, full=args.full, grants=args.grants)
+    rep = runner.run(args.folder, limit=args.limit, full=args.full, grants=args.grants,
+                     workers=args.workers)
     if args.grants:
         print(json.dumps(rep, indent=2))       # preserve_permissions returns a dict
     else:
