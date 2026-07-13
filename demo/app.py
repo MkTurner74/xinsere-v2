@@ -648,7 +648,12 @@ async def share(request: Request, node_id: str = Form(...),
         if target:
             grantee = target["id"]          # existing account -> grant now (below)
         else:
-            supa.insert_pending_share(token, node_id, addr, uid)   # no account yet -> stub, no gas
+            # pending_shares is RLS deny-by-default (service-role only, per 0006);
+            # the caller is already authorized (owner check above), so the stub
+            # write must use the service-role key, not the user's token.
+            if not supa.SERVICE_ROLE_KEY:
+                raise HTTPException(status_code=500, detail="Service role key not configured")
+            supa.insert_pending_share(supa.SERVICE_ROLE_KEY, node_id, addr, uid)  # no gas
             return {"ok": True, "invited": True, "email": addr,
                     "message": "Invitation created — they'll get access as soon as they join Xinsere."}
 
