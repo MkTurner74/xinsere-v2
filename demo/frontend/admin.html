@@ -31,6 +31,8 @@
   header{display:flex;align-items:center;gap:12px;padding:18px 28px;
     border-bottom:1px solid var(--edge);}
   .word{font-weight:600;font-size:1.05rem;color:var(--word);letter-spacing:0.01em;}
+  .home{text-decoration:none;display:inline-flex;align-items:center;cursor:pointer;opacity:1;transition:opacity .15s;}
+  .home:hover{opacity:0.7;}
   .crumb{color:var(--faint);font-size:0.9rem;}
   header .who{margin-left:auto;color:var(--muted);font-size:0.85rem;display:flex;gap:14px;align-items:center;}
   .link{background:none;border:none;color:var(--word);padding:0;font-size:0.85rem;}
@@ -90,7 +92,7 @@
 <body>
 
 <header>
-  <span class="word">Xinsere</span><span class="crumb">/ Admin Console</span>
+  <a class="home" href="/" title="Back to Xinsere"><span class="word">Xinsere</span></a><span class="crumb">/ Admin Console</span>
   <div class="who hidden" id="who">
     <span id="who-email"></span>
     <a class="link" href="/docs/guide" target="_blank">API docs</a>
