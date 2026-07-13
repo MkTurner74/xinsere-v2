@@ -241,6 +241,7 @@ class Report:
     started: float = field(default_factory=time.time)
 
     def as_dict(self, files: int, folders: int) -> dict:
+        wall = max(time.time() - self.started, 1e-6)
         return {
             "manifest_files": files,
             "manifest_folders": folders,
@@ -251,7 +252,12 @@ class Report:
             "failed": self.failed,
             "bytes_in": self.bytes_in,
             "gb_in": round(self.bytes_in / 1e9, 3),
-            "wall_seconds": round(time.time() - self.started, 1),
+            "wall_seconds": round(wall, 1),
+            # Cloud-to-cloud throughput metrics (client-facing perf story). Measured
+            # over verified files only, so numbers reflect fully-validated transfer.
+            "mb_per_s": round(self.bytes_in / 1e6 / wall, 2),
+            "files_per_min": round(self.verified / wall * 60, 1),
+            "avg_ms_per_file": round(wall * 1000 / max(self.verified, 1)),
         }
 
 
