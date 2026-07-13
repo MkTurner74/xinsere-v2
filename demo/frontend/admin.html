@@ -87,6 +87,23 @@
   .back{color:var(--word);background:none;border:none;font-size:0.86rem;padding:0;margin-bottom:8px;}
   .toolbar{display:flex;justify-content:space-between;align-items:center;margin:6px 0 14px;}
   .empty{color:var(--faint);font-size:0.88rem;padding:14px 4px;}
+  /* import dashboard */
+  .cards{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0 18px;}
+  .card{background:var(--panel,rgba(255,255,255,0.04));border:1px solid var(--line,rgba(255,255,255,0.08));border-radius:12px;padding:14px 16px;min-width:130px;}
+  .card .k{font-size:1.5rem;font-weight:600;}
+  .card .l{font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-top:2px;}
+  .card .k.teal{color:var(--teal,#00d4ff);}
+  .bar{height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden;margin:8px 0 4px;}
+  .bar > span{display:block;height:100%;background:linear-gradient(90deg,#00d4ff,#4ade80);}
+  .run{border:1px solid var(--line,rgba(255,255,255,0.08));border-radius:12px;padding:14px 16px;margin-bottom:12px;}
+  .run .top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
+  .run .metrics{display:flex;flex-wrap:wrap;gap:16px;font-size:0.82rem;color:var(--muted);margin-top:8px;}
+  .run .metrics b{color:var(--word,#e8f4f8);font-weight:600;}
+  .pill.complete{background:rgba(74,222,128,0.16);color:#4ade80;}
+  .pill.running{background:rgba(0,212,255,0.16);color:#00d4ff;}
+  .pill.failed,.pill.revoked{background:rgba(255,111,97,0.16);color:#ff6f61;}
+  .pill.live{background:rgba(74,222,128,0.16);color:#4ade80;}
+  .pill.pending{background:rgba(255,255,255,0.1);color:var(--muted);}
 </style>
 </head>
 <body>
@@ -94,6 +111,8 @@
 <header>
   <a class="home" href="/" title="Back to Xinsere"><span class="word">Xinsere</span></a><span class="crumb">/ Admin Console</span>
   <div class="who hidden" id="who">
+    <button class="link" id="nav-orgs">Organizations</button>
+    <button class="link" id="nav-imports">Imports</button>
     <span id="who-email"></span>
     <a class="link" href="/docs/guide" target="_blank">API docs</a>
     <button class="link" id="logout">Sign out</button>
@@ -181,6 +200,30 @@
       <div class="empty hidden" id="key-empty">No API keys yet.</div>
     </div>
   </section>
+
+  <!-- ============ IMPORTS DASHBOARD ============ -->
+  <section id="view-imports" class="hidden">
+    <h2>Data imports</h2>
+    <div class="toolbar">
+      <span class="note">Cloud-to-cloud migrations into Xinsere — encrypted, fragmented across clouds, integrity-verified (3 layers), permissioned on-chain.</span>
+      <button class="btn ghost sm" id="imp-refresh">Refresh</button>
+    </div>
+    <div class="cards" id="imp-cards"></div>
+
+    <h2>Migration runs <span class="count" id="run-count"></span></h2>
+    <div id="run-list"></div>
+    <div class="empty hidden" id="run-empty">No migration runs yet. Runs appear here as the connector imports data. <span class="note">(If this stays empty after a run, apply migration 0008.)</span></div>
+
+    <h2>On-chain permission batches <span class="count" id="batch-count"></span></h2>
+    <div class="toolbar"><span class="note">Each batch anchors up to 1,000 files' share permissions in one flat-gas transaction (Merkle root on Polygon Amoy).</span></div>
+    <div class="panel">
+      <table id="batch-table">
+        <thead><tr><th>Merkle root</th><th>Files</th><th>Scope</th><th>Status</th><th>Tx</th><th>Anchored</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty hidden" id="batch-empty">No permission batches anchored yet.</div>
+    </div>
+  </section>
 </main>
 
 <div class="scrim hidden" id="scrim"><div class="modal" id="modal"></div></div>
@@ -230,6 +273,73 @@ $("#li-pass").addEventListener("keydown",e=>{if(e.key==="Enter")$("#li-go").clic
 async function signout(){await api("/api/logout",{method:"POST"});location.reload();}
 $("#logout").addEventListener("click",signout);
 $("#denied-out").addEventListener("click",signout);
+
+/* ---------- imports dashboard ---------- */
+const fmtInt=n=>Number(n||0).toLocaleString();
+const fmtBytes=b=>{b=Number(b||0);const u=["B","KB","MB","GB","TB"];let i=0;while(b>=1024&&i<u.length-1){b/=1024;i++;}return `${b.toFixed(b<10&&i>0?1:0)} ${u[i]}`;};
+const fmtDT=iso=>iso?new Date(iso).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+const shortHash=h=>h?`${h.slice(0,10)}…${h.slice(-6)}`:"—";
+const amoyTx=h=>h?`<a class="link mono" href="https://amoy.polygonscan.com/tx/${esc(h)}" target="_blank">${esc(shortHash(h))}</a>`:"—";
+
+function showView(which){
+  $("#view-orgs").classList.toggle("hidden",which!=="orgs");
+  $("#view-org").classList.add("hidden");
+  $("#view-imports").classList.toggle("hidden",which!=="imports");
+}
+$("#nav-orgs").addEventListener("click",()=>{showView("orgs");loadOrgs();});
+$("#nav-imports").addEventListener("click",()=>{showView("imports");loadImports();});
+$("#imp-refresh").addEventListener("click",loadImports);
+
+async function loadImports(){
+  showView("imports");
+  const {runs,batches,batch_summary}=await api("/api/admin/imports");
+  // Aggregate summary cards across all runs.
+  const agg=runs.reduce((a,r)=>({v:a.v+(+r.verified||0),b:a.b+(+r.bytes_in||0),f:a.f+(+r.failed||0)}),{v:0,b:0,f:0});
+  $("#imp-cards").innerHTML=[
+    ["Files verified",fmtInt(agg.v),"teal"],
+    ["Data migrated",fmtBytes(agg.b),""],
+    ["Runs",fmtInt(runs.length),""],
+    ["On-chain batches",`${fmtInt(batch_summary.live)}/${fmtInt(batch_summary.total)} live`,""],
+    ["Failures",fmtInt(agg.f),agg.f?"":""],
+  ].map(([l,k,c])=>`<div class="card"><div class="k ${c}">${k}</div><div class="l">${l}</div></div>`).join("");
+
+  // Per-run cards with progress + throughput.
+  $("#run-count").textContent=runs.length;
+  $("#run-empty").classList.toggle("hidden",runs.length>0);
+  $("#run-list").innerHTML=runs.map(r=>{
+    const total=Math.max((+r.verified||0)+(+r.skipped||0)+(+r.failed||0),+r.manifest_files||0,1);
+    const done=(+r.verified||0)+(+r.skipped||0);
+    const pct=Math.min(100,Math.round(done/total*100));
+    return `<div class="run">
+      <div class="top">
+        <div><strong>${esc(r.source||"dropbox")}</strong> <span class="mono note">${esc(r.folder||"")}</span></div>
+        <span class="pill ${esc(r.status)}">${esc(r.status)}</span>
+      </div>
+      <div class="bar"><span style="width:${pct}%"></span></div>
+      <div class="metrics">
+        <span><b>${fmtInt(r.verified)}</b> verified</span>
+        <span><b>${fmtInt(r.skipped)}</b> skipped</span>
+        <span><b>${fmtInt(r.failed)}</b> failed</span>
+        <span><b>${fmtBytes(r.bytes_in)}</b></span>
+        <span><b>${(+r.mb_per_s||0).toFixed(2)}</b> MB/s</span>
+        <span><b>${(+r.files_per_min||0).toFixed(1)}</b> files/min</span>
+        <span><b>${esc(r.workers||1)}</b> workers</span>
+        <span>${fmtDT(r.started_at)}</span>
+      </div></div>`;
+  }).join("");
+
+  // On-chain permission batches.
+  $("#batch-count").textContent=batches.length;
+  $("#batch-empty").classList.toggle("hidden",batches.length>0);
+  const bt=$("#batch-table tbody");
+  bt.innerHTML=batches.map(b=>`<tr>
+    <td class="mono">${esc(shortHash(b.merkle_root))}</td>
+    <td>${fmtInt(b.leaf_count)}</td>
+    <td class="note">${esc(b.scope||b.source||"—")}</td>
+    <td><span class="pill ${esc(b.status)}">${esc(b.status)}</span></td>
+    <td>${amoyTx(b.tx_hash)}</td>
+    <td class="note">${fmtDT(b.anchored_at)}</td></tr>`).join("");
+}
 
 /* ---------- org list ---------- */
 async function loadOrgs(){

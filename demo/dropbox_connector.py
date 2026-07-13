@@ -320,6 +320,30 @@ class MigrationRunner:
         print(f"pipeline + supabase wired; {len(existing)} files already present; "
               f"streaming with {workers} workers...", file=sys.stderr, flush=True)
 
+        # Telemetry row for the Admin import dashboard (best-effort; never blocks the
+        # migration — a Supabase hiccup must not stop bytes moving).
+        run_id = None
+        try:
+            run_id = supa.create_migration_run(token, source="dropbox", folder=folder,
+                owner=owner, target_root=root_node, workers=workers)
+        except Exception as exc:  # noqa: BLE001
+            print(f"(telemetry off: {exc})", file=sys.stderr, flush=True)
+
+        def _heartbeat(status: str = "running") -> None:
+            if not run_id:
+                return
+            wall = max(time.time() - rep.started, 1e-6)
+            try:
+                supa.update_migration_run(token, run_id, {
+                    "status": status, "sourced": rep.sourced, "stored": rep.stored,
+                    "verified": rep.verified, "skipped": rep.skipped,
+                    "failed": len(rep.failed), "failures": rep.failed[:50],
+                    "bytes_in": rep.bytes_in, "wall_seconds": round(wall, 1),
+                    "mb_per_s": round(rep.bytes_in / 1e6 / wall, 2),
+                    "files_per_min": round(rep.verified / wall * 60, 1)})
+            except Exception:  # noqa: BLE001 — telemetry is fail-open
+                pass
+
         # CONCURRENT STREAM: each file (download -> L3 -> store -> L2 -> index) is
         # independent, so we run `workers` of them at once. The heavy per-file cost is
         # network + crypto, not CPU, so threads scale it well. A semaphore bounds
@@ -346,9 +370,12 @@ class MigrationRunner:
                 sem.acquire()                       # backpressure before submitting
                 ex.submit(_task, f)
                 attempted += 1
+                if attempted % 25 == 0:
+                    _heartbeat()                    # live dashboard progress
                 if limit and attempted >= limit:    # cap NEW files this run (resume-friendly)
                     break
             # executor exit waits for all in-flight tasks
+        _heartbeat("complete")
         return rep
 
     def _resolve_parent(self, supa, token, rel_dir: str, root_node: str, owner: str) -> str:

@@ -399,6 +399,49 @@ def insert_batch_grants(token: str, rows: list[dict]) -> None:
           json_body=rows)
 
 
+# migration runs (Admin import dashboard — migration 0008) ------------------
+# Service-role only. Best-effort telemetry: a write failure must never abort a
+# migration, so the connector wraps these in try/except (fail-open).
+
+def create_migration_run(token: str, *, source: str, folder: str, owner: str,
+                         target_root: str, workers: int) -> str | None:
+    """Insert a 'running' run row; return its id (or None on failure — fail-open)."""
+    rows = _rest("POST", "/migration_runs", token, prefer="return=representation",
+                 json_body={"source": source, "folder": folder, "owner": owner,
+                            "target_root": target_root, "workers": workers,
+                            "status": "running"})
+    return rows[0]["id"] if rows else None
+
+
+def update_migration_run(token: str, run_id: str, fields: dict) -> None:
+    """Patch counters/metrics/status on a run row (updated_at bumped)."""
+    body = {**fields, "updated_at": _now_iso()}
+    _rest("PATCH", "/migration_runs", token, params={"id": f"eq.{run_id}"}, json_body=body)
+
+
+def list_migration_runs(token: str, limit: int = 50) -> list[dict]:
+    return _rest("GET", "/migration_runs", token,
+                 params={"select": "*", "order": "started_at.desc", "limit": limit}) or []
+
+
+def get_migration_run(token: str, run_id: str) -> dict | None:
+    rows = _rest("GET", "/migration_runs", token,
+                 params={"id": f"eq.{run_id}", "select": "*", "limit": 1})
+    return rows[0] if rows else None
+
+
+def list_permission_batches(token: str, limit: int = 200) -> list[dict]:
+    """On-chain 1,000-file permission batches for the dashboard's batch panel."""
+    return _rest("GET", "/permission_batches", token,
+                 params={"select": "merkle_root,leaf_count,tx_hash,status,scope,source,anchored_at,created_at",
+                         "order": "created_at.desc", "limit": limit}) or []
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def batch_grants_for(token: str, file_id: str, grantee_id: str, limit: int = 5) -> list[dict]:
     """Download-gate lookup: recent batch grants (proof + root) for (file, grantee),
     newest first. The caller replays each through the contract's verifyBatch and

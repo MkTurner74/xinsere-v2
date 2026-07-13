@@ -23,6 +23,35 @@ def whoami(s: dict = Depends(authn.require_admin)):
             "email": s["profile"].get("email"), "name": s["profile"].get("name")}
 
 
+# --- imports (migration dashboard) ------------------------------------------
+
+@router.get("/imports")
+def list_imports(s: dict = Depends(authn.require_admin)):
+    """Migration runs + the on-chain permission batches, for the import dashboard.
+    Reads on the service-role plane after the admin gate. Empty (not an error) if the
+    telemetry tables (migrations 0007/0008) aren't applied yet."""
+    key = supa.SERVICE_ROLE_KEY
+    try:
+        runs = supa.list_migration_runs(key)
+    except supa.SupabaseError:
+        runs = []
+    try:
+        batches = supa.list_permission_batches(key)
+    except supa.SupabaseError:
+        batches = []
+    live = sum(1 for b in batches if b.get("status") == "live")
+    return {"runs": runs, "batches": batches,
+            "batch_summary": {"total": len(batches), "live": live}}
+
+
+@router.get("/imports/{run_id}")
+def import_detail(run_id: str, s: dict = Depends(authn.require_admin)):
+    run = supa.get_migration_run(supa.SERVICE_ROLE_KEY, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {"run": run}
+
+
 # --- organizations -----------------------------------------------------------
 
 @router.get("/orgs")
