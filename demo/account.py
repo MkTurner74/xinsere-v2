@@ -12,6 +12,7 @@ admin.py. Email verification is enforced at login (app.py).
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, Form, HTTPException, Request
 
@@ -22,7 +23,24 @@ import supa
 _log = logging.getLogger("xinsere.account")
 router = APIRouter(prefix="/api/account", include_in_schema=False)
 
-MIN_PASSWORD_LEN = 8
+MIN_PASSWORD_LEN = 12
+
+
+def password_errors(pw: str) -> list[str]:
+    """Which complexity rules a password fails (empty list = OK). Kept in one place
+    so the API and any UI describe the same policy."""
+    errs = []
+    if len(pw or "") < MIN_PASSWORD_LEN:
+        errs.append(f"at least {MIN_PASSWORD_LEN} characters")
+    if not re.search(r"[a-z]", pw or ""):
+        errs.append("a lowercase letter")
+    if not re.search(r"[A-Z]", pw or ""):
+        errs.append("an uppercase letter")
+    if not re.search(r"\d", pw or ""):
+        errs.append("a number")
+    if not re.search(r"[^A-Za-z0-9]", pw or ""):
+        errs.append("a symbol")
+    return errs
 
 
 def _svc() -> str:
@@ -86,9 +104,10 @@ def change_password(request: Request, current_password: str = Form(...),
     password first, then clears any admin-forced-change flag."""
     s = authn.session(request)
     token, uid = s["access_token"], s["user_id"]
-    if len(new_password) < MIN_PASSWORD_LEN:
+    errs = password_errors(new_password)
+    if errs:
         raise HTTPException(status_code=400,
-                            detail=f"New password must be at least {MIN_PASSWORD_LEN} characters")
+                            detail="Password must include " + ", ".join(errs) + ".")
     prof = supa.get_profile(token, uid) or {}
     email = (prof.get("email") or "").lower()
     # Re-auth: proves the current holder of the session knows the current password

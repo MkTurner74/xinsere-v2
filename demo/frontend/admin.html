@@ -265,18 +265,24 @@ $("#scrim").addEventListener("click",e=>{if(e.target.id==="scrim")closeModal();}
 
 /* ---------- boot / auth ---------- */
 async function boot(){
+  // Step 1: AUTH. Only an auth failure should bounce back to the sign-in gate.
+  let w;
   try{
-    const w=await api("/api/admin/whoami");
-    $("#who-email").textContent=w.email;
-    $("#who").classList.remove("hidden");
-    $("#gate-login").classList.add("hidden");$("#gate-denied").classList.add("hidden");
-    $("#console").classList.remove("hidden");
-    await loadOrgs();
+    w=await api("/api/admin/whoami");
   }catch(e){
     $("#console").classList.add("hidden");$("#who").classList.add("hidden");
     if(e.status===403){$("#gate-denied").classList.remove("hidden");$("#gate-login").classList.add("hidden");}
     else{$("#gate-login").classList.remove("hidden");$("#gate-denied").classList.add("hidden");}
+    return;
   }
+  // Authed as admin — show the console and STAY here even if a data call errors
+  // (previously a failing loadOrgs() threw into the auth catch and kicked us out).
+  $("#who-email").textContent=w.email;
+  $("#who").classList.remove("hidden");
+  $("#gate-login").classList.add("hidden");$("#gate-denied").classList.add("hidden");
+  $("#console").classList.remove("hidden");
+  try{ await loadOrgs(); }
+  catch(e){ console.error("admin data load failed:", e); }
 }
 $("#li-go").addEventListener("click",async()=>{
   $("#li-err").textContent="";

@@ -258,7 +258,7 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
       <div class="field"><label>Email</label><input id="u" type="email" autocomplete="username" placeholder="you@company.com"></div>
       <div class="field"><label>Password</label><input id="p" type="password" autocomplete="current-password"></div>
       <button class="btn full" type="submit">Sign in</button>
-      <div class="login-hint">Access is by invitation. Contact Mark to get an account.</div>
+      <div class="login-hint">Access is by invitation only.</div>
     </form>
 
     <form id="signup-form" class="hidden">
@@ -273,16 +273,35 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
   </div>
 </div>
 
+<style>
+.usermenu{position:relative}
+.userbtn{display:flex;align-items:center;gap:8px;background:none;border:0;color:inherit;cursor:pointer;padding:4px 8px;border-radius:10px}
+.userbtn:hover{background:rgba(255,255,255,.06)}
+.userbtn .caret{font-size:.7rem;opacity:.6}
+.usermenu .menu{position:absolute;right:0;top:calc(100% + 8px);background:var(--panel,#141830);border:1px solid var(--edge,#2a3060);border-radius:12px;padding:6px;min-width:190px;box-shadow:0 14px 34px rgba(0,0,0,.45);z-index:60;display:flex;flex-direction:column}
+.usermenu .menu.hidden{display:none}
+.usermenu .menu-item{display:block;text-align:left;background:none;border:0;color:var(--text,#eef1ff);padding:10px 12px;border-radius:8px;font-size:.92rem;cursor:pointer;text-decoration:none;width:100%}
+.usermenu .menu-item:hover{background:rgba(255,255,255,.07)}
+.usermenu .menu-item.danger{color:var(--rose,#FF8B7A)}
+.usermenu .menu-item.danger:hover{background:rgba(255,90,90,.12)}
+</style>
+
 <!-- APP -->
 <div id="app" class="hidden">
   <div class="topbar">
     <div class="brand"><span id="top-mark"></span><span class="word">Xinsere</span></div>
     <div class="me">
-      <span class="avatar" id="me-av"></span><span id="me-name"></span>
-      <a class="link" id="security-link" href="/security">Security</a>
-      <a class="link hidden" id="admin-link" href="/admin">Admin</a>
       <button class="theme-toggle" title="Switch light/dark mode" aria-label="Switch light/dark mode"></button>
-      <button class="link" id="logout">Sign out</button>
+      <div class="usermenu">
+        <button class="userbtn" id="user-btn" type="button" aria-haspopup="true" aria-expanded="false">
+          <span class="avatar" id="me-av"></span><span id="me-name"></span><span class="caret">▾</span>
+        </button>
+        <div class="menu hidden" id="user-menu" role="menu">
+          <a class="menu-item" href="/security" role="menuitem">⚙&nbsp;&nbsp;Settings</a>
+          <a class="menu-item hidden" id="admin-link" href="/admin" role="menuitem">🛡&nbsp;&nbsp;Admin console</a>
+          <button class="menu-item danger" id="logout" type="button" role="menuitem">Sign out</button>
+        </div>
+      </div>
     </div>
   </div>
   <div class="body">
@@ -464,6 +483,19 @@ $("#signup-form").addEventListener("submit", async (e)=>{
   await boot();
 });
 $("#logout").addEventListener("click", async ()=>{ await api("/api/logout",{method:"POST"}); location.reload(); });
+
+/* user-icon dropdown menu */
+const _userBtn=$("#user-btn"), _userMenu=$("#user-menu");
+_userBtn?.addEventListener("click", e=>{
+  e.stopPropagation();
+  const open=_userMenu.classList.toggle("hidden");
+  _userBtn.setAttribute("aria-expanded", String(!open));
+});
+document.addEventListener("click", e=>{
+  if(_userMenu && !_userMenu.classList.contains("hidden") && !_userBtn.contains(e.target) && !_userMenu.contains(e.target))
+    _userMenu.classList.add("hidden");
+});
+document.addEventListener("keydown", e=>{ if(e.key==="Escape" && _userMenu) _userMenu.classList.add("hidden"); });
 
 async function boot(){
   const r=await api("/api/me"); if(!r.ok){ return; }

@@ -281,10 +281,25 @@ def is_platform_admin(user_id: str) -> bool:
 
 
 def list_platform_admins(token: str) -> list[dict]:
-    """Super-Admins (Xinsere staff) with their profile info, for the admin console."""
-    return _rest("GET", "/platform_admins", token,
-                 params={"select": "user_id,created_at,profiles(id,email,name)",
-                         "order": "created_at.asc"}) or []
+    """Super-Admins (Xinsere staff) with their profile info, for the admin console.
+    Joins profiles in Python rather than via a PostgREST embed — the embed depends
+    on the FK being in PostgREST's schema cache, which isn't guaranteed right after
+    the table is created, and a failure there was 500ing the admin console."""
+    rows = _rest("GET", "/platform_admins", token,
+                 params={"select": "user_id,created_at", "order": "created_at.asc"}) or []
+    ids = [r["user_id"] for r in rows if r.get("user_id")]
+    profs: dict = {}
+    if ids:
+        try:
+            for p in (_rest("GET", "/profiles", token,
+                            params={"id": f"in.({','.join(ids)})",
+                                    "select": "id,email,name"}) or []):
+                profs[p["id"]] = p
+        except SupabaseError:
+            pass
+    for r in rows:
+        r["profiles"] = profs.get(r["user_id"])
+    return rows
 
 
 def add_platform_admin(token: str, user_id: str, added_by: str | None) -> None:

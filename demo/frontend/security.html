@@ -12,6 +12,8 @@
   h1{font-size:1.5rem;margin:0 0 4px} h2{font-size:1.05rem;margin:0 0 12px}
   a.link{color:var(--brand);text-decoration:none} a.link:hover{text-decoration:underline}
   .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+  .closebtn{width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;color:var(--rose);border:1px solid #7a3e3e;text-decoration:none;font-size:1.15rem;line-height:1;background:rgba(255,90,90,.06)}
+  .closebtn:hover{background:rgba(255,90,90,.16)}
   .card{background:var(--panel);border:1px solid var(--edge);border-radius:14px;padding:22px;margin-bottom:18px}
   .note{color:var(--muted);font-size:0.9rem}
   label{display:block;font-size:0.85rem;color:var(--muted);margin:12px 0 4px}
@@ -33,8 +35,8 @@
 <body>
 <div class="wrap">
   <div class="top">
-    <h1>Account security</h1>
-    <a class="link" href="/">&larr; Back to files</a>
+    <h1>Settings</h1>
+    <a class="closebtn" href="/" aria-label="Close settings" title="Close settings">&#10005;</a>
   </div>
 
   <div id="forced" class="banner hidden">Your administrator requires you to set a new password before continuing.</div>
@@ -52,8 +54,9 @@
   <div class="card" id="card-pw">
     <h2>Change password</h2>
     <label>Current password</label><input id="pw-cur" type="password" autocomplete="current-password">
-    <label>New password <span class="note">(at least 8 characters)</span></label>
+    <label>New password</label>
     <input id="pw-new" type="password" autocomplete="new-password">
+    <p class="note" style="margin:6px 0 0">Must be at least 12 characters with an uppercase letter, a lowercase letter, a number, and a symbol.</p>
     <label>Confirm new password</label><input id="pw-new2" type="password" autocomplete="new-password">
     <div class="err" id="pw-err"></div><div class="ok" id="pw-ok"></div>
     <button class="btn" id="pw-go">Update password</button>
@@ -124,9 +127,21 @@ $("#mfa-login-go").addEventListener("click", async ()=>{
 });
 
 /* ---- change password ---- */
+function pwComplexityErrors(p){
+  const e=[];
+  if((p||"").length<12) e.push("12+ characters");
+  if(!/[a-z]/.test(p)) e.push("a lowercase letter");
+  if(!/[A-Z]/.test(p)) e.push("an uppercase letter");
+  if(!/\d/.test(p)) e.push("a number");
+  if(!/[^A-Za-z0-9]/.test(p)) e.push("a symbol");
+  return e;
+}
 $("#pw-go").addEventListener("click", async ()=>{
   $("#pw-err").textContent=""; $("#pw-ok").textContent="";
-  if($("#pw-new").value!==$("#pw-new2").value){ $("#pw-err").textContent="New passwords don't match."; return; }
+  const np=$("#pw-new").value;
+  const ce=pwComplexityErrors(np);
+  if(ce.length){ $("#pw-err").textContent="Password needs: "+ce.join(", ")+"."; return; }
+  if(np!==$("#pw-new2").value){ $("#pw-err").textContent="New passwords don't match."; return; }
   try{
     await api("/api/account/change-password",{method:"POST",body:form({current_password:$("#pw-cur").value,new_password:$("#pw-new").value})});
     $("#pw-ok").textContent="Password updated.";

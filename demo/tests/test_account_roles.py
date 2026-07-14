@@ -40,13 +40,22 @@ def test_change_password_rejects_short(monkeypatch):
     assert r.status_code == 400
 
 
+def test_change_password_rejects_weak_complexity(monkeypatch):
+    """Long but all-lowercase = still rejected (no upper/digit/symbol)."""
+    _auth(monkeypatch)
+    monkeypatch.setattr(supa, "get_profile", lambda t, u: {"id": u, "email": "a@b.com"})
+    r = client.post("/api/account/change-password",
+                    data={"current_password": "oldpass1", "new_password": "alllowercaseletters"})
+    assert r.status_code == 400
+
+
 def test_change_password_wrong_current(monkeypatch):
     _auth(monkeypatch)
     monkeypatch.setattr(supa, "get_profile", lambda t, u: {"id": u, "email": "a@b.com"})
     def _bad_signin(email, pw): raise supa.SupabaseError(400, "bad")
     monkeypatch.setattr(supa, "sign_in", _bad_signin)
     r = client.post("/api/account/change-password",
-                    data={"current_password": "wrong", "new_password": "newlongpassword"})
+                    data={"current_password": "wrong", "new_password": "NewPassw0rd!23"})
     assert r.status_code == 401
 
 
@@ -59,9 +68,16 @@ def test_change_password_success_clears_flag(monkeypatch):
     monkeypatch.setattr(supa, "set_account_security",
                         lambda tok, uid, fields: cleared.update(fields))
     r = client.post("/api/account/change-password",
-                    data={"current_password": "oldpass1", "new_password": "newlongpassword"})
+                    data={"current_password": "oldpass1", "new_password": "NewPassw0rd!23"})
     assert r.status_code == 200
     assert cleared.get("must_change_password") is False
+
+
+def test_password_policy():
+    assert account.password_errors("NewPassw0rd!23") == []          # strong
+    assert "at least 12 characters" in account.password_errors("Ab1!")
+    assert "an uppercase letter" in account.password_errors("lowercase123!")
+    assert "a symbol" in account.password_errors("NoSymbol1234")
 
 
 # --- 2FA --------------------------------------------------------------------

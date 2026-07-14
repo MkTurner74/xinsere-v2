@@ -238,7 +238,10 @@ def users(s: dict = Depends(authn.require_admin)):
             params={"select": "user_id,must_change_password,mfa_enabled"}) or [])}
     except Exception:
         sec = {}
-    admins = {r["user_id"] for r in supa.list_platform_admins(supa.SERVICE_ROLE_KEY)}
+    try:
+        admins = {r["user_id"] for r in supa.list_platform_admins(supa.SERVICE_ROLE_KEY)}
+    except Exception:
+        admins = set()
     for u in users:
         srow = sec.get(u["id"], {})
         u["mfa_enabled"] = bool(srow.get("mfa_enabled"))
