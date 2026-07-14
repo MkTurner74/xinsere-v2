@@ -109,10 +109,24 @@ def request_reset(email: str = Form(...)):
 @router.post("/mfa/enroll")
 def mfa_enroll(request: Request, name: str = Form("Authenticator")):
     """Begin TOTP enrollment. Returns the QR code (SVG) + secret to display; the
-    factor is 'unverified' until the user confirms a code via /mfa/verify."""
+    factor is 'unverified' until the user confirms a code via /mfa/verify.
+
+    Idempotent: a previous, abandoned enrollment leaves an UNVERIFIED factor that
+    would otherwise block a retry with a name collision ("a factor ... already
+    exists"). So we first clear any unverified factors, then enroll fresh."""
     s = authn.session(request)
+    token = s["access_token"]
     try:
-        res = supa.mfa_enroll(s["access_token"], name.strip() or "Authenticator")
+        for f in supa.mfa_list_factors(token):
+            if f.get("status") != "verified":
+                try:
+                    supa.mfa_unenroll(token, f.get("id"))
+                except Exception:
+                    pass
+    except Exception:
+        pass          # cleanup is best-effort — must never block a fresh enroll
+    try:
+        res = supa.mfa_enroll(token, name.strip() or "Authenticator")
     except supa.SupabaseError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail or "Could not start 2FA setup")
     totp = res.get("totp") or {}

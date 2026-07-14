@@ -68,12 +68,29 @@ def test_change_password_success_clears_flag(monkeypatch):
 
 def test_mfa_enroll_returns_qr(monkeypatch):
     _auth(monkeypatch)
+    monkeypatch.setattr(supa, "mfa_list_factors", lambda tok: [])   # nothing to clean up
     monkeypatch.setattr(supa, "mfa_enroll",
                         lambda tok, name: {"id": "f1", "totp": {"qr_code": "<svg/>", "secret": "ABC", "uri": "otpauth://"}})
     r = client.post("/api/account/mfa/enroll", data={"name": "Phone"})
     assert r.status_code == 200
     b = r.json()
     assert b["factor_id"] == "f1" and b["qr_code"] == "<svg/>" and b["secret"] == "ABC"
+
+
+def test_mfa_enroll_clears_stale_unverified_factor(monkeypatch):
+    """A prior abandoned enrollment leaves an unverified factor; enroll must remove
+    it first so the retry isn't blocked by a name collision."""
+    _auth(monkeypatch)
+    monkeypatch.setattr(supa, "mfa_list_factors",
+                        lambda tok: [{"id": "stale", "status": "unverified"},
+                                     {"id": "good", "status": "verified"}])
+    removed = []
+    monkeypatch.setattr(supa, "mfa_unenroll", lambda tok, fid: removed.append(fid))
+    monkeypatch.setattr(supa, "mfa_enroll",
+                        lambda tok, name: {"id": "f2", "totp": {"qr_code": "<svg/>", "secret": "X"}})
+    r = client.post("/api/account/mfa/enroll", data={"name": "Authenticator"})
+    assert r.status_code == 200
+    assert removed == ["stale"]        # unverified cleared, verified left alone
 
 
 def test_mfa_verify_sets_enabled(monkeypatch):

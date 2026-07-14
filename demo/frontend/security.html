@@ -141,28 +141,38 @@ $("#pw-go").addEventListener("click", async ()=>{
 // SVG can blur the modules — so render each form correctly and keep edges crisp.
 function renderQR(el, qr){
   el.innerHTML="";
-  const s=(qr||"").trim();
+  let s=(qr||"").trim();
+  // GoTrue hands back data:image/svg+xml;utf-8,<svg fill="#000">… — the unescaped
+  // '#' breaks it as an <img src>. Pull the SVG out and inject it as markup instead.
+  const m=s.match(/^data:image\/svg\+xml[^,]*,(.*)$/is);
+  if(m){ s=m[1]; if(/%[0-9a-f]{2}/i.test(s)){ try{ s=decodeURIComponent(s); }catch{} } s=s.trim(); }
   if(s.startsWith("<svg")||s.startsWith("<?xml")){
     el.innerHTML=s;
     const svg=el.querySelector("svg");
     if(svg){ svg.setAttribute("width","200"); svg.setAttribute("height","200");
              svg.setAttribute("preserveAspectRatio","xMidYMid meet");
              svg.style.shapeRendering="crispEdges"; }
-  }else if(s){                       // data: URI or image URL
+    return true;
+  }
+  if(s.startsWith("data:")||/^https?:/i.test(s)){   // png/base64 or a URL
     const img=new Image(); img.width=200; img.height=200; img.alt="Scan this 2FA QR code";
     img.style.imageRendering="pixelated"; img.src=s; el.appendChild(img);
+    return true;
   }
+  return false;   // couldn't render a QR — the manual key below is the fallback
 }
 $("#mfa-enroll").addEventListener("click", async ()=>{
+  $("#mfa-err").textContent="";
   try{
     const r=await api("/api/account/mfa/enroll",{method:"POST",body:form({name:"Authenticator"})});
     FACTOR={id:r.factor_id};
-    renderQR($("#mfa-qr"), r.qr_code);
+    const drew=renderQR($("#mfa-qr"), r.qr_code);
+    $("#mfa-qr").classList.toggle("hidden", !drew);
     $("#mfa-secret").textContent=(r.secret||"").replace(/(.{4})/g,"$1 ").trim();  // grouped for manual entry
     $("#mfa-off").classList.add("hidden");
     $("#mfa-enrolling").classList.remove("hidden");
     $("#mfa-code").focus();
-  }catch(e){ alert(e.message); }
+  }catch(e){ $("#mfa-err").textContent=e.message; }   // inline, never a trapping alert
 });
 $("#mfa-verify").addEventListener("click", async ()=>{
   $("#mfa-err").textContent="";
