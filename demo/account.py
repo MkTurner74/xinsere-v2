@@ -16,6 +16,7 @@ import logging
 from fastapi import APIRouter, Form, HTTPException, Request
 
 import authn
+import notify
 import supa
 
 _log = logging.getLogger("xinsere.account")
@@ -87,6 +88,8 @@ def change_password(request: Request, current_password: str = Form(...),
                                    "password_changed_at": supa._now_iso()})
     except Exception:
         pass  # the password DID change; the flag clear is best-effort
+    # Security heads-up email (best-effort — never blocks the change).
+    notify.password_changed(email, prof.get("name") or "")
     return {"ok": True}
 
 

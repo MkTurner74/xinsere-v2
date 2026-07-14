@@ -24,9 +24,9 @@
   .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:0.78rem;background:var(--panel-2);border:1px solid var(--edge)}
   .pill.on{background:rgba(79,227,193,.15);border-color:#2E9E8A;color:var(--mint)}
   .banner{background:rgba(255,139,122,.12);border:1px solid #7a3e3e;border-radius:12px;padding:14px 16px;margin-bottom:18px;color:#ffcabf}
-  .qr{background:#fff;border-radius:12px;padding:14px;display:inline-block;margin:12px 0}
-  .qr svg,.qr img{display:block;width:180px;height:180px}
-  .secret{font-family:ui-monospace,monospace;background:var(--panel-2);border:1px solid var(--edge);border-radius:8px;padding:8px 10px;word-break:break-all;font-size:0.9rem}
+  .qr{background:#fff;border-radius:12px;padding:16px;margin:12px 0;width:232px;display:flex;align-items:center;justify-content:center}
+  .qr svg,.qr img{display:block;width:200px;height:200px;shape-rendering:crispEdges;image-rendering:pixelated}
+  .secret{font-family:ui-monospace,monospace;background:var(--panel-2);border:1px solid var(--edge);border-radius:8px;padding:10px 12px;word-break:break-all;font-size:1rem;letter-spacing:2px;text-align:center}
   .hidden{display:none}
 </style>
 </head>
@@ -136,12 +136,29 @@ $("#pw-go").addEventListener("click", async ()=>{
 });
 
 /* ---- 2FA enroll ---- */
+// GoTrue can hand back the QR as a raw <svg> string OR a data: URI. Injecting a
+// data URI as innerHTML dumps it as text (broken, unscannable), and force-sizing an
+// SVG can blur the modules — so render each form correctly and keep edges crisp.
+function renderQR(el, qr){
+  el.innerHTML="";
+  const s=(qr||"").trim();
+  if(s.startsWith("<svg")||s.startsWith("<?xml")){
+    el.innerHTML=s;
+    const svg=el.querySelector("svg");
+    if(svg){ svg.setAttribute("width","200"); svg.setAttribute("height","200");
+             svg.setAttribute("preserveAspectRatio","xMidYMid meet");
+             svg.style.shapeRendering="crispEdges"; }
+  }else if(s){                       // data: URI or image URL
+    const img=new Image(); img.width=200; img.height=200; img.alt="Scan this 2FA QR code";
+    img.style.imageRendering="pixelated"; img.src=s; el.appendChild(img);
+  }
+}
 $("#mfa-enroll").addEventListener("click", async ()=>{
   try{
     const r=await api("/api/account/mfa/enroll",{method:"POST",body:form({name:"Authenticator"})});
     FACTOR={id:r.factor_id};
-    $("#mfa-qr").innerHTML=r.qr_code||"";      // GoTrue returns an inline SVG
-    $("#mfa-secret").textContent=r.secret||"";
+    renderQR($("#mfa-qr"), r.qr_code);
+    $("#mfa-secret").textContent=(r.secret||"").replace(/(.{4})/g,"$1 ").trim();  // grouped for manual entry
     $("#mfa-off").classList.add("hidden");
     $("#mfa-enrolling").classList.remove("hidden");
     $("#mfa-code").focus();
