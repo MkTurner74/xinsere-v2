@@ -74,7 +74,15 @@ def test_mfa_enroll_returns_qr(monkeypatch):
     r = client.post("/api/account/mfa/enroll", data={"name": "Phone"})
     assert r.status_code == 200
     b = r.json()
-    assert b["factor_id"] == "f1" and b["qr_code"] == "<svg/>" and b["secret"] == "ABC"
+    # We render our own QR from the otpauth URI (segno) — a real SVG, not GoTrue's.
+    assert b["factor_id"] == "f1" and b["secret"] == "ABC"
+    assert "svg" in (b["qr_code"] or "").lower()
+
+
+def test_make_qr_svg_generates_scannable_svg():
+    svg = account._make_qr_svg("otpauth://totp/Xinsere:m@x.com?secret=JBSWY3DPEHPK3PXP&issuer=Xinsere")
+    assert svg and "<svg" in svg and "<path" in svg     # real QR markup
+    assert account._make_qr_svg("") is None             # nothing to encode
 
 
 def test_mfa_enroll_clears_stale_unverified_factor(monkeypatch):

@@ -31,6 +31,25 @@ def _svc() -> str:
     return supa.SERVICE_ROLE_KEY
 
 
+def _make_qr_svg(uri: str) -> str | None:
+    """Render the otpauth:// URI to a crisp QR **ourselves** (segno) instead of
+    relying on GoTrue's qr_code, which shipped as a data-URI SVG that wouldn't
+    scan. Returns an inline SVG string (the Security page renders SVG directly),
+    or None to fall back to GoTrue's."""
+    if not uri:
+        return None
+    try:
+        import io
+        import segno
+        buf = io.BytesIO()
+        segno.make(uri, error="m").save(
+            buf, kind="svg", scale=6, border=3, dark="#000000", light="#ffffff")
+        return buf.getvalue().decode()
+    except Exception as exc:
+        _log.warning("QR generation failed, falling back to provider QR: %s", exc)
+        return None
+
+
 @router.get("/security-status")
 def security_status(request: Request):
     """Everything the Security UI needs: forced-change flag, 2FA state, email
@@ -130,9 +149,11 @@ def mfa_enroll(request: Request, name: str = Form("Authenticator")):
     except supa.SupabaseError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail or "Could not start 2FA setup")
     totp = res.get("totp") or {}
+    uri = totp.get("uri")
     return {"ok": True, "factor_id": res.get("id"),
-            "qr_code": totp.get("qr_code"), "secret": totp.get("secret"),
-            "uri": totp.get("uri")}
+            # Our own QR from the URI (reliable/scannable); fall back to GoTrue's.
+            "qr_code": _make_qr_svg(uri) or totp.get("qr_code"),
+            "secret": totp.get("secret"), "uri": uri}
 
 
 @router.post("/mfa/verify")
