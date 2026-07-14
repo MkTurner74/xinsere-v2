@@ -131,11 +131,17 @@ def request_password_reset(email: str) -> None:
 
 
 def mfa_list_factors(access_token: str) -> list[dict]:
-    data = _gotrue("GET", "/factors", access_token) or {}
-    # GoTrue returns {"all": [...], "totp": [...]} on newer versions; tolerate both.
-    if isinstance(data, dict):
-        return data.get("all") or data.get("totp") or []
-    return data or []
+    """A user's MFA factors. GoTrue exposes these on the USER object
+    (GET /user -> `factors`), NOT a `/factors` collection — reading the wrong place
+    made verified factors invisible (status stuck 'off', stale-factor cleanup and
+    disable both no-ops, re-enroll collided on the friendly name)."""
+    user = get_auth_user(access_token) or {}
+    factors = user.get("factors")
+    if factors is None:
+        # Fallback for GoTrue variants that do expose a /factors collection.
+        data = _gotrue("GET", "/factors", access_token) or {}
+        factors = (data.get("all") or data.get("totp") or []) if isinstance(data, dict) else data
+    return factors or []
 
 
 def mfa_enroll(access_token: str, friendly_name: str = "Authenticator") -> dict:
