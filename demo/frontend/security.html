@@ -65,6 +65,7 @@
     <p class="note">Add a second step at sign-in using an authenticator app (Google Authenticator, 1Password, Authy…). Strongly recommended, and required for admins.</p>
     <div id="mfa-off">
       <button class="btn" id="mfa-enroll">Enable two-factor</button>
+      <div class="err" id="mfa-enroll-err"></div>
     </div>
     <div id="mfa-enrolling" class="hidden">
       <p class="note">Scan this with your authenticator app, then enter the 6-digit code it shows.</p>
@@ -162,7 +163,8 @@ function renderQR(el, qr){
   return false;   // couldn't render a QR — the manual key below is the fallback
 }
 $("#mfa-enroll").addEventListener("click", async ()=>{
-  $("#mfa-err").textContent="";
+  $("#mfa-enroll-err").textContent="";
+  const btn=$("#mfa-enroll"); btn.disabled=true; const label=btn.textContent; btn.textContent="Setting up…";
   try{
     const r=await api("/api/account/mfa/enroll",{method:"POST",body:form({name:"Authenticator"})});
     FACTOR={id:r.factor_id};
@@ -172,7 +174,15 @@ $("#mfa-enroll").addEventListener("click", async ()=>{
     $("#mfa-off").classList.add("hidden");
     $("#mfa-enrolling").classList.remove("hidden");
     $("#mfa-code").focus();
-  }catch(e){ $("#mfa-err").textContent=e.message; }   // inline, never a trapping alert
+  }catch(e){
+    // Show the reason where the user can actually see it (the old error box lived
+    // inside the still-hidden QR panel). A disabled MFA provider in Supabase reads
+    // as "unsupported"/"not enabled" here.
+    let m=e.message||"Couldn't start 2FA setup.";
+    if(/enabl|unsupported|not.*support|provider/i.test(m))
+      m="Two-factor isn't switched on for this project yet. (Admin: enable TOTP in Supabase → Authentication → MFA.)";
+    $("#mfa-enroll-err").textContent=m;
+  }finally{ btn.disabled=false; btn.textContent=label; }
 });
 $("#mfa-verify").addEventListener("click", async ()=>{
   $("#mfa-err").textContent="";
