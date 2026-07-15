@@ -993,7 +993,7 @@ async def preview(request: Request, node_id: str):
     node = supa.get_node(token, node_id)
     if not node or node["type"] != "file":
         raise HTTPException(status_code=404, detail="File not found")
-    allowed, _, _ = _authorize(node, uid, need="view")
+    allowed, _, level = _authorize(node, uid, need="view")
     if not allowed:
         raise HTTPException(status_code=403, detail="No active on-chain grant for you")
 
@@ -1037,11 +1037,24 @@ async def preview(request: Request, node_id: str):
         except Exception:   # Pillow missing or unreadable image — serve the original
             pass
 
+    # Forensic watermark — VIEW-ONLY grantees only. Owners/downloaders can fetch
+    # the clean original anyway; for view-only, every render carries who saw it
+    # and when, so a screenshot is attributable. Deterrence, not DRM.
+    watermarked = False
+    if level == "view":
+        import watermark
+        prof = supa.get_profile(token, uid) or {}
+        who = prof.get("email") or prof.get("name") or uid
+        new_content, new_type = watermark.apply(content, serve_type, who)
+        watermarked = new_content is not content
+        content, serve_type = new_content, new_type
+
     headers = {
         "Content-Disposition": f'inline; filename="{node["name"]}"',
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, no-store",
         "X-Integrity": "verified-bit-perfect",
+        "X-Watermarked": "true" if watermarked else "false",
     }
     if is_svg:   # neuter scripts if the SVG is opened as a document
         headers["Content-Security-Policy"] = "sandbox; script-src 'none'"
