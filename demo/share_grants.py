@@ -45,7 +45,10 @@ def grant_share(svc: str, files: list[dict], grantee: str, share_node: str,
     for root_hex in res.roots:
         try:
             supa.insert_share_batch(svc, share_node, grantee, root_hex)
-        except Exception as exc:  # mapping is best-effort telemetry-adjacent; log loudly
+        except Exception as exc:
+            # Best-effort is SAFE only because revoke_share also derives roots from
+            # the proof cache (batch_grants ⋈ permission_batches) — a lost mapping
+            # row no longer strands a live on-chain grant. Still log loudly.
             _log.warning("share_batch mapping insert failed node=%s grantee=%s root=%s: %s",
                          share_node, grantee, root_hex[:12], exc)
     if not res.roots:
@@ -54,14 +57,36 @@ def grant_share(svc: str, files: list[dict], grantee: str, share_node: str,
 
 
 def revoke_share(svc: str, share_node: str, grantee: str) -> dict:
-    """Revoke every batch root recorded for (`share_node`, `grantee`) with a single
+    """Revoke every batch root anchored for (`share_node`, `grantee`) with a single
     revokeBatchRoot per root. Root-level revoke is exact here because interactive
     roots are single-grantee. Fail-closed: if a revoke tx errors, the mapping row
     is KEPT so the owner sees the share and can retry; other roots still process.
-    Returns {revoked, errors, roots}."""
-    roots = supa.share_batch_roots(svc, share_node, grantee)
+    Returns {revoked, errors, roots}.
+
+    Roots come from the union of the share_batches mapping AND a derivation from
+    the proof cache (batch_grants ⋈ permission_batches). The derivation makes
+    revocation correct even for shares whose mapping row was never recorded
+    (2026-07-15 incident: migration 0011 unapplied in prod). If NEITHER source is
+    readable we cannot know what to revoke — report an error so the caller keeps
+    the share row (fail closed) instead of deleting it with grants still live."""
+    roots: set[str] = set()
+    mapped_ok = derived_ok = True
+    try:
+        roots.update(supa.share_batch_roots(svc, share_node, grantee))
+    except Exception as exc:
+        mapped_ok = False
+        _log.warning("share_batches lookup failed (migration 0011 applied?) "
+                     "node=%s grantee=%s: %s", share_node, grantee, exc)
+    try:
+        roots.update(supa.derived_share_roots(svc, share_node, grantee))
+    except Exception as exc:
+        derived_ok = False
+        _log.warning("derived-root lookup failed node=%s grantee=%s: %s",
+                     share_node, grantee, exc)
+    if not mapped_ok and not derived_ok:
+        return {"revoked": 0, "errors": 1, "roots": 0}
     revoked, errors = 0, 0
-    for root_hex in roots:
+    for root_hex in sorted(roots):
         try:
             root = bytes.fromhex(root_hex[2:] if root_hex.startswith("0x") else root_hex)
             if CHAIN.root_anchored(root):          # 0 == already revoked/never anchored
@@ -70,7 +95,10 @@ def revoke_share(svc: str, share_node: str, grantee: str) -> dict:
                 supa.set_batch_status(svc, root_hex, "revoked")
             except Exception:
                 pass                                # cosmetic status; on-chain revoke is truth
-            supa.delete_share_batch(svc, share_node, grantee, root_hex)
+            try:
+                supa.delete_share_batch(svc, share_node, grantee, root_hex)
+            except Exception:
+                pass    # mapping row may not exist (derived root); on-chain state is truth
             revoked += 1
         except Exception as exc:
             errors += 1

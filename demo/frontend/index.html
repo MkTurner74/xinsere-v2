@@ -143,8 +143,12 @@
   /* LIST VIEW — compact rows (default). Header + rows share ONE grid template
      so columns always line up. */
   #grid.listview{display:block;padding:4px;min-height:auto;}
-  .lhead,.lrow{display:grid;grid-template-columns:22px 34px minmax(0,1fr) 60px 148px 78px 116px;align-items:center;gap:12px;padding:9px 14px;}
+  .lhead,.lrow{display:grid;grid-template-columns:22px 34px minmax(0,1fr) 60px 148px 78px 96px 116px;align-items:center;gap:12px;padding:9px 14px;}
   .lhead{font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--faint);border-bottom:1px solid var(--edge);}
+  .lhead span[data-sort]{cursor:pointer;user-select:none;white-space:nowrap;}
+  .lhead span[data-sort]:hover{color:var(--muted);}
+  .lhead span[data-sort].sort-on{color:var(--text);}
+  .col-mod{color:var(--muted);font-size:0.74rem;white-space:nowrap;font-variant-numeric:tabular-nums;}
   .lrow{border-radius:9px;cursor:default;}
   .lrow:hover{background:var(--panel-2);}
   .lrow.folder{cursor:pointer;}
@@ -162,7 +166,7 @@
   .lrow .mini.dl{font-size:0.74rem;font-weight:600;padding:5px 13px;border-radius:8px;border:0;color:#fff;background:linear-gradient(135deg,var(--violet-br),var(--violet));}
   @media(max-width:680px){
     .lhead,.lrow{grid-template-columns:22px 34px minmax(0,1fr) 120px 116px;}
-    .col-type,.col-share{display:none;}
+    .col-type,.col-share,.col-mod{display:none;}
   }
   /* GRID VIEW — tightened cards */
   #grid:not(.listview) .tile{padding:13px 12px;}
@@ -941,13 +945,49 @@ function facepile(n){ return (n.shared_with&&n.shared_with.length)
   ? `<span class="shared">`+n.shared_with.map(u=>avatarHtml(u)).join("")+`</span>` : ""; }
 
 /* Compact list rows (default) — the app-like layout. */
+// Column sorting: persists across navigation until changed; folders always stay
+// grouped above files (file-manager convention), the key sorts within each group.
+let LSORT={key:null,dir:1};
+const LSORTERS={
+  name:(a,b)=>(a.name||"").localeCompare(b.name||"",undefined,{numeric:true,sensitivity:"base"}),
+  type:(a,b)=>(a.type==="folder"?"folder":(typeLabel(a.content_type)||"file"))
+      .localeCompare(b.type==="folder"?"folder":(typeLabel(b.content_type)||"file")),
+  size:(a,b)=>(a.size||0)-(b.size||0),
+  shared:(a,b)=>((a.shared_with||[]).length)-((b.shared_with||[]).length),
+  modified:(a,b)=>new Date(a.created_at||0)-new Date(b.created_at||0),
+};
+function fmtDate(d){ return d?new Date(d).toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"}):"—"; }
+
 function renderList(g, children, canManage){
   const trash=TRASH_MODE;
+  if(LSORT.key&&LSORTERS[LSORT.key]){
+    const cmp=LSORTERS[LSORT.key];
+    // In place: display order == array order, so shift-select ranges stay correct.
+    children.sort((a,b)=>{
+      const fa=a.type==="folder", fb=b.type==="folder";
+      if(fa!==fb) return fa?-1:1;
+      return cmp(a,b)*LSORT.dir || LSORTERS.name(a,b);
+    });
+  }
+  const hcol=(key,cls,label,tip)=>{
+    const on=LSORT.key===key;
+    return `<span class="${cls}${on?" sort-on":""}" data-sort="${key}" `+
+      `title="Sort by ${tip}">${label}${on?(LSORT.dir===1?" ▲":" ▼"):""}</span>`;
+  };
   const head=document.createElement("div"); head.className="lhead";
   head.innerHTML=`<span>${trash?"":'<input type="checkbox" class="selbox" id="selall" title="Select all">'}</span>`+
-    `<span style="width:30px"></span><span class="nm">Name</span>`+
-    `<span class="col-type">Type</span><span class="col-size">Security</span>`+
-    `<span class="col-share">Shared</span><span class="col-act" style="width:150px"></span>`;
+    `<span style="width:30px"></span>`+
+    hcol("name","nm","Name","name")+
+    hcol("type","col-type","Type","type")+
+    hcol("size","col-size","Security","size")+
+    hcol("shared","col-share","Shared","share count")+
+    hcol("modified","col-mod","Modified","date added")+
+    `<span class="col-act" style="width:150px"></span>`;
+  head.querySelectorAll("[data-sort]").forEach(h=>h.addEventListener("click",()=>{
+    const k=h.dataset.sort;
+    LSORT = LSORT.key===k ? {key:k,dir:-LSORT.dir} : {key:k,dir:1};
+    renderGrid(LAST, LAST_MANAGE);
+  }));
   g.appendChild(head);
   const selall=head.querySelector("#selall");
   if(selall) selall.addEventListener("click",()=>{
@@ -963,7 +1003,8 @@ function renderList(g, children, canManage){
       r.innerHTML=selcell+`<span class="ic">${svg("folder")}</span>`+
         `<span class="nm">${esc(n.name)}<span class="sub">Folder${mine?"":" · from "+esc(n.owner_name)}</span></span>`+
         `<span class="col-type">Folder</span><span class="col-size"></span>`+
-        `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
+        `<span class="col-share">${facepile(n)}</span>`+
+        `<span class="col-mod">${fmtDate(n.created_at)}</span><span class="col-act"></span>`;
       if(!trash) r.onclick=(e)=>{ if(isSelectClick(e)) return; if(!e.target.closest("button,a,.ctx,.selbox")) openFolder(n.id); };
       if(!trash) r.querySelector(".col-act").appendChild(
         iconBtn("download","Download folder as ZIP",(e,b)=>{ if(SEL.size>1&&SEL.has(n.id)) bulkDownload(selNodes()); else downloadFolder(n,b); },"dl"));
@@ -972,7 +1013,8 @@ function renderList(g, children, canManage){
         `<span class="nm" title="${esc(n.name)}">${esc(n.name)}<span class="sub">SHA-256 ${(n.sha256||"").slice(0,12)}…</span></span>`+
         `<span class="col-type">${typeLabel(n.content_type)||"—"}</span>`+
         `<span class="col-size"><span class="secured-i" title="${n.frags} fragments · AES-256-GCM · on-chain permissioned">${svg("shield")}</span> ${fmtSize(n.size)}</span>`+
-        `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
+        `<span class="col-share">${facepile(n)}</span>`+
+        `<span class="col-mod">${fmtDate(n.created_at)}</span><span class="col-act"></span>`;
       if(!trash){
         const act0=r.querySelector(".col-act");
         if(previewKind(n.content_type)){

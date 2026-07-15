@@ -1404,6 +1404,21 @@ async def validation_exc(_request: Request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content={"error": msg, "errors": errs})
 
 
+@app.exception_handler(supa.SupabaseError)
+async def supabase_exc(request: Request, exc: supa.SupabaseError):
+    """A database call failed mid-request (e.g. a missing table/column from an
+    unapplied migration — the 2026-07-15 unshare 500). Every write path here is
+    fail-closed, so nothing was half-committed the user must worry about; give
+    them a readable, retryable message instead of a raw 500. Detail goes to the
+    log only — schema internals never leave the server."""
+    import logging
+    logging.getLogger("xinsere.app").error(
+        "supabase error on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=502, content={
+        "error": "A database step failed, so the action was not completed — "
+                 "nothing was changed. Retry in a moment. [db_error]"})
+
+
 @app.exception_handler(Exception)
 async def all_exc(_request: Request, exc: Exception):
     # Always log the real error server-side.

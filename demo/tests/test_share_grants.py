@@ -25,7 +25,7 @@ def _fake_preserve_factory(recorder, roots=("0xroot1",)):
 
 def _wire(monkeypatch, roots=("0xroot1",)):
     rec = {"preserve_calls": [], "inserted": [], "deleted": [], "revoked_roots": [],
-           "status": [], "mapping": {}}
+           "status": [], "mapping": {}, "derived": {}}
     monkeypatch.setattr(batch_grant, "preserve", _fake_preserve_factory(rec, roots))
     monkeypatch.setattr(supa, "insert_share_batch",
                         lambda tok, n, g, r: (rec["inserted"].append((n, g, r)),
@@ -34,12 +34,20 @@ def _wire(monkeypatch, roots=("0xroot1",)):
                         lambda tok, n, g, r: rec["deleted"].append((n, g, r)))
     monkeypatch.setattr(supa, "share_batch_roots",
                         lambda tok, n, g: list(rec["mapping"].get((n, g), [])))
+    monkeypatch.setattr(supa, "derived_share_roots",
+                        lambda tok, n, g: list(rec["derived"].get((n, g), [])))
     monkeypatch.setattr(supa, "set_batch_status",
                         lambda tok, r, s, **kw: rec["status"].append((r, s)))
     monkeypatch.setattr(CHAIN, "root_anchored", lambda root: 1)   # anchored
     monkeypatch.setattr(CHAIN, "revoke_batch_root",
                         lambda root: rec["revoked_roots"].append(root) or "0xrevtx")
     return rec
+
+
+def _raise(exc):
+    def _f(*a, **kw):
+        raise exc
+    return _f
 
 
 FILES = [{"file_id": "fileA"}, {"file_id": "fileB"}, {"file_id": "fileC"}]
@@ -106,6 +114,41 @@ def test_revoke_share_skips_already_revoked_root(monkeypatch):
     assert out["errors"] == 0 and out["revoked"] == 1
     assert rec["revoked_roots"] == []
     assert ("fld_x", "g", "0xa1") in rec["deleted"]
+
+
+def test_revoke_share_derives_roots_when_mapping_missing(monkeypatch):
+    """2026-07-15 incident: shares anchored while migration 0011 was unapplied have
+    no share_batches row. The proof-cache derivation must still find and revoke
+    their roots — and a failing mapping TABLE (SupabaseError) must not 500."""
+    rec = _wire(monkeypatch)
+    monkeypatch.setattr(supa, "share_batch_roots",
+                        _raise(RuntimeError("supabase 404: no share_batches")))
+    monkeypatch.setattr(supa, "delete_share_batch",
+                        _raise(RuntimeError("supabase 404: no share_batches")))
+    rec["derived"][("fld_x", "g")] = ["0xa1"]
+    out = share_grants.revoke_share("svc", "fld_x", "g")
+    assert out["errors"] == 0 and out["revoked"] == 1
+    assert rec["revoked_roots"] == [bytes.fromhex("a1")]
+
+
+def test_revoke_share_unions_mapped_and_derived(monkeypatch):
+    rec = _wire(monkeypatch, roots=("0xa1",))
+    share_grants.grant_share("svc", FILES, "g", "fld_x", "share")   # maps 0xa1
+    rec["derived"][("fld_x", "g")] = ["0xa1", "0xb2"]               # 0xb2 unmapped
+    out = share_grants.revoke_share("svc", "fld_x", "g")
+    assert out["revoked"] == 2 and out["errors"] == 0
+    assert set(rec["revoked_roots"]) == {bytes.fromhex("a1"), bytes.fromhex("b2")}
+
+
+def test_revoke_share_fails_closed_when_no_root_source_readable(monkeypatch):
+    """If NEITHER the mapping nor the proof cache is readable we can't know what
+    to revoke — must report an error (caller keeps the share row), never report
+    success with grants still live on-chain."""
+    _wire(monkeypatch)
+    monkeypatch.setattr(supa, "share_batch_roots", _raise(RuntimeError("db down")))
+    monkeypatch.setattr(supa, "derived_share_roots", _raise(RuntimeError("db down")))
+    out = share_grants.revoke_share("svc", "fld_x", "g")
+    assert out["errors"] == 1 and out["revoked"] == 0
 
 
 def test_reanchor_share_revokes_then_regrants(monkeypatch):

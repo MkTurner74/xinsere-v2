@@ -740,6 +740,32 @@ def share_batch_roots(token: str, node_id: str, grantee: str) -> list[str]:
     return [r["merkle_root"] for r in rows]
 
 
+# Every source value grant_share/reanchor_share is called with from the app.
+# Migration/connector batches (source 'dropbox' etc.) are EXCLUDED: their scope is
+# a folder path, not a node id, and their roots can be multi-grantee.
+INTERACTIVE_SHARE_SOURCES = ("share", "grant-on-add", "reconcile-invite",
+                             "move", "reanchor")
+
+
+def derived_share_roots(token: str, node_id: str, grantee: str) -> list[str]:
+    """Recover an interactive share's batch root(s) from the proof cache
+    (batch_grants ⋈ permission_batches) instead of the share_batches mapping.
+    Safety net for mappings that were never recorded (2026-07-15 incident: prod ran
+    without migration 0011, so insert_share_batch silently failed for every share
+    anchored since the batch cutover). Interactive roots are single-grantee and
+    node-scoped with scope == share node, so filtering on (scope, grantee,
+    interactive source) identifies exactly the roots the mapping would hold —
+    revoking them touches no other grantee."""
+    rows = _rest("GET", "/batch_grants", token, params={
+        "grantee_id": f"eq.{grantee}",
+        "select": "merkle_root,permission_batches!inner(scope,source,status)",
+        "permission_batches.scope": f"eq.{node_id}",
+        "permission_batches.source": f"in.({','.join(INTERACTIVE_SHARE_SOURCES)})",
+        "permission_batches.status": "neq.revoked",
+    }) or []
+    return sorted({r["merkle_root"] for r in rows})
+
+
 def delete_share_batch(token: str, node_id: str, grantee: str, merkle_root: str) -> None:
     _rest("DELETE", "/share_batches", token,
           params={"node_id": f"eq.{node_id}", "grantee": f"eq.{grantee}",
