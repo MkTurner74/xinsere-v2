@@ -370,7 +370,16 @@ async def me(request: Request):
     token, uid = s["access_token"], s["user_id"]
     prof = supa.get_profile(token, uid) or {"id": uid}
     others = [_public(o) for o in supa.list_others(token, uid)]
+    # Forced-rotation must bite MID-SESSION too, not only at the next login —
+    # an admin flipping the flag expects the next page load to enforce it.
+    must_change = False
+    try:
+        must_change = bool(supa.get_account_security(
+            supa.SERVICE_ROLE_KEY, uid).get("must_change_password"))
+    except Exception:
+        pass
     return {"user": _public(prof), "others": others,
+            "must_change_password": must_change,
             "admin": is_platform_admin(uid, prof)}
 
 
