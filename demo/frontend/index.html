@@ -290,6 +290,7 @@ if(sessionStorage.getItem("xin-authed")==="1")document.documentElement.dataset.a
     </form>
 
     <div class="login-err" id="login-err"></div>
+      <div class="login-hint"><button type="button" class="linkbtn" id="forgot-pw">Forgot password?</button></div>
   </div>
 </div>
 
@@ -408,6 +409,7 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
     <aside class="side">
       <button class="nav active" data-view="mine" id="nav-mine">📁 My Files</button>
       <button class="nav" data-view="shared" id="nav-shared">🔗 Shared with me</button>
+      <button class="nav" data-view="sharedby" id="nav-sharedby">📤 Shared by me</button>
       <button class="nav" data-view="trash" id="nav-trash">🗑️ Trash</button>
     </aside>
     <main class="main" id="main">
@@ -605,6 +607,15 @@ $("#login-form").addEventListener("submit", async (e)=>{
   if(d.must_change_password){ location.href="/security?step=pw"; return; }
   await boot();
 });
+$("#forgot-pw")?.addEventListener("click", async ()=>{
+  const email=($("#u").value||"").trim();
+  if(!email){ $("#login-err").style.color="var(--coral)"; $("#login-err").textContent="Enter your email above first, then click Forgot password."; return; }
+  const fd=new FormData(); fd.append("email",email);
+  const r=await api("/api/account/request-reset",{method:"POST",body:fd});
+  const d=await r.json().catch(()=>({}));
+  $("#login-err").style.color="var(--mint)";
+  $("#login-err").textContent=d.message||"If that email has an account, a reset link is on its way.";
+});
 $("#signup-form").addEventListener("submit", async (e)=>{
   e.preventDefault();
   const fd=new FormData(); fd.append("name",$("#s-name").value); fd.append("email",$("#s-email").value); fd.append("password",$("#s-pass").value);
@@ -642,6 +653,7 @@ async function boot(){
     return;
   }
   const d=await r.json(); ME=d.user; OTHERS=d.others;
+  if(d.must_change_password){ location.href="/security?step=pw"; return; }
   sessionStorage.setItem("xin-authed","1");
   document.documentElement.dataset.authed="1";
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
@@ -659,6 +671,7 @@ function setView(v){
   $("#tools").style.visibility = v==="mine" ? "visible":"hidden";
   if(v==="mine") openFolder("");
   else if(v==="trash") loadTrash();
+  else if(v==="sharedby") loadSharedByMe();
   else loadShared();
 }
 async function loadTrash(){
@@ -690,6 +703,13 @@ async function loadShared(){
   const r=await api("/api/shared"); const d=await r.json();
   $("#crumbs").innerHTML=`<span class="cur">Shared with me</span>`;
   renderGrid(d.children, false);
+}
+async function loadSharedByMe(){
+  const r=await api("/api/shared-by-me"); const d=r.ok?await r.json():{children:[]};
+  $("#crumbs").innerHTML=`<span class="cur">Shared by me <span class="note">${(d.children||[]).length} item${(d.children||[]).length!==1?"s":""} you've shared — click Share to change or revoke</span></span>`;
+  // canManage=true so each tile shows Share (opens the manage/revoke modal); these are all owned by you.
+  renderGrid(d.children, true);
+  if(!(d.children||[]).length) $("#grid").innerHTML=`<div class="empty"><div class="o"></div>You haven't shared anything yet.</div>`;
 }
 
 function renderCrumbs(crumbs){

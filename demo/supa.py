@@ -600,6 +600,15 @@ def shared_with(token: str, user_id: str) -> list[dict]:
     return out
 
 
+def shares_by_owner(token: str, owner_id: str) -> list[dict]:
+    """All share rows on nodes owned by owner_id. RLS: the shares_select policy
+    lets an owner read shares on their own nodes, so the user token suffices.
+    We filter by owner via a joined select on nodes."""
+    return _rest("GET", "/shares", token, params={
+        "select": "node_id,grantee,share_type,nodes!inner(owner)",
+        "nodes.owner": f"eq.{owner_id}"}) or []
+
+
 def shares_for_grantee(token: str, user_id: str) -> list[dict]:
     """Every share row granted to the user — node id + type. Used to resolve the
     viewer's effective access level over a folder subtree."""

@@ -440,6 +440,25 @@ async def shared(request: Request):
     return {"children": items}
 
 
+@app.get("/api/shared-by-me")
+async def shared_by_me(request: Request):
+    """Every node the caller OWNS that has at least one active share — the
+    manage-your-shares view (find + revoke/change in one place)."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    pmap = _profiles_map(token)
+    seen, items = set(), []
+    for row in supa.shares_by_owner(token, uid):
+        nid = row["node_id"]
+        if nid in seen:
+            continue
+        seen.add(nid)
+        n = supa.get_node(token, nid)
+        if n and not n.get("deleted_at") and n["owner"] == uid:
+            items.append(node_view(n, uid, token, pmap))
+    return {"children": items}
+
+
 @app.post("/api/folder")
 async def make_folder(request: Request, name: str = Form(...), parent: str = Form(...)):
     s = _session(request)

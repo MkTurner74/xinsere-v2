@@ -511,7 +511,7 @@ $("#li-go").addEventListener("click",async()=>{
   }catch(e){$("#li-err").textContent=e.message;}
 });
 $("#li-pass").addEventListener("keydown",e=>{if(e.key==="Enter")$("#li-go").click();});
-async function signout(){await api("/api/logout",{method:"POST"});location.reload();}
+async function signout(){try{await api("/api/logout",{method:"POST"});}catch(e){} location.href="/";}
 $("#logout").addEventListener("click",signout);
 $("#denied-out").addEventListener("click",signout);
 
