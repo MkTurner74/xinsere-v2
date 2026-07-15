@@ -124,6 +124,14 @@ def client_js() -> HTMLResponse:
         return HTMLResponse(f.read(), media_type="application/javascript")
 
 
+@app.get("/recover", response_class=HTMLResponse)
+def recover_page() -> HTMLResponse:
+    """Public account-recovery page: request a Xinsere-branded reset link with
+    instructions on what happens next."""
+    with open(os.path.join(_HERE, "frontend", "recover.html"), "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
 @app.get("/security", response_class=HTMLResponse)
 def security_page() -> HTMLResponse:
     """Self-contained account-security page (change password, 2FA, login step-ups).

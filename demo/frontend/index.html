@@ -612,14 +612,9 @@ $("#login-form").addEventListener("submit", async (e)=>{
   if(d.must_change_password){ location.href="/security?step=pw"; return; }
   await boot();
 });
-$("#forgot-pw")?.addEventListener("click", async ()=>{
+$("#forgot-pw")?.addEventListener("click", ()=>{
   const email=($("#u").value||"").trim();
-  if(!email){ $("#login-err").style.color="var(--coral)"; $("#login-err").textContent="Enter your email above first, then click Forgot password."; return; }
-  const fd=new FormData(); fd.append("email",email);
-  const r=await api("/api/account/request-reset",{method:"POST",body:fd});
-  const d=await r.json().catch(()=>({}));
-  $("#login-err").style.color="var(--mint)";
-  $("#login-err").textContent=d.message||"If that email has an account, a reset link is on its way.";
+  location.href="/recover"+(email?("?email="+encodeURIComponent(email)):"");
 });
 $("#signup-form").addEventListener("submit", async (e)=>{
   e.preventDefault();

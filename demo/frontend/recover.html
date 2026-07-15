@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Account recovery · Xinsere</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%20200%20200%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22xm%22%20x1%3D%22100%25%22%20y1%3D%220%25%22%20x2%3D%220%25%22%20y2%3D%22100%25%22%3E%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%238A6BFF%22/%3E%3Cstop%20offset%3D%2250%25%22%20stop-color%3D%22%235B3DF5%22/%3E%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%237C5BFF%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20rx%3D%2246%22%20fill%3D%22%230A0713%22/%3E%3Cline%20x1%3D%22142%22%20y1%3D%2258%22%20x2%3D%2258%22%20y2%3D%22142%22%20stroke%3D%22url%28%23xm%29%22%20stroke-width%3D%2230%22%20stroke-linecap%3D%22round%22/%3E%3Ccircle%20cx%3D%22142%22%20cy%3D%2258%22%20r%3D%2238%22%20fill%3D%22url%28%23xm%29%22/%3E%3Ccircle%20cx%3D%2258%22%20cy%3D%22142%22%20r%3D%2238%22%20fill%3D%22url%28%23xm%29%22/%3E%3Ccircle%20cx%3D%2256%22%20cy%3D%2256%22%20r%3D%2238%22%20fill%3D%22url%28%23xm%29%22/%3E%3Ccircle%20cx%3D%22144%22%20cy%3D%22144%22%20r%3D%2238%22%20fill%3D%22url%28%23xm%29%22/%3E%3C/svg%3E">
+<script>document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark";</script>
+<style>
+  :root{--bg:#0b0d1a;--panel:#141830;--panel-2:#1b2040;--edge:#2a3060;--text:#eef1ff;--muted:#9aa3c7;--brand:#8A6BFF;--violet:#5B3DF5;--mint:#4FE3C1;--rose:#FF8B7A;}
+  :root[data-theme="light"]{--bg:#F4F2FB;--panel:#FFFFFF;--panel-2:#EFEDF9;--edge:rgba(91,61,245,0.22);--text:#1B1533;--muted:#5E5A78;--brand:#5B3DF5;--mint:#0E8E74;--rose:#C7452F;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+  .wrap{max-width:520px;margin:0 auto;padding:48px 20px;}
+  .brand{font-weight:600;color:var(--brand);font-size:1.1rem;margin-bottom:26px;text-decoration:none;display:inline-block}
+  h1{font-size:1.5rem;margin:0 0 6px}
+  .sub{color:var(--muted);margin:0 0 24px}
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:16px;padding:26px;margin-bottom:18px}
+  label{display:block;font-size:.85rem;color:var(--muted);margin:0 0 6px}
+  input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--edge);background:var(--panel-2);color:var(--text);font-size:1rem}
+  .btn{background:linear-gradient(135deg,var(--brand),var(--violet));color:#fff;border:0;border-radius:10px;padding:12px 18px;font-size:1rem;font-weight:600;cursor:pointer;margin-top:16px;width:100%}
+  .btn:disabled{opacity:.5;cursor:default}
+  a.link{color:var(--brand);text-decoration:none} a.link:hover{text-decoration:underline}
+  ol{margin:14px 0 0;padding-left:20px} ol li{margin:8px 0;color:var(--muted)} ol li b{color:var(--text)}
+  .ok{color:var(--mint);font-size:.92rem;margin-top:14px;min-height:1.2em}
+  .foot{color:var(--muted);font-size:.86rem;margin-top:8px}
+  .hidden{display:none}
+  .sent-icon{font-size:2.2rem;margin-bottom:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="brand" href="/">Xinsere</a>
+
+  <div id="form-stage">
+    <h1>Recover your account</h1>
+    <p class="sub">Forgotten your password? We'll email you a secure link to set a new one.</p>
+    <div class="card">
+      <label for="email">Your email address</label>
+      <input id="email" type="email" autocomplete="username" placeholder="you@company.com" autofocus>
+      <button class="btn" id="go" type="button">Email me a reset link</button>
+      <div class="ok" id="msg"></div>
+    </div>
+    <div class="card">
+      <strong>What happens next</strong>
+      <ol>
+        <li>If an account exists for that address, we send a <b>password reset link from Xinsere</b> (check spam if it's not there in a minute).</li>
+        <li>Open the link — it takes you to a page to <b>choose a new password</b>. The link expires shortly and works once.</li>
+        <li>Sign in with your new password. If two-factor is on, you'll still be asked for your authenticator code.</li>
+      </ol>
+      <p class="foot">Didn't get it? The address may not have an account, or your organization's admin manages your sign-in — contact them. For security, we never reveal whether an address is registered.</p>
+    </div>
+    <p><a class="link" href="/">‹ Back to sign in</a></p>
+  </div>
+
+  <div id="sent-stage" class="hidden">
+    <div class="card" style="text-align:center">
+      <div class="sent-icon">📬</div>
+      <h1>Check your email</h1>
+      <p class="sub" style="margin-bottom:0">If <b id="sent-to"></b> has a Xinsere account, a reset link is on its way. It expires shortly, so use it soon.</p>
+    </div>
+    <div class="card">
+      <strong>Next steps</strong>
+      <ol>
+        <li>Open the email from <b>Xinsere</b> and click <b>Reset password</b>.</li>
+        <li>Choose a strong new password (12+ characters, with an uppercase letter, a number, and a symbol).</li>
+        <li>Come back and <a class="link" href="/">sign in</a>.</li>
+      </ol>
+      <p class="foot">No email after a few minutes? <button class="link" id="retry" type="button" style="background:none;border:0;cursor:pointer;font:inherit">Try again</button> or contact your admin.</p>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+async function send(){
+  const email=($("#email").value||"").trim();
+  if(!email){ $("#msg").style.color="var(--rose)"; $("#msg").textContent="Enter your email address first."; return; }
+  const b=$("#go"); b.disabled=true; b.textContent="Sending…";
+  try{
+    const fd=new FormData(); fd.append("email",email);
+    await fetch("/api/account/request-reset",{method:"POST",body:fd});
+  }catch(e){}
+  $("#sent-to").textContent=email;
+  $("#form-stage").classList.add("hidden");
+  $("#sent-stage").classList.remove("hidden");
+}
+$("#go").addEventListener("click",send);
+$("#email").addEventListener("keydown",e=>{ if(e.key==="Enter") send(); });
+$("#retry").addEventListener("click",()=>{ $("#sent-stage").classList.add("hidden"); $("#form-stage").classList.remove("hidden"); $("#go").disabled=false; $("#go").textContent="Email me a reset link"; });
+// Prefill from ?email=
+const pe=new URLSearchParams(location.search).get("email");
+if(pe) $("#email").value=pe;
+</script>
+</body>
+</html>
