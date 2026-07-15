@@ -32,3 +32,19 @@ def test_search_empty_query_short_circuits(monkeypatch):
     monkeypatch.setattr(supa, "_rest", boom)
     assert supa.search_nodes("tok", "***") == []
     assert supa.search_nodes("tok", "  ") == []
+
+
+def test_search_selects_only_real_node_columns(monkeypatch):
+    """Regression: the select must use real nodes columns (sha256, not sha) — a
+    bad column 400s PostgREST and silently blanks the whole search UI."""
+    seen = {}
+
+    def fake_rest(method, path, token, params=None, **kw):
+        seen["select"] = params.get("select", "")
+        return []
+
+    monkeypatch.setattr(supa, "_rest", fake_rest)
+    supa.search_nodes("tok", "anything")
+    cols = set(seen["select"].split(","))
+    assert "sha256" in cols and "sha" not in cols   # sha is the app alias, not a column
+    assert "content_type" in cols and "file_id" in cols

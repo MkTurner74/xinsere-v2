@@ -327,7 +327,11 @@ async def search_nodes(request: Request, q: str = "", limit: int = 60):
     RLS enforces the scope because the query runs on the USER token)."""
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
-    rows = supa.search_nodes(token, q, limit=max(1, min(int(limit or 60), 200)))
+    try:
+        rows = supa.search_nodes(token, q, limit=max(1, min(int(limit or 60), 200)))
+    except supa.SupabaseError as exc:   # never blank the search UI with a 500
+        logging.getLogger("xinsere.app").warning("search failed q=%r: %s", q, exc)
+        return {"query": q, "results": []}
     pmap = _profiles_map(token)
     out = []
     for n in rows:

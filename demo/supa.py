@@ -535,10 +535,11 @@ def search_nodes(token: str, q: str, limit: int = 60) -> list[dict]:
     q = "".join(c for c in q if c not in "\\%*,()").strip()[:64]
     if not q:
         return []
-    return _rest("GET", "/nodes", token, params={
+    rows = _rest("GET", "/nodes", token, params={
         "name": f"ilike.*{q}*", "deleted_at": "is.null",
-        "select": "id,name,type,parent,owner,size,frags,sha,content_type,created_at",
+        "select": "id,name,type,parent,owner,file_id,size,frags,sha256,content_type,created_at",
         "order": "name.asc", "limit": str(limit)}) or []
+    return [_node(r) for r in rows]   # sha256 -> sha alias the view layer expects
 
 
 # shares ------------------------------------------------------------------
