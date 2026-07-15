@@ -1598,7 +1598,10 @@ function openShare(node){
       <button class="btn invite-btn" type="button">Invite</button>
     </div>
     <div class="current"></div>
-    <button class="btn-ghost btn full x">Done</button></div>`;
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button class="btn-ghost btn full x-cancel" type="button">Cancel</button>
+      <button class="btn-ghost btn full x" type="button">Done</button>
+    </div></div>`;
 
   const results=bg.querySelector(".results");
   const current=bg.querySelector(".current");
@@ -1700,7 +1703,12 @@ function openShare(node){
   inv.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); invite(); } };
 
   bg.querySelector(".x").onclick=close;
+  // Cancel backs out without sharing: nothing queued is committed until the
+  // "Share with N people" click, so discarding the queue and closing is safe.
+  bg.querySelector(".x-cancel").onclick=()=>{ PENDING.clear(); close(); };
   bg.addEventListener("click",e=>{ if(e.target===bg) close(); });
+  const onEsc=(e)=>{ if(e.key==="Escape"){ close(); document.removeEventListener("keydown",onEsc); } };
+  document.addEventListener("keydown",onEsc);
   document.body.appendChild(bg);
   setTimeout(()=>q.focus(),40);
 }
