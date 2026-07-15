@@ -423,6 +423,17 @@ def children(token: str, parent_id: str) -> list[dict]:
     return nodes
 
 
+def folders_by_owner(token: str, owner: str) -> list[dict]:
+    """Every live folder the user owns, flat, in ONE query — the Move picker
+    builds the tree client-side (a per-folder recursive walk is O(folders)
+    round-trips and crawls on big imported trees)."""
+    rows = _rest("GET", "/nodes", token,
+                 params={"owner": f"eq.{owner}", "type": "eq.folder",
+                         "deleted_at": "is.null", "select": "id,name,parent",
+                         "order": "name.asc"})
+    return rows or []
+
+
 def trashed(token: str, user_id: str) -> list[dict]:
     """Items the user has moved to Trash (deleted_at set), newest first."""
     rows = _rest("GET", "/nodes", token,

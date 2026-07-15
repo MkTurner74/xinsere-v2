@@ -418,6 +418,20 @@ async def tree(request: Request, folder: str = ""):
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
     folder_id = folder or supa.ensure_root(token, uid)
+    return await _tree_impl(token, uid, folder_id)
+
+
+@app.get("/api/folders")
+async def all_folders(request: Request):
+    """The caller's whole folder tree, flat, in one round-trip — feeds the Move
+    picker. root = the user's root folder id (its row has no parent)."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    root = supa.ensure_root(token, uid)
+    return {"root": root, "folders": supa.folders_by_owner(token, uid)}
+
+
+async def _tree_impl(token: str, uid: str, folder_id: str):
     node = supa.get_node(token, folder_id)  # RLS: None if not accessible
     if not node or node["type"] != "folder":
         raise HTTPException(status_code=404, detail="Folder not found")
