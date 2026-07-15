@@ -797,7 +797,15 @@ function renderUsers(){
     const tr=document.createElement("tr");
     tr.innerHTML=`<td>${esc(u.name)}</td><td>${esc(u.email)}${forced}</td><td>${role}</td>
       <td>${mem}</td><td>${twofa}</td>
-      <td class="row end"><button class="btn ghost sm" data-act="forcepw">${u.must_change_password?"Clear reset":"Force pw reset"}</button></td>`;
+      <td class="row end">
+        ${u.mfa_enabled?`<button class="btn ghost sm" data-act="reset2fa" title="Clear their authenticator so they can re-enroll (lockout recovery)">Reset 2FA</button>`:""}
+        <button class="btn ghost sm" data-act="forcepw">${u.must_change_password?"Clear reset":"Force pw reset"}</button></td>`;
+    tr.querySelector('[data-act="reset2fa"]')?.addEventListener("click",async()=>{
+      if(!confirm(`Reset two-factor for ${u.email}? Their current authenticator stops working and they set up a new one at next sign-in.`))return;
+      try{const r=await api(`/api/admin/users/${u.id}/reset-mfa`,{method:"POST"});
+        const d=await r.json(); alert(d.ok?`2FA reset — ${d.factors_removed} factor(s) removed.`:(d.detail||"Failed")); loadUsers();}
+      catch(e){alert(e.message);}
+    });
     tr.querySelector('[data-act="forcepw"]').addEventListener("click",async()=>{
       const on=!u.must_change_password;
       const path=on?"force-password-change":"clear-force-password-change";

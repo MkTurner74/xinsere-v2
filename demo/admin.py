@@ -224,6 +224,33 @@ def remove_super_admin(user_id: str, s: dict = Depends(authn.require_admin)):
     return {"ok": True}
 
 
+# --- reset a user's two-factor (lockout recovery) ---------------------------------
+
+@router.post("/users/{user_id}/reset-mfa")
+def reset_mfa(user_id: str, s: dict = Depends(authn.require_admin)):
+    """Clear ALL of a user's MFA factors and the 2FA mirror — recovery when
+    someone is locked out (lost/rotated authenticator). Any super-admin can do
+    this for another; the user re-enrolls fresh on next sign-in."""
+    import requests
+    base, svc = supa.SUPABASE_URL, supa.SERVICE_ROLE_KEY
+    H = {"apikey": svc, "Authorization": f"Bearer {svc}"}
+    try:
+        u = requests.get(f"{base}/auth/v1/admin/users/{user_id}", headers=H, timeout=15).json()
+        removed = 0
+        for f in (u.get("factors") or []):
+            r = requests.delete(f"{base}/auth/v1/admin/users/{user_id}/factors/{f['id']}",
+                                headers=H, timeout=15)
+            if r.status_code < 300:
+                removed += 1
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach auth service: {exc}")
+    try:
+        supa.set_account_security(svc, user_id, {"mfa_enabled": False})
+    except Exception:
+        pass
+    return {"ok": True, "factors_removed": removed}
+
+
 # --- force a user password change -------------------------------------------------
 
 @router.post("/users/{user_id}/force-password-change")
