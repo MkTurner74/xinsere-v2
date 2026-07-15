@@ -927,7 +927,12 @@ async def share(request: Request, node_id: str = Form(...),
     # still anchors per-grantee roots so unshare stays exact per person.
     targets = [g.strip() for g in grantee.split(",") if g.strip()]
     for t in targets:
-        if t == uid or supa.get_profile(token, t) is None:
+        # Existence check on the SERVICE plane: profiles SELECT is self-only
+        # since 0010, so reading another user's row with the caller's token
+        # always comes back empty — which made every typeahead-picked recipient
+        # "unknown". Nothing from the row is returned to the caller; the
+        # typeahead RPC already scoped who they can find.
+        if t == uid or supa.get_profile(supa.SERVICE_ROLE_KEY or token, t) is None:
             raise HTTPException(status_code=400, detail="Unknown recipient")
 
     # Finding 2 defense-in-depth before spending gas: cap the per-user share rate
