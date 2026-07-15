@@ -848,8 +848,12 @@ async def share(request: Request, node_id: str = Form(...),
 
     if not grantee:
         raise HTTPException(status_code=400, detail="Pick a person or enter an email")
-    if grantee == uid or supa.get_profile(token, grantee) is None:
-        raise HTTPException(status_code=400, detail="Unknown recipient")
+    # Multi-grantee shares (comma-separated): one request, one wait — the chain
+    # still anchors per-grantee roots so unshare stays exact per person.
+    targets = [g.strip() for g in grantee.split(",") if g.strip()]
+    for t in targets:
+        if t == uid or supa.get_profile(token, t) is None:
+            raise HTTPException(status_code=400, detail="Unknown recipient")
 
     # Finding 2 defense-in-depth before spending gas: cap the per-user share rate
     # (stops a drain loop) and refuse up front if the shared wallet is depleted.
@@ -863,40 +867,42 @@ async def share(request: Request, node_id: str = Form(...),
     if not svc:
         raise HTTPException(status_code=500, detail="Service role key not configured")
     files = supa.files_under(token, node_id)
-
-    # Level change on an existing share (0016): the OLD level's grants must be
-    # revoked before the new ones anchor, or a download-typed leaf would keep
-    # verifying after a downgrade to view. Fail closed: if revocation errors,
-    # abort the re-share (the old level simply stays in force — never a mix).
-    prior = next((sh for sh in supa.shares_for_node(token, node_id)
-                  if sh["grantee"] == grantee), None)
-    if prior and (prior.get("share_type") or "download") != share_type:
-        rev = share_grants.revoke_share(svc, node_id, grantee)
-        errors = rev["errors"]
-        for f in files:   # legacy per-file grants (pre-batch shares)
-            try:
-                CHAIN.revoke(f["file_id"], grantee)   # None = no active grant
-            except Exception:
-                errors += 1
-        if errors:
-            raise HTTPException(status_code=502,
-                                detail="Couldn't revoke the previous permission level — retry")
-
-    last_tx = None
-    try:
-        res = share_grants.grant_share(svc, files, grantee, node_id, "share", share_type)
-        last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
-    except Exception as exc:
-        logging.getLogger("xinsere.app").warning(
-            "share on-chain grant failed node=%s grantee=%s: %s", node_id, grantee, exc)
+    existing = {sh["grantee"]: (sh.get("share_type") or "download")
+                for sh in supa.shares_for_node(token, node_id)}
+    pmap = _profiles_map(token)
+    results, granted_ok = [], 0
+    for t in targets:
+        # Level change on an existing share (0016): revoke the OLD level's grants
+        # before the new ones anchor — fail closed per person, keep processing rest.
+        try:
+            if t in existing and existing[t] != share_type:
+                rev = share_grants.revoke_share(svc, node_id, t)
+                errors = rev["errors"]
+                for f in files:   # legacy per-file grants (pre-batch shares)
+                    try:
+                        CHAIN.revoke(f["file_id"], t)
+                    except Exception:
+                        errors += 1
+                if errors:
+                    raise RuntimeError("previous level revoke failed")
+            res = share_grants.grant_share(svc, files, t, node_id, "share", share_type)
+            last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
+            supa.insert_share(svc, node_id, t, last_tx, share_type)
+            granted_ok += 1
+            results.append({"ok": True, "grantee": _public(pmap.get(t, {"id": t})), "tx": last_tx})
+        except Exception as exc:
+            logging.getLogger("xinsere.app").warning(
+                "share grant failed node=%s grantee=%s: %s", node_id, t, exc)
+            results.append({"ok": False, "grantee": _public(pmap.get(t, {"id": t})),
+                            "error": "on-chain grant failed — retry"})
+    if not granted_ok:
         raise HTTPException(status_code=502,
                             detail="On-chain grant failed [chain_grant_failed] — retry")
-
-    rec = supa.insert_share(svc, node_id, grantee, last_tx, share_type)  # svc: co-owner shares pass RLS
-    pmap = _profiles_map(token)
-    return {"ok": True, "grantee": _public(pmap.get(grantee, {"id": grantee})),
-            "tx": rec.get("tx"), "files_granted": len(files),
-            "share_type": share_type, "cascade": node["type"] == "folder"}
+    first = next(r for r in results if r["ok"])
+    return {"ok": True, "grantee": first["grantee"], "tx": first["tx"],
+            "results": results, "granted": granted_ok, "failed": len(results) - granted_ok,
+            "files_granted": len(files), "share_type": share_type,
+            "cascade": node["type"] == "folder"}
 
 
 _LEVEL_RANK = {"view": 1, "download": 2, "co-owner": 2}

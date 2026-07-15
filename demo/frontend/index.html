@@ -310,6 +310,12 @@ if(sessionStorage.getItem("xin-authed")==="1")document.documentElement.dataset.a
 select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
 
 /* share permission radios */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0;}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel-2);border:1px solid var(--edge-strong);
+  border-radius:999px;padding:4px 6px 4px 12px;font-size:.84rem;}
+.chip button{background:none;border:0;color:var(--muted);cursor:pointer;font-size:.75rem;padding:2px 4px;}
+.chip button:hover{color:var(--coral,#FF8B7A);}
+
 .perm-opts{display:flex;flex-direction:column;gap:8px;margin:6px 0 14px;}
 .perm-opt{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--edge);
   border-radius:11px;cursor:pointer;}
@@ -1111,6 +1117,7 @@ function openPreview(n){
   const body= kind==="img"   ? `<img src="${src}" alt="${esc(n.name)}">`
             : kind==="video" ? `<video src="${src}" controls autoplay controlsList="nodownload"></video>`
             : kind==="audio" ? `<audio src="${src}" controls autoplay controlsList="nodownload"></audio>`
+            : kind==="pdf"   ? `<iframe src="${src}#toolbar=0&navpanes=0" title="${esc(n.name)}"></iframe>`
             :                  `<iframe src="${src}" title="${esc(n.name)}"></iframe>`;
   const infoOn=localStorage.getItem("xin-viewer-info")!=="0";
   bg.innerHTML=`<div class="viewer">
@@ -1366,6 +1373,8 @@ function openShare(node){
     <input class="share-q" type="text" autocomplete="off" placeholder="Search people by name or email…"
       style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
     <div class="results" style="margin:6px 0 2px;max-height:220px;overflow:auto;"></div>
+    <div class="chips"></div>
+    <button class="btn share-go hidden" type="button" style="margin:6px 0 2px;"></button>
     <div class="invite-row" style="display:flex;gap:8px;margin:10px 0 4px;">
       <input class="invite-email" type="email" autocomplete="off" placeholder="Or invite by email…"
         style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
@@ -1382,17 +1391,32 @@ function openShare(node){
   const permVal=()=>bg.querySelector('input[name="share-perm"]:checked').value;
   const permSel={get value(){return permVal();}};
 
-  // Grant to an existing user id (from typeahead) — real on-chain grant.
-  async function shareUser(uid, name, btn){
-    if(btn) btn.disabled=true;
-    toast("Recording grant on-chain (Amoy)… a few seconds");
-    const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",uid);
-    fd.append("share_type",permSel.value);
+  // Build a recipient list first; ONE Share click then processes everyone in a
+  // single request (per-person on-chain roots, but you only wait once).
+  const PENDING=new Map();   // uid -> display name
+  const chips=bg.querySelector(".chips"), goBtn=bg.querySelector(".share-go");
+  function renderChips(){
+    chips.innerHTML="";
+    for(const [uid,name] of PENDING){
+      const c=document.createElement("span"); c.className="chip";
+      c.innerHTML=`${esc(name)} <button type="button" aria-label="Remove">✕</button>`;
+      c.querySelector("button").onclick=()=>{ PENDING.delete(uid); renderChips(); };
+      chips.appendChild(c);
+    }
+    goBtn.classList.toggle("hidden", !PENDING.size);
+    goBtn.textContent=`Share with ${PENDING.size} ${PENDING.size===1?"person":"people"}`;
+  }
+  function queueUser(uid, name){ PENDING.set(uid, (name||"").split(" ")[0]||name); renderChips(); q.value=""; results.innerHTML=""; }
+  goBtn.onclick=async()=>{
+    goBtn.disabled=true; goBtn.textContent="Recording grants on-chain…";
+    const fd=new FormData(); fd.append("node_id",node.id);
+    fd.append("grantee",[...PENDING.keys()].join(",")); fd.append("share_type",permSel.value);
     const r=await api("/api/share",{method:"POST",body:fd});
     if(r.ok){ const d=await r.json();
-      toast(`Shared with ${(name||"").split(" ")[0]}${d.share_type==="view"?" (view only)":""} · on-chain proof ${(d.tx||"").slice(0,14)}…`); refresh(); }
-    else { toast((await r.json()).error); if(btn) btn.disabled=false; }
-  }
+      toast(`Shared with ${d.granted} ${d.granted===1?"person":"people"}${d.failed?` · ${d.failed} failed — retry`:""} · on-chain`);
+      refresh();
+    } else { toast((await r.json()).error||"Share failed"); goBtn.disabled=false; renderChips(); }
+  };
 
   // Revoke an existing grantee (on-chain per file; fails closed).
   async function revokeUser(u){
@@ -1435,7 +1459,7 @@ function openShare(node){
         const b=document.createElement("button"); b.className="person"; b.type="button";
         const already=sharedIds.has(u.id);
         b.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email}</span>`+(already?`<span class="st">shared ✓</span>`:``);
-        if(already){ b.disabled=true; } else { b.onclick=()=>shareUser(u.id,u.name||u.email,b); }
+        if(already||PENDING.has(u.id)){ b.disabled=true; } else { b.onclick=()=>queueUser(u.id,u.name||u.email); }
         results.appendChild(b);
       });
     },220);
