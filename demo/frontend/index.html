@@ -221,12 +221,17 @@
   .theme-toggle{background:transparent;border:1px solid var(--edge);border-radius:9px;width:32px;height:32px;display:grid;place-items:center;color:var(--muted);font-size:0.95rem;line-height:1;padding:0;}
   .theme-toggle:hover{color:var(--text);border-color:var(--edge-strong);}
   #login .theme-toggle{position:absolute;top:18px;right:20px;}
+  html[data-authed="1"] #login{display:none !important;}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
 </style>
 </head>
 <body>
 <script>/* apply saved theme before first paint (no flash); dark is default */
-document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark";</script>
+document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark";
+/* known-authed hint: hide the login screen pre-paint so navigating back from
+   Settings/Admin doesn't flash it while /api/me round-trips; boot() clears the
+   hint (and reveals login) if the session turns out to be gone */
+if(sessionStorage.getItem("xin-authed")==="1")document.documentElement.dataset.authed="1";</script>
 <!-- mark defs, reused -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
   <linearGradient id="xm" x1="100%" y1="0%" x2="0%" y2="100%">
@@ -285,8 +290,12 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
 .usermenu .menu-item.danger{color:var(--rose,#FF8B7A)}
 .usermenu .menu-item.danger:hover{background:rgba(255,90,90,.12)}
 
+/* native <select> popup: force readable colors — a transparent-background select
+   can fall back to the OS light popup while inheriting our light text */
+select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
+
 /* in-browser secure viewer */
-.viewer-bg{position:fixed;inset:0;background:rgba(4,3,10,.86);z-index:80;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
+.viewer-bg{position:fixed;inset:0;background:rgba(4,3,10,.86);z-index:80;display:flex;align-items:center;justify-content:center;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
 .viewer{width:min(94vw,1180px);height:min(92vh,860px);display:flex;flex-direction:column;background:var(--menu-bg,#141026);border:1px solid var(--edge,rgba(146,119,255,.3));border-radius:14px;overflow:hidden}
 .viewer-top{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--edge,rgba(146,119,255,.16))}
 .viewer-top .vnm{font-weight:600;font-size:.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
@@ -512,8 +521,15 @@ document.addEventListener("click", e=>{
 document.addEventListener("keydown", e=>{ if(e.key==="Escape" && _userMenu) _userMenu.classList.add("hidden"); });
 
 async function boot(){
-  const r=await api("/api/me"); if(!r.ok){ return; }
+  const r=await api("/api/me");
+  if(!r.ok){ // session gone: clear the known-authed hint and show login
+    sessionStorage.removeItem("xin-authed");
+    delete document.documentElement.dataset.authed;
+    return;
+  }
   const d=await r.json(); ME=d.user; OTHERS=d.others;
+  sessionStorage.setItem("xin-authed","1");
+  document.documentElement.dataset.authed="1";
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
   $("#me-av").outerHTML=avatarHtml(ME).replace('class="avatar"','class="avatar" id="me-av"');
   $("#me-name").textContent=ME.name;

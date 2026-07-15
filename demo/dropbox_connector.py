@@ -460,7 +460,9 @@ class MigrationRunner:
         # Walk the migrated subtree; attach each file to the grantees covering its path.
         grants: list = []            # batch_grant.Grant (internal, on-chain)
         stubs: dict[str, set[str]] = {}   # node_id -> {external emails}
-        counts = {"files": 0, "owner_grants": 0, "internal_pairs": 0, "external_pairs": 0}
+        folder_nodes: dict[str, str] = {}  # relpath_lower -> folder node_id (for share rows)
+        counts = {"files": 0, "owner_grants": 0, "internal_pairs": 0,
+                  "external_pairs": 0, "share_rows": 0}
         # Brand promise: EVERY file's access is verified on-chain — the owner included, not
         # bypassed. So we self-grant the owner on every file (batched, ~flat gas), and the
         # download gate checks the chain for owners too. Toggle off with XINSERE_GRANT_OWNER=0.
@@ -477,6 +479,7 @@ class MigrationRunner:
             for n in supa.children(token, node_id):
                 if n["type"] == "folder":
                     child_rel = f"{relpath}/{n['name']}".strip("/").lower()
+                    folder_nodes[child_rel] = n["id"]
                     walk(n["id"], child_rel)
                 elif n["type"] == "file" and n.get("file_id"):
                     counts["files"] += 1
@@ -497,6 +500,25 @@ class MigrationRunner:
         # Internal grants -> Merkle aggregate batches (the aggregate wallet).
         result = batch_grant.preserve(grants, supa=supa, token=token,
                                       source="dropbox", scope=folder)
+
+        # Share METADATA rows for internal grantees at each shared folder's node —
+        # the on-chain grant is the access authority, but the app's listing (RLS
+        # has_node_access) and "Shared with me" read the shares table; without
+        # these rows a grantee can download-if-they-know-the-id but sees nothing.
+        # (Gap found 2026-07-14: the first migration anchored grants only.)
+        for acl_path, emails in acls.items():
+            node_id = folder_nodes.get(acl_path)
+            if not node_id:
+                continue  # shared folder not part of the migrated subtree
+            for em in emails - owner_emails:
+                uid = resolved.get(em)
+                if not uid:
+                    continue  # external -> stub below
+                try:
+                    supa.insert_share(token, node_id, uid, None)
+                    counts["share_rows"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  share-row FAIL {node_id} {em}: {exc}", file=sys.stderr, flush=True)
 
         # External emails -> no-gas pending invite stubs (viral onboarding, ADR-105).
         stub_written = 0
