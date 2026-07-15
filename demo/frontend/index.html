@@ -355,6 +355,7 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
 .viewer-top .vnm{font-weight:600;font-size:.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .viewer-top .vsec{display:inline-flex;align-items:center;gap:5px;font-size:.75rem;color:var(--mint,#4FE3C1);white-space:nowrap}
 .viewer-top .vsec svg{width:13px;height:13px}
+.viewer-top .vacts{display:flex;gap:8px;align-items:center}
 .viewer-top .vclose{background:none;border:none;color:inherit;font-size:1.05rem;opacity:.7;padding:4px 8px}
 .viewer-top .vclose:hover{opacity:1}
 .viewer-main{flex:1;min-height:0;display:flex}
@@ -1115,6 +1116,7 @@ function openPreview(n){
   bg.innerHTML=`<div class="viewer">
     <div class="viewer-top"><span class="vnm" title="${esc(n.name)}">${esc(n.name)}</span>
       <span class="vsec" title="Reassembled and decrypted server-side for viewing — keys never leave Xinsere">${svg("shield")} secure view</span>
+      <span class="vacts"></span>
       <button class="iconbtn vinfo" type="button" title="File & provenance info">${svg("info")}</button>
       <button class="vclose" type="button" aria-label="Close">✕</button></div>
     <div class="viewer-main">
@@ -1145,6 +1147,16 @@ function openPreview(n){
   bg.addEventListener("click",e=>{ if(e.target===bg) close(); });
   document.addEventListener("keydown",onKey);
   document.body.appendChild(bg);
+
+  // Action toolbar: download (rights permitting), share (owner/co-owner), and
+  // the full ••• manage menu (move/rename/delete…) for the owner.
+  const va=bg.querySelector(".vacts"); const mine=ME&&n.owner===ME.id;
+  if((n.access||"download")!=="view"){
+    const dl=iconBtn("download","Download",(e,b)=>downloadFile(n,b),"dl"); va.appendChild(dl);
+    if(!mine) gateOnChain(n, dl);
+  }
+  if(mine||n.access==="co-owner") va.appendChild(iconBtn("share","Share",()=>openShare(n)));
+  if(mine){ const kb=kebab(n); kb.classList.add("iconbtn"); va.appendChild(kb); }
 
   // Provenance: live on-chain verification for THIS viewer + the contract address.
   (async()=>{
