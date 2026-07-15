@@ -1206,13 +1206,24 @@ async def download_folder(request: Request, node_id: str):
     node = supa.get_node(token, node_id)
     if not node or node["type"] != "folder":
         raise HTTPException(status_code=404, detail="Folder not found")
-    files = supa.files_under(token, node_id)
+    # Path-aware walk so the ZIP preserves the folder structure (a flat namelist
+    # collides on duplicate names in different subfolders).
+    files: list[tuple[str, dict]] = []
+
+    def _walk(fid: str, rel: str) -> None:
+        for c in supa.children(token, fid):
+            if c["type"] == "folder":
+                _walk(c["id"], f"{rel}{c['name']}/")
+            elif c.get("file_id"):
+                files.append((rel + c["name"], c))
+
+    _walk(node_id, "")
     if not files:
         raise HTTPException(status_code=404, detail="Folder is empty")
     buf = io.BytesIO()
     added = skipped = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in files:
+        for relpath, f in files:
             allowed, _, _ = _authorize(f, uid, need="download")
             if not allowed:
                 skipped += 1
@@ -1232,7 +1243,7 @@ async def download_folder(request: Request, node_id: str):
                         entry.get("entry_hash", ""))
             else:
                 _record_access(f, uid, "file.download")
-            z.writestr(f["name"], content)
+            z.writestr(relpath, content)
             added += 1
     if not added:
         raise HTTPException(status_code=403, detail="No downloadable files in this folder")
