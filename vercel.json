@@ -10,6 +10,7 @@
     { "source": "/(.*)", "destination": "/api/index" }
   ],
   "crons": [
-    { "path": "/api/purge-expired", "schedule": "0 3 * * *" }
+    { "path": "/api/purge-expired", "schedule": "0 3 * * *" },
+    { "path": "/api/anchor-access-log", "schedule": "30 0 * * *" }
   ]
 }
