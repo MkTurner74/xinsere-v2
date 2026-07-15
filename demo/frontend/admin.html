@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Xinsere — Admin Console</title>
+<script>/* apply saved theme before first paint (no flash); dark is default */
+document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark";</script>
 <style>
   :root{
     --bg:#0A0713;--bg-2:#0F0B1E;--panel:rgba(255,255,255,0.035);--panel-2:rgba(146,119,255,0.06);
@@ -15,6 +17,15 @@
     --radius:16px;--font:"Poppins","Outfit","Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     --mono:"JetBrains Mono",ui-monospace,"Consolas",monospace;
     color-scheme:dark;
+  }
+  :root[data-theme="light"]{
+    --bg:#F4F2FB;--bg-2:#FFFFFF;--panel:rgba(91,61,245,0.05);--panel-2:rgba(91,61,245,0.09);
+    --edge:rgba(91,61,245,0.18);--edge-strong:rgba(91,61,245,0.38);
+    --violet-br:#8A6BFF;--violet:#5B3DF5;--word:#5B3DF5;
+    --mint:#0E8E74;--coral:#C7452F;--text:#1B1533;--muted:#5E5A78;--faint:#8B86A3;
+    --glow-a:rgba(124,91,255,0.10);--glow-b:rgba(91,61,245,0.08);
+    --input-bg:rgba(91,61,245,0.06);--task-bg:#FFFFFF;--scrim:rgba(24,18,48,0.35);
+    color-scheme:light;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;min-height:100%;}
@@ -28,18 +39,44 @@
   input:focus,select:focus{border-color:var(--edge-strong);}
   .hidden{display:none !important;}
 
-  header{display:flex;align-items:center;gap:12px;padding:18px 28px;
-    border-bottom:1px solid var(--edge);}
-  .word{font-weight:600;font-size:1.05rem;color:var(--word);letter-spacing:0.01em;}
-  .home{text-decoration:none;display:inline-flex;align-items:center;cursor:pointer;opacity:1;transition:opacity .15s;}
-  .home:hover{opacity:0.7;}
-  .crumb{color:var(--faint);font-size:0.9rem;}
-  header .who{margin-left:auto;color:var(--muted);font-size:0.85rem;display:flex;gap:14px;align-items:center;}
-  .link{background:none;border:none;color:var(--word);padding:0;font-size:0.85rem;}
+  /* ---- shell: sidebar + content ---- */
+  .shell{display:flex;min-height:100vh;}
+  aside{width:232px;flex-shrink:0;border-right:1px solid var(--edge);
+    padding:20px 14px 16px;display:flex;flex-direction:column;gap:2px;
+    position:sticky;top:0;height:100vh;overflow-y:auto;}
+  .brand{display:flex;align-items:baseline;gap:8px;padding:0 10px 16px;}
+  .word{font-weight:600;font-size:1.05rem;color:var(--word);letter-spacing:0.01em;text-decoration:none;}
+  .word:hover{opacity:.75;}
+  .crumb{color:var(--faint);font-size:0.8rem;}
+  .navgrp{margin:16px 0 4px;font-size:0.66rem;letter-spacing:.09em;color:var(--faint);
+    text-transform:uppercase;padding:0 10px;font-weight:600;}
+  .navitem{display:flex;align-items:center;gap:9px;background:none;border:1px solid transparent;
+    color:var(--muted);padding:8px 10px;border-radius:9px;font-size:.9rem;text-align:left;width:100%;}
+  .navitem:hover{background:var(--panel-2);color:var(--text);}
+  .navitem.active{background:linear-gradient(135deg,rgba(138,107,255,0.2),rgba(91,61,245,0.12));
+    color:var(--text);border-color:var(--edge);}
+  .sidefoot{margin-top:auto;padding:14px 10px 0;border-top:1px solid var(--edge);
+    display:flex;flex-direction:column;gap:8px;font-size:0.82rem;}
+  .sidefoot .link{text-align:left;}
+  .sidefoot .whoami{color:var(--faint);font-size:0.76rem;word-break:break-all;}
+  .link{background:none;border:none;color:var(--word);padding:0;font-size:0.85rem;text-decoration:none;}
+  .link:hover{opacity:.75;}
 
-  main{max-width:1080px;margin:0 auto;padding:32px 28px 90px;}
-  h2{font-size:1.15rem;margin:34px 0 14px;display:flex;align-items:center;gap:10px;}
+  main{flex:1;min-width:0;max-width:1080px;padding:30px 34px 90px;}
+  h1.viewtitle{font-size:1.35rem;margin:0 0 4px;}
+  .viewsub{color:var(--muted);font-size:0.88rem;margin:0 0 22px;}
+  h2{font-size:1.1rem;margin:32px 0 12px;display:flex;align-items:center;gap:10px;}
   h2 .count{color:var(--faint);font-weight:400;font-size:0.85rem;}
+
+  @media (max-width:900px){
+    .shell{flex-direction:column;}
+    aside{width:100%;height:auto;position:static;flex-direction:row;flex-wrap:wrap;align-items:center;}
+    .navgrp{display:none;}
+    .navitem{width:auto;}
+    .sidefoot{margin:0 0 0 auto;padding:0;border:none;flex-direction:row;align-items:center;}
+    .sidefoot .whoami{display:none;}
+    main{padding:24px 18px 70px;}
+  }
 
   .panel{background:var(--panel);border:1px solid var(--edge);border-radius:var(--radius);
     padding:18px 20px;}
@@ -56,6 +93,7 @@
   .btn.ghost{background:var(--panel-2);color:var(--word);border:1px solid var(--edge);}
   .btn.danger{background:none;border:1px solid rgba(255,139,122,0.4);color:var(--coral);}
   .btn.sm{padding:5px 10px;font-size:0.78rem;border-radius:8px;}
+  .btn:disabled{opacity:.45;cursor:default;}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
   .row.end{justify-content:flex-end;}
 
@@ -64,6 +102,8 @@
   .pill.suspended,.pill.revoked{background:rgba(255,139,122,0.12);color:var(--coral);}
   .pill.org_admin{background:rgba(146,119,255,0.16);color:var(--word);}
   .pill.member{background:var(--panel-2);color:var(--muted);}
+  .pill.anchored{background:rgba(79,227,193,0.12);color:var(--mint);}
+  .pill.unanchored{background:var(--panel-2);color:var(--muted);}
 
   /* auth / gate screens */
   .gate{max-width:380px;margin:12vh auto;padding:34px;background:var(--bg-2);
@@ -85,40 +125,57 @@
   .warn{font-size:0.8rem;color:var(--coral);}
   .note{font-size:0.82rem;color:var(--muted);}
   .back{color:var(--word);background:none;border:none;font-size:0.86rem;padding:0;margin-bottom:8px;}
-  .toolbar{display:flex;justify-content:space-between;align-items:center;margin:6px 0 14px;}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:6px 0 14px;flex-wrap:wrap;}
   .empty{color:var(--faint);font-size:0.88rem;padding:14px 4px;}
-  /* import dashboard */
+
+  /* stat cards */
   .cards{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0 18px;}
-  .card{background:var(--panel,rgba(255,255,255,0.04));border:1px solid var(--line,rgba(255,255,255,0.08));border-radius:12px;padding:14px 16px;min-width:130px;}
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;min-width:130px;}
   .card .k{font-size:1.5rem;font-weight:600;}
   .card .l{font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-top:2px;}
-  .card .k.teal{color:var(--teal,#00d4ff);}
-  .bar{height:8px;border-radius:6px;background:rgba(255,255,255,0.08);overflow:hidden;margin:8px 0 4px;}
+  .card .k.teal{color:var(--mint);}
+  .card .k.warn{color:var(--coral);}
+
+  /* import runs */
+  .bar{height:8px;border-radius:6px;background:var(--panel-2);overflow:hidden;margin:8px 0 4px;}
   .bar > span{display:block;height:100%;background:linear-gradient(90deg,#00d4ff,#4ade80);}
-  .run{border:1px solid var(--line,rgba(255,255,255,0.08));border-radius:12px;padding:14px 16px;margin-bottom:12px;}
+  .run{border:1px solid var(--edge);border-radius:12px;padding:14px 16px;margin-bottom:12px;background:var(--panel);}
   .run .top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
   .run .metrics{display:flex;flex-wrap:wrap;gap:16px;font-size:0.82rem;color:var(--muted);margin-top:8px;}
-  .run .metrics b{color:var(--word,#e8f4f8);font-weight:600;}
+  .run .metrics b{color:var(--text);font-weight:600;}
   .pill.complete{background:rgba(74,222,128,0.16);color:#4ade80;}
-  .pill.running{background:rgba(0,212,255,0.16);color:#00d4ff;}
-  .pill.failed,.pill.revoked{background:rgba(255,111,97,0.16);color:#ff6f61;}
+  .pill.running{background:rgba(0,212,255,0.16);color:#00b8dd;}
+  .pill.failed{background:rgba(255,111,97,0.16);color:#ff6f61;}
   .pill.live{background:rgba(74,222,128,0.16);color:#4ade80;}
-  .pill.pending{background:rgba(255,255,255,0.1);color:var(--muted);}
+  .pill.pending{background:var(--panel-2);color:var(--muted);}
+
+  /* needs-attention list */
+  .attn{list-style:none;margin:0;padding:0;}
+  .attn li{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--edge);font-size:0.88rem;}
+  .attn li:last-child{border-bottom:none;}
+  .attn .dot{width:8px;height:8px;border-radius:50%;background:var(--coral);flex-shrink:0;}
+  .attn .dot.ok{background:var(--mint);}
+
+  /* settings */
+  .subnav{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 20px;}
+  .subnav button{background:var(--panel-2);border:1px solid var(--edge);color:var(--muted);
+    border-radius:999px;padding:6px 14px;font-size:0.84rem;}
+  .subnav button.active{color:var(--text);border-color:var(--edge-strong);background:var(--panel);}
+  .cfg h3{margin:0 0 2px;font-size:1rem;}
+  .cfg .desc{color:var(--muted);font-size:0.84rem;margin:0 0 12px;}
+  .kv{display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-bottom:1px solid var(--edge);font-size:0.88rem;}
+  .kv:last-child{border-bottom:none;}
+  .kv .k{color:var(--muted);}
+  .kv .v{font-family:var(--mono);font-size:0.8rem;text-align:right;word-break:break-all;}
+
+  /* danger zone */
+  .danger-zone{border:1px solid rgba(255,139,122,0.45);border-radius:var(--radius);
+    padding:18px 20px;margin-top:34px;}
+  .danger-zone h2{margin:0 0 6px;color:var(--coral);font-size:1rem;}
+  .dz-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:10px 0;}
 </style>
 </head>
 <body>
-
-<header>
-  <a class="home" href="/" title="Back to Xinsere"><span class="word">Xinsere</span></a><span class="crumb">/ Admin Console</span>
-  <div class="who hidden" id="who">
-    <button class="link" id="nav-orgs">Organizations</button>
-    <button class="link" id="nav-superadmins">Super admins</button>
-    <button class="link" id="nav-imports">Imports</button>
-    <span id="who-email"></span>
-    <a class="link" href="/docs/guide" target="_blank">API docs</a>
-    <button class="link" id="logout">Sign out</button>
-  </div>
-</header>
 
 <!-- sign-in gate -->
 <div class="gate hidden" id="gate-login">
@@ -137,13 +194,59 @@
   <button class="btn ghost" id="denied-out">Sign out</button>
 </div>
 
-<main class="hidden" id="console">
+<div class="shell hidden" id="shell">
+<aside>
+  <div class="brand"><a class="word" href="/" title="Back to Xinsere">Xinsere</a><span class="crumb">Admin</span></div>
+
+  <button class="navitem" data-view="overview">Overview</button>
+
+  <div class="navgrp">Manage</div>
+  <button class="navitem" data-view="orgs">Organizations</button>
+  <button class="navitem" data-view="users">Users</button>
+  <button class="navitem" data-view="superadmins">Super admins</button>
+
+  <div class="navgrp">Activity</div>
+  <button class="navitem" data-view="imports">Imports</button>
+  <button class="navitem" data-view="audit">Audit log</button>
+
+  <div class="navgrp">Configure</div>
+  <button class="navitem" data-view="settings">Settings</button>
+
+  <div class="sidefoot">
+    <a class="link" href="/docs/guide" target="_blank">API docs ↗</a>
+    <a class="link" href="/">Back to app</a>
+    <button class="link" id="logout">Sign out</button>
+    <span class="whoami" id="who-email"></span>
+  </div>
+</aside>
+
+<main id="console">
+
+  <!-- ============ OVERVIEW ============ -->
+  <section id="view-overview" class="hidden">
+    <h1 class="viewtitle">Overview</h1>
+    <p class="viewsub">Platform health at a glance.</p>
+    <div class="cards" id="ov-cards"></div>
+
+    <h2>Needs attention</h2>
+    <div class="panel"><ul class="attn" id="ov-attn"></ul></div>
+
+    <h2>Recent activity <span class="count note">latest audit events</span></h2>
+    <div class="panel">
+      <table id="ov-audit">
+        <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Organization</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty hidden" id="ov-audit-empty">No activity recorded yet.</div>
+    </div>
+  </section>
 
   <!-- ============ ORG LIST VIEW ============ -->
-  <section id="view-orgs">
-    <h2>Organizations <span class="count" id="org-count"></span></h2>
+  <section id="view-orgs" class="hidden">
+    <h1 class="viewtitle">Organizations</h1>
+    <p class="viewsub">An organization holds members, API keys and a service identity that owns its API-stored assets.</p>
     <div class="toolbar">
-      <span class="note">An organization holds members, API keys and a service identity that owns its API-stored assets.</span>
+      <span class="count" id="org-count"></span>
       <button class="btn" id="new-org">New organization</button>
     </div>
     <div class="panel">
@@ -153,21 +256,39 @@
       </table>
       <div class="empty hidden" id="org-empty">No organizations yet — create the first one (Xinsere itself is a fine start).</div>
     </div>
+  </section>
 
-    <h2>All users <span class="count" id="user-count"></span></h2>
+  <!-- ============ USERS VIEW ============ -->
+  <section id="view-users" class="hidden">
+    <h1 class="viewtitle">Users</h1>
+    <p class="viewsub">Everyone with an account, across all organizations — role, membership and security posture.</p>
+    <div class="toolbar">
+      <span class="row">
+        <input id="u-search" placeholder="Search name or email…" style="min-width:220px">
+        <select id="u-filter">
+          <option value="">All users</option>
+          <option value="no2fa">2FA off</option>
+          <option value="forced">Must reset password</option>
+          <option value="super">Super admins</option>
+        </select>
+      </span>
+      <span class="count" id="user-count"></span>
+    </div>
     <div class="panel">
       <table id="user-table">
         <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Organizations</th><th>2FA</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="empty hidden" id="user-empty">No users match.</div>
     </div>
   </section>
 
   <!-- ============ SUPER ADMINS VIEW ============ -->
   <section id="view-superadmins" class="hidden">
-    <h2>Super admins <span class="count" id="sa-count"></span></h2>
+    <h1 class="viewtitle">Super admins</h1>
+    <p class="viewsub">The highest tier — <strong>Xinsere staff only</strong>. Super admins operate the whole platform: create/suspend organizations, mint API keys, view every import. They do <em>not</em> get to read any customer's files. Grant sparingly. Org (tenant) admins are managed inside each organization.</p>
     <div class="toolbar">
-      <span class="note">The highest tier — <strong>Xinsere staff only</strong>. Super admins operate the whole platform: create/suspend organizations, mint API keys, view every import. They do <em>not</em> get to read any customer's files. Grant sparingly. Org (tenant) admins — like EntTech or Samsyn's own admin — are managed inside each organization.</span>
+      <span class="count" id="sa-count"></span>
       <button class="btn" id="add-sa">Add super admin</button>
     </div>
     <div class="panel">
@@ -178,17 +299,11 @@
     </div>
   </section>
 
-  <!-- ============ ORG DETAIL VIEW ============ -->
+  <!-- ============ ORG DETAIL VIEW (reached from Organizations) ============ -->
   <section id="view-org" class="hidden">
     <button class="back" id="back">&larr; All organizations</button>
-    <h2 id="od-name"></h2>
-    <div class="toolbar">
-      <span class="note mono" id="od-meta"></span>
-      <span class="row">
-        <button class="btn danger sm hidden" id="od-suspend">Suspend</button>
-        <button class="btn ghost sm hidden" id="od-activate">Reactivate</button>
-      </span>
-    </div>
+    <h1 class="viewtitle" id="od-name"></h1>
+    <p class="viewsub mono" id="od-meta"></p>
 
     <h2>Members <span class="count" id="mem-count"></span></h2>
     <div class="toolbar">
@@ -215,20 +330,33 @@
       </table>
       <div class="empty hidden" id="key-empty">No API keys yet.</div>
     </div>
+
+    <div class="danger-zone">
+      <h2>Danger zone</h2>
+      <div class="dz-row" id="dz-suspend-row">
+        <span class="note">Suspend this organization — all its API keys stop working immediately. Members keep their accounts but lose org access.</span>
+        <button class="btn danger sm" id="od-suspend">Suspend organization</button>
+      </div>
+      <div class="dz-row hidden" id="dz-activate-row">
+        <span class="note">This organization is suspended. Reactivating restores members and API keys.</span>
+        <button class="btn ghost sm" id="od-activate">Reactivate</button>
+      </div>
+    </div>
   </section>
 
-  <!-- ============ IMPORTS DASHBOARD ============ -->
+  <!-- ============ IMPORTS (jobs) ============ -->
   <section id="view-imports" class="hidden">
-    <h2>Data imports</h2>
+    <h1 class="viewtitle">Imports</h1>
+    <p class="viewsub">Cloud-to-cloud migrations into Xinsere — encrypted, fragmented across clouds, integrity-verified (3 layers), permissioned on-chain.</p>
     <div class="toolbar">
-      <span class="note">Cloud-to-cloud migrations into Xinsere — encrypted, fragmented across clouds, integrity-verified (3 layers), permissioned on-chain.</span>
+      <span></span>
       <button class="btn ghost sm" id="imp-refresh">Refresh</button>
     </div>
     <div class="cards" id="imp-cards"></div>
 
     <h2>Migration runs <span class="count" id="run-count"></span></h2>
     <div id="run-list"></div>
-    <div class="empty hidden" id="run-empty">No migration runs yet. Runs appear here as the connector imports data. <span class="note">(If this stays empty after a run, apply migration 0008.)</span></div>
+    <div class="empty hidden" id="run-empty">No migration runs yet. Runs appear here as the connector imports data.</div>
 
     <h2>On-chain permission batches <span class="count" id="batch-count"></span></h2>
     <div class="toolbar"><span class="note">Each batch anchors up to 1,000 files' share permissions in one flat-gas transaction (Merkle root on Polygon Amoy).</span></div>
@@ -240,15 +368,77 @@
       <div class="empty hidden" id="batch-empty">No permission batches anchored yet.</div>
     </div>
   </section>
+
+  <!-- ============ AUDIT LOG ============ -->
+  <section id="view-audit" class="hidden">
+    <h1 class="viewtitle">Audit log</h1>
+    <p class="viewsub">Every data access, recorded against the individual acting identity. Append-only; each day's entries are sealed with a Merkle root anchored on Polygon.</p>
+    <div class="toolbar">
+      <span class="row">
+        <input id="au-day" type="date" title="Day">
+        <input id="au-actor" placeholder="Actor email contains…" style="min-width:190px">
+        <input id="au-action" placeholder="Action (e.g. file.read)" style="min-width:160px">
+        <button class="btn ghost sm" id="au-apply">Apply</button>
+        <button class="btn ghost sm" id="au-clear">Clear</button>
+      </span>
+      <span class="count" id="au-count"></span>
+    </div>
+    <div class="panel">
+      <table id="au-table">
+        <thead><tr><th>When</th><th>Actor</th><th>Type</th><th>Action</th><th>Organization</th><th>File</th><th>Bytes</th><th>Seal</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty hidden" id="au-empty">No matching entries.</div>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section id="view-settings" class="hidden">
+    <h1 class="viewtitle">Settings</h1>
+    <p class="viewsub">Platform configuration. Values are environment-managed — changing them is a deploy, not a form; this page shows what's live.</p>
+    <div class="subnav" id="cfg-nav">
+      <button data-cfg="general" class="active">General</button>
+      <button data-cfg="security">Security</button>
+      <button data-cfg="email">Email &amp; Domains</button>
+      <button data-cfg="chain">Storage &amp; Blockchain</button>
+    </div>
+    <div class="panel cfg" id="cfg-general">
+      <h3>General</h3>
+      <p class="desc">Identity and runtime basics.</p>
+      <div id="cfg-general-kv"></div>
+    </div>
+    <div class="panel cfg hidden" id="cfg-security">
+      <h3>Security</h3>
+      <p class="desc">Sign-in enforcement, password policy and abuse ceilings. 2FA enrollment lives in each user's own Settings; admin 2FA enforcement is staged behind a flag.</p>
+      <div id="cfg-security-kv"></div>
+    </div>
+    <div class="panel cfg hidden" id="cfg-email">
+      <h3>Email &amp; Domains</h3>
+      <p class="desc">Outbound security and invitation email.</p>
+      <div id="cfg-email-kv"></div>
+    </div>
+    <div class="panel cfg hidden" id="cfg-chain">
+      <h3>Storage &amp; Blockchain</h3>
+      <p class="desc">Where permissions are anchored. Fragment storage spans multiple clouds by design.</p>
+      <div id="cfg-chain-kv"></div>
+    </div>
+  </section>
 </main>
+</div>
 
 <div class="scrim hidden" id="scrim"><div class="modal" id="modal"></div></div>
 
 <script>
 "use strict";
 const $=s=>document.querySelector(s);
+const $$=s=>document.querySelectorAll(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmtDate=iso=>iso?new Date(iso).toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"}):"—";
+const fmtInt=n=>Number(n||0).toLocaleString();
+const fmtBytes=b=>{b=Number(b||0);const u=["B","KB","MB","GB","TB"];let i=0;while(b>=1024&&i<u.length-1){b/=1024;i++;}return `${b.toFixed(b<10&&i>0?1:0)} ${u[i]}`;};
+const fmtDT=iso=>iso?new Date(iso).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+const shortHash=h=>h?`${h.slice(0,10)}…${h.slice(-6)}`:"—";
+const amoyTx=h=>h?`<a class="link mono" href="https://amoy.polygonscan.com/tx/${esc(h)}" target="_blank">${esc(shortHash(h))}</a>`:"—";
 
 async function api(path,opts={}){
   const r=await fetch(path,opts);
@@ -263,25 +453,36 @@ function modal(html){$("#modal").innerHTML=html;$("#scrim").classList.remove("hi
 function closeModal(){$("#scrim").classList.add("hidden");}
 $("#scrim").addEventListener("click",e=>{if(e.target.id==="scrim")closeModal();});
 
+/* ---------- navigation ---------- */
+const VIEWS={overview:loadOverview,orgs:loadOrgs,users:loadUsers,superadmins:loadSuperAdmins,
+             imports:loadImports,audit:loadAudit,settings:loadSettings};
+function showView(name){
+  for(const v of ["overview","orgs","users","superadmins","org","imports","audit","settings"])
+    $(`#view-${v}`).classList.toggle("hidden",v!==name);
+  $$(".navitem").forEach(b=>b.classList.toggle("active",
+    b.dataset.view===name||(name==="org"&&b.dataset.view==="orgs")));
+}
+$$(".navitem").forEach(b=>b.addEventListener("click",()=>{
+  showView(b.dataset.view);
+  VIEWS[b.dataset.view]().catch(e=>console.error(`${b.dataset.view} load failed:`,e));
+}));
+
 /* ---------- boot / auth ---------- */
 async function boot(){
-  // Step 1: AUTH. Only an auth failure should bounce back to the sign-in gate.
   let w;
   try{
     w=await api("/api/admin/whoami");
   }catch(e){
-    $("#console").classList.add("hidden");$("#who").classList.add("hidden");
+    $("#shell").classList.add("hidden");
     if(e.status===403){$("#gate-denied").classList.remove("hidden");$("#gate-login").classList.add("hidden");}
     else{$("#gate-login").classList.remove("hidden");$("#gate-denied").classList.add("hidden");}
     return;
   }
-  // Authed as admin — show the console and STAY here even if a data call errors
-  // (previously a failing loadOrgs() threw into the auth catch and kicked us out).
   $("#who-email").textContent=w.email;
-  $("#who").classList.remove("hidden");
   $("#gate-login").classList.add("hidden");$("#gate-denied").classList.add("hidden");
-  $("#console").classList.remove("hidden");
-  try{ await loadOrgs(); }
+  $("#shell").classList.remove("hidden");
+  showView("overview");
+  try{ await loadOverview(); }
   catch(e){ console.error("admin data load failed:", e); }
 }
 $("#li-go").addEventListener("click",async()=>{
@@ -296,28 +497,117 @@ async function signout(){await api("/api/logout",{method:"POST"});location.reloa
 $("#logout").addEventListener("click",signout);
 $("#denied-out").addEventListener("click",signout);
 
-/* ---------- imports dashboard ---------- */
-const fmtInt=n=>Number(n||0).toLocaleString();
-const fmtBytes=b=>{b=Number(b||0);const u=["B","KB","MB","GB","TB"];let i=0;while(b>=1024&&i<u.length-1){b/=1024;i++;}return `${b.toFixed(b<10&&i>0?1:0)} ${u[i]}`;};
-const fmtDT=iso=>iso?new Date(iso).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
-const shortHash=h=>h?`${h.slice(0,10)}…${h.slice(-6)}`:"—";
-const amoyTx=h=>h?`<a class="link mono" href="https://amoy.polygonscan.com/tx/${esc(h)}" target="_blank">${esc(shortHash(h))}</a>`:"—";
+/* ---------- overview ---------- */
+async function loadOverview(){
+  const [orgsR,usersR,impR,audR]=await Promise.all([
+    api("/api/admin/orgs").catch(()=>({orgs:[]})),
+    api("/api/admin/users").catch(()=>({users:[]})),
+    api("/api/admin/imports").catch(()=>({runs:[],batches:[],batch_summary:{live:0,total:0}})),
+    api("/api/admin/audit-log?limit=8").catch(()=>({rows:[],anchors:{}})),
+  ]);
+  const users=usersR.users||[],runs=impR.runs||[];
+  const agg=runs.reduce((a,r)=>({v:a.v+(+r.verified||0),b:a.b+(+r.bytes_in||0)}),{v:0,b:0});
+  const no2fa=users.filter(u=>!u.mfa_enabled).length;
+  $("#ov-cards").innerHTML=[
+    ["Organizations",fmtInt((orgsR.orgs||[]).length),""],
+    ["Users",fmtInt(users.length),""],
+    ["Users without 2FA",fmtInt(no2fa),no2fa?"warn":"teal"],
+    ["Files verified",fmtInt(agg.v),"teal"],
+    ["Data migrated",fmtBytes(agg.b),""],
+    ["Batches live",`${fmtInt(impR.batch_summary.live)}/${fmtInt(impR.batch_summary.total)}`,""],
+  ].map(([l,k,c])=>`<div class="card"><div class="k ${c}">${k}</div><div class="l">${l}</div></div>`).join("");
 
-function showView(which){
-  $("#view-orgs").classList.toggle("hidden",which!=="orgs");
-  $("#view-org").classList.add("hidden");
-  $("#view-imports").classList.toggle("hidden",which!=="imports");
-  $("#view-superadmins").classList.toggle("hidden",which!=="superadmins");
+  const attn=[];
+  for(const u of users.filter(u=>u.super_admin&&!u.mfa_enabled))
+    attn.push(`Super admin without 2FA: <strong>${esc(u.email)}</strong>`);
+  for(const u of users.filter(u=>u.must_change_password))
+    attn.push(`Pending forced password reset: <strong>${esc(u.email)}</strong>`);
+  for(const r of runs.filter(r=>r.status==="running"))
+    attn.push(`Import running: <strong>${esc(r.source||"dropbox")}</strong> <span class="mono">${esc(r.folder||"")}</span>`);
+  for(const r of runs.filter(r=>r.status==="failed"))
+    attn.push(`Import failed: <strong>${esc(r.source||"dropbox")}</strong> <span class="mono">${esc(r.folder||"")}</span>`);
+  $("#ov-attn").innerHTML=attn.length
+    ?attn.map(t=>`<li><span class="dot"></span><span>${t}</span></li>`).join("")
+    :`<li><span class="dot ok"></span><span>All clear — nothing needs attention.</span></li>`;
+
+  const rows=audR.rows||[];
+  $("#ov-audit-empty").classList.toggle("hidden",rows.length>0);
+  $("#ov-audit tbody").innerHTML=rows.map(r=>`<tr>
+    <td class="note">${fmtDT(r.ts)}</td>
+    <td>${esc(r.actor_email||r.actor_id||"—")}</td>
+    <td class="mono">${esc(r.action)}</td>
+    <td class="note">${esc(r.org_name||"—")}</td></tr>`).join("");
 }
-$("#nav-orgs").addEventListener("click",()=>{showView("orgs");loadOrgs();});
-$("#nav-superadmins").addEventListener("click",()=>{showView("superadmins");loadSuperAdmins();});
-$("#nav-imports").addEventListener("click",()=>{showView("imports");loadImports();});
+
+/* ---------- audit log ---------- */
+async function loadAudit(){
+  const q=new URLSearchParams({limit:"200"});
+  if($("#au-day").value)q.set("day",$("#au-day").value);
+  if($("#au-action").value.trim())q.set("action",$("#au-action").value.trim());
+  if($("#au-actor").value.trim())q.set("actor",$("#au-actor").value.trim());
+  const {rows,anchors}=await api(`/api/admin/audit-log?${q}`);
+  $("#au-count").textContent=`${rows.length} entries`;
+  $("#au-empty").classList.toggle("hidden",rows.length>0);
+  $("#au-table tbody").innerHTML=rows.map(r=>{
+    const a=anchors[String(r.day)];
+    const sealed=a&&a.tx_hash;
+    return `<tr>
+      <td class="note">${fmtDT(r.ts)}</td>
+      <td>${esc(r.actor_email||r.actor_name||shortHash(r.actor_id))}</td>
+      <td><span class="pill ${r.actor_type==="api_key"?"org_admin":"member"}">${esc(r.actor_type)}</span></td>
+      <td class="mono">${esc(r.action)}</td>
+      <td class="note">${esc(r.org_name||"—")}</td>
+      <td class="mono">${esc(r.file_id?shortHash(r.file_id):"—")}</td>
+      <td class="note">${r.bytes?fmtBytes(r.bytes):"—"}</td>
+      <td>${sealed?`<span class="pill anchored" title="Day sealed on-chain">anchored</span>`
+                  :`<span class="pill unanchored" title="Anchors daily">pending</span>`}</td></tr>`;
+  }).join("");
+}
+$("#au-apply").addEventListener("click",()=>loadAudit().catch(e=>alert(e.message)));
+$("#au-clear").addEventListener("click",()=>{
+  $("#au-day").value="";$("#au-actor").value="";$("#au-action").value="";
+  loadAudit().catch(e=>alert(e.message));
+});
+
+/* ---------- settings ---------- */
+$$("#cfg-nav button").forEach(b=>b.addEventListener("click",()=>{
+  $$("#cfg-nav button").forEach(x=>x.classList.toggle("active",x===b));
+  for(const k of ["general","security","email","chain"])
+    $(`#cfg-${k}`).classList.toggle("hidden",k!==b.dataset.cfg);
+}));
+const kv=(pairs)=>pairs.map(([k,v])=>`<div class="kv"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`).join("");
+const flag=on=>on?`<span class="pill active">on</span>`:`<span class="pill">off</span>`;
+async function loadSettings(){
+  const c=await api("/api/admin/config");
+  $("#cfg-general-kv").innerHTML=kv([
+    ["App name",esc(c.general.app_name)],
+    ["Backend mode",esc(c.general.backend)],
+    ["HTTPS-only cookies",esc(c.general.https_only)],
+  ]);
+  $("#cfg-security-kv").innerHTML=kv([
+    ["Require verified email at sign-in",flag(c.security.require_email_verified)],
+    ["Password policy",esc(c.security.password_policy)],
+    ["API rate limit (per key/min)",esc(c.security.rate_per_min)],
+    ["Org ingest ceiling (bytes/day)",esc(c.security.org_ingest_bytes_per_day)],
+    ["Org egress ceiling (bytes/day)",esc(c.security.org_egress_bytes_per_day)],
+  ]);
+  $("#cfg-email-kv").innerHTML=kv([
+    ["Transport",esc(c.email.transport)],
+    ["Sender",esc(c.email.sender)],
+    ["App domain",esc(location.hostname)],
+  ]);
+  $("#cfg-chain-kv").innerHTML=kv([
+    ["Network",esc(c.blockchain.network)],
+    ["Chain ID",esc(c.blockchain.chain_id)],
+    ["Permissions contract",esc(c.blockchain.contract)],
+    ["RPC endpoint configured",flag(c.blockchain.rpc_configured)],
+  ]);
+}
 
 /* ---------- super admins (platform_admins — Xinsere staff) ---------- */
 async function loadSuperAdmins(){
-  showView("superadmins");
   const {super_admins}=await api("/api/admin/platform-admins");
-  $("#sa-count").textContent=super_admins.length;
+  $("#sa-count").textContent=`${super_admins.length} super admins`;
   const tb=$("#sa-table tbody");tb.innerHTML="";
   for(const a of super_admins){
     const tr=document.createElement("tr");
@@ -345,22 +635,20 @@ $("#add-sa").addEventListener("click",()=>{
     catch(e){$("#sa-err").textContent=e.message;}
   });
 });
-$("#imp-refresh").addEventListener("click",loadImports);
 
+/* ---------- imports ---------- */
+$("#imp-refresh").addEventListener("click",()=>loadImports().catch(e=>alert(e.message)));
 async function loadImports(){
-  showView("imports");
   const {runs,batches,batch_summary}=await api("/api/admin/imports");
-  // Aggregate summary cards across all runs.
   const agg=runs.reduce((a,r)=>({v:a.v+(+r.verified||0),b:a.b+(+r.bytes_in||0),f:a.f+(+r.failed||0)}),{v:0,b:0,f:0});
   $("#imp-cards").innerHTML=[
     ["Files verified",fmtInt(agg.v),"teal"],
     ["Data migrated",fmtBytes(agg.b),""],
     ["Runs",fmtInt(runs.length),""],
     ["On-chain batches",`${fmtInt(batch_summary.live)}/${fmtInt(batch_summary.total)} live`,""],
-    ["Failures",fmtInt(agg.f),agg.f?"":""],
+    ["Failures",fmtInt(agg.f),agg.f?"warn":""],
   ].map(([l,k,c])=>`<div class="card"><div class="k ${c}">${k}</div><div class="l">${l}</div></div>`).join("");
 
-  // Per-run cards with progress + throughput.
   $("#run-count").textContent=runs.length;
   $("#run-empty").classList.toggle("hidden",runs.length>0);
   $("#run-list").innerHTML=runs.map(r=>{
@@ -385,11 +673,9 @@ async function loadImports(){
       </div></div>`;
   }).join("");
 
-  // On-chain permission batches.
   $("#batch-count").textContent=batches.length;
   $("#batch-empty").classList.toggle("hidden",batches.length>0);
-  const bt=$("#batch-table tbody");
-  bt.innerHTML=batches.map(b=>`<tr>
+  $("#batch-table tbody").innerHTML=batches.map(b=>`<tr>
     <td class="mono">${esc(shortHash(b.merkle_root))}</td>
     <td>${fmtInt(b.leaf_count)}</td>
     <td class="note">${esc(b.scope||b.source||"—")}</td>
@@ -400,9 +686,9 @@ async function loadImports(){
 
 /* ---------- org list ---------- */
 async function loadOrgs(){
-  $("#view-org").classList.add("hidden");$("#view-orgs").classList.remove("hidden");
-  const [{orgs},{users}]=await Promise.all([api("/api/admin/orgs"),api("/api/admin/users")]);
-  $("#org-count").textContent=orgs.length;
+  showView("orgs");
+  const {orgs}=await api("/api/admin/orgs");
+  $("#org-count").textContent=`${orgs.length} organizations`;
   const tb=$("#org-table tbody");tb.innerHTML="";
   $("#org-empty").classList.toggle("hidden",orgs.length>0);
   for(const o of orgs){
@@ -412,27 +698,6 @@ async function loadOrgs(){
       <td>${o.member_count}</td><td>${o.active_keys}</td><td>${fmtDate(o.created_at)}</td>`;
     tr.addEventListener("click",()=>openOrg(o.id));
     tb.appendChild(tr);
-  }
-  $("#user-count").textContent=users.length;
-  const ub=$("#user-table tbody");ub.innerHTML="";
-  for(const u of users){
-    const mem=(u.memberships||[]).map(m=>`${esc(m.org_name||"?")} <span class="pill ${m.role}">${m.role==="org_admin"?"Admin":"Member"}</span>`).join("&nbsp; ")||"—";
-    const role=u.super_admin?`<span class="pill org_admin">Super&nbsp;Admin</span>`
-      :((u.memberships||[]).some(m=>m.role==="org_admin")?`<span class="pill member">Org&nbsp;Admin</span>`:`<span class="pill">User</span>`);
-    const twofa=u.mfa_enabled?`<span class="pill active">on</span>`:`<span class="pill">off</span>`;
-    const forced=u.must_change_password?` <span class="pill revoked">must reset pw</span>`:"";
-    const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${esc(u.name)}</td><td>${esc(u.email)}${forced}</td><td>${role}</td>
-      <td>${mem}</td><td>${twofa}</td>
-      <td class="row end"><button class="btn ghost sm" data-act="forcepw">${u.must_change_password?"Clear reset":"Force pw reset"}</button></td>`;
-    tr.querySelector('[data-act="forcepw"]').addEventListener("click",async()=>{
-      const on=!u.must_change_password;
-      const path=on?"force-password-change":"clear-force-password-change";
-      if(on&&!confirm(`Require ${u.email} to set a new password at next sign-in?`))return;
-      try{await api(`/api/admin/users/${u.id}/${path}`,{method:"POST"});loadOrgs();}
-      catch(e){alert(e.message);}
-    });
-    ub.appendChild(tr);
   }
 }
 $("#new-org").addEventListener("click",()=>{
@@ -449,15 +714,56 @@ $("#new-org").addEventListener("click",()=>{
   });
 });
 
+/* ---------- users ---------- */
+let USERS=[];
+async function loadUsers(){
+  const {users}=await api("/api/admin/users");
+  USERS=users;
+  renderUsers();
+}
+function renderUsers(){
+  const needle=$("#u-search").value.trim().toLowerCase();
+  const f=$("#u-filter").value;
+  let list=USERS;
+  if(needle)list=list.filter(u=>(u.name||"").toLowerCase().includes(needle)||(u.email||"").toLowerCase().includes(needle));
+  if(f==="no2fa")list=list.filter(u=>!u.mfa_enabled);
+  if(f==="forced")list=list.filter(u=>u.must_change_password);
+  if(f==="super")list=list.filter(u=>u.super_admin);
+  $("#user-count").textContent=`${list.length} of ${USERS.length} users`;
+  $("#user-empty").classList.toggle("hidden",list.length>0);
+  const ub=$("#user-table tbody");ub.innerHTML="";
+  for(const u of list){
+    const mem=(u.memberships||[]).map(m=>`${esc(m.org_name||"?")} <span class="pill ${m.role}">${m.role==="org_admin"?"Admin":"Member"}</span>`).join("&nbsp; ")||"—";
+    const role=u.super_admin?`<span class="pill org_admin">Super&nbsp;Admin</span>`
+      :((u.memberships||[]).some(m=>m.role==="org_admin")?`<span class="pill member">Org&nbsp;Admin</span>`:`<span class="pill">User</span>`);
+    const twofa=u.mfa_enabled?`<span class="pill active">on</span>`:`<span class="pill">off</span>`;
+    const forced=u.must_change_password?` <span class="pill revoked">must reset pw</span>`:"";
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${esc(u.name)}</td><td>${esc(u.email)}${forced}</td><td>${role}</td>
+      <td>${mem}</td><td>${twofa}</td>
+      <td class="row end"><button class="btn ghost sm" data-act="forcepw">${u.must_change_password?"Clear reset":"Force pw reset"}</button></td>`;
+    tr.querySelector('[data-act="forcepw"]').addEventListener("click",async()=>{
+      const on=!u.must_change_password;
+      const path=on?"force-password-change":"clear-force-password-change";
+      if(on&&!confirm(`Require ${u.email} to set a new password at next sign-in?`))return;
+      try{await api(`/api/admin/users/${u.id}/${path}`,{method:"POST"});loadUsers();}
+      catch(e){alert(e.message);}
+    });
+    ub.appendChild(tr);
+  }
+}
+$("#u-search").addEventListener("input",renderUsers);
+$("#u-filter").addEventListener("change",renderUsers);
+
 /* ---------- org detail ---------- */
 let CUR=null;
 async function openOrg(id){
   const d=await api(`/api/admin/orgs/${id}`);CUR=d.org;
-  $("#view-orgs").classList.add("hidden");$("#view-org").classList.remove("hidden");
+  showView("org");
   $("#od-name").innerHTML=`${esc(d.org.name)} <span class="pill ${d.org.status}">${d.org.status}</span>`;
   $("#od-meta").textContent=`slug: ${d.org.slug} · service identity (party_id): ${d.org.service_user}`;
-  $("#od-suspend").classList.toggle("hidden",d.org.status!=="active");
-  $("#od-activate").classList.toggle("hidden",d.org.status!=="suspended");
+  $("#dz-suspend-row").classList.toggle("hidden",d.org.status!=="active");
+  $("#dz-activate-row").classList.toggle("hidden",d.org.status!=="suspended");
 
   $("#mem-count").textContent=d.members.length;
   $("#mem-empty").classList.toggle("hidden",d.members.length>0);
@@ -501,10 +807,25 @@ async function openOrg(id){
     kb.appendChild(tr);
   }
 }
-$("#back").addEventListener("click",loadOrgs);
-$("#od-suspend").addEventListener("click",async()=>{
-  if(!confirm(`Suspend ${CUR.name}? All its API keys stop working immediately.`))return;
-  await api(`/api/admin/orgs/${CUR.id}/status`,{method:"POST",body:form({status:"suspended"})});openOrg(CUR.id);
+$("#back").addEventListener("click",()=>{loadOrgs().catch(e=>alert(e.message));});
+
+/* danger zone: suspend requires typing the org slug (irreversible-feeling action) */
+$("#od-suspend").addEventListener("click",()=>{
+  modal(`<h3>Suspend ${esc(CUR.name)}?</h3>
+    <p class="note">All of this organization's API keys stop working <strong>immediately</strong> and members lose org access until reactivated.</p>
+    <div><label>Type the org slug <span class="mono">${esc(CUR.slug)}</span> to confirm</label>
+      <input id="dz-confirm" autocomplete="off" placeholder="${esc(CUR.slug)}"></div>
+    <div class="err" id="dz-err"></div>
+    <div class="row end"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn danger" id="dz-go" disabled>Suspend organization</button></div>`);
+  const input=$("#dz-confirm"),go=$("#dz-go");
+  input.addEventListener("input",()=>{go.disabled=input.value.trim()!==CUR.slug;});
+  go.addEventListener("click",async()=>{
+    try{
+      await api(`/api/admin/orgs/${CUR.id}/status`,{method:"POST",body:form({status:"suspended"})});
+      closeModal();openOrg(CUR.id);
+    }catch(e){$("#dz-err").textContent=e.message;}
+  });
 });
 $("#od-activate").addEventListener("click",async()=>{
   await api(`/api/admin/orgs/${CUR.id}/status`,{method:"POST",body:form({status:"active"})});openOrg(CUR.id);

@@ -6,6 +6,7 @@ public API docs (include_in_schema=False on the router).
 """
 from __future__ import annotations
 
+import os
 import secrets
 
 from fastapi import APIRouter, Depends, Form, HTTPException
@@ -223,6 +224,99 @@ def force_password_change(user_id: str, s: dict = Depends(authn.require_admin)):
 def clear_force_password_change(user_id: str, s: dict = Depends(authn.require_admin)):
     supa.set_account_security(supa.SERVICE_ROLE_KEY, user_id, {"must_change_password": False})
     return {"ok": True}
+
+
+# --- audit log ---------------------------------------------------------------------
+
+@router.get("/audit-log")
+def audit_log(s: dict = Depends(authn.require_admin), limit: int = 100,
+              day: str = "", action: str = "", actor: str = ""):
+    """Recent access_log rows for the console's Audit log view, newest first,
+    with actor emails and per-day anchor status resolved. Read-only; the log
+    itself is append-only (0014) and anchored on-chain daily (0005/0014)."""
+    limit = max(1, min(int(limit or 100), 500))
+    params = {"select": "ts,day,org_id,actor_id,actor_type,key_id,action,file_id,bytes,entry_hash",
+              "order": "ts.desc", "limit": str(limit)}
+    if day.strip():
+        params["day"] = f"eq.{day.strip()}"
+    if action.strip():
+        params["action"] = f"eq.{action.strip()}"
+    try:
+        rows = supa._rest("GET", "/access_log", supa.SERVICE_ROLE_KEY, params=params) or []
+    except supa.SupabaseError:
+        rows = []
+
+    # Resolve actor ids -> email/name (service plane; profiles are RLS-locked to self).
+    ids = sorted({r["actor_id"] for r in rows if r.get("actor_id")})
+    profs = {}
+    if ids:
+        try:
+            got = supa._rest("GET", "/profiles", supa.SERVICE_ROLE_KEY,
+                             params={"id": f"in.({','.join(ids)})", "select": "id,email,name"}) or []
+            profs = {p["id"]: p for p in got}
+        except supa.SupabaseError:
+            pass
+    org_names = {}
+    try:
+        org_names = {o["id"]: o["name"] for o in orgs.list_orgs()}
+    except Exception:
+        pass
+    for r in rows:
+        p = profs.get(r.get("actor_id"), {})
+        r["actor_email"] = p.get("email")
+        r["actor_name"] = p.get("name")
+        r["org_name"] = org_names.get(r.get("org_id"))
+
+    # Anchor status for the days present, so the UI can badge tamper-evident rows.
+    days = sorted({str(r["day"]) for r in rows if r.get("day")})
+    anchors = {}
+    if days:
+        try:
+            got = supa._rest("GET", "/access_log_anchors", supa.SERVICE_ROLE_KEY,
+                             params={"day": f"in.({','.join(days)})", "select": "day,tx_hash,anchored_at"}) or []
+            anchors = {str(a["day"]): a for a in got}
+        except supa.SupabaseError:
+            pass
+    if actor.strip():  # post-filter on resolved email (substring, case-insensitive)
+        needle = actor.strip().lower()
+        rows = [r for r in rows if needle in (r.get("actor_email") or "").lower()]
+    return {"rows": rows, "anchors": anchors}
+
+
+# --- platform config (read-only summary for Settings) -------------------------------
+
+@router.get("/config")
+def platform_config(s: dict = Depends(authn.require_admin)):
+    """Read-only platform configuration for the Settings section. Values are
+    env-managed (change via deploy) — this endpoint NEVER returns a secret,
+    only presence flags and non-sensitive values."""
+    env = os.environ.get
+    email_transport = ("Resend" if env("XINSERE_RESEND_API_KEY")
+                       else ("AWS SES" if env("XINSERE_EMAIL_FROM") else "logged no-op"))
+    return {
+        "general": {
+            "app_name": env("XINSERE_APP_NAME", "Xinsere"),
+            "backend": env("XINSERE_BACKEND", "local"),
+            "https_only": env("XINSERE_HTTPS_ONLY", "auto"),
+        },
+        "security": {
+            "require_email_verified": env("XINSERE_REQUIRE_EMAIL_VERIFIED", "") in ("1", "true", "yes"),
+            "password_policy": "≥12 chars, upper + lower + digit + symbol",
+            "rate_per_min": env("XINSERE_RATE_PER_MIN", "default"),
+            "org_ingest_bytes_per_day": env("XINSERE_INGEST_BYTES_PER_DAY_ORG", "default"),
+            "org_egress_bytes_per_day": env("XINSERE_EGRESS_BYTES_PER_DAY_ORG", "default"),
+        },
+        "email": {
+            "transport": email_transport,
+            "sender": env("XINSERE_EMAIL_FROM", "(not set)"),
+        },
+        "blockchain": {
+            "network": "Polygon Amoy" if env("XINSERE_CHAIN_ID", "80002") == "80002" else env("XINSERE_CHAIN_ID"),
+            "chain_id": env("XINSERE_CHAIN_ID", "80002"),
+            "contract": env("XINSERE_CONTRACT_ADDRESS", "(not set)"),
+            "rpc_configured": bool(env("XINSERE_RPC_URL")),
+        },
+    }
 
 
 # --- user directory ---------------------------------------------------------------
