@@ -1131,12 +1131,14 @@ async def preview(request: Request, node_id: str):
         except Exception:   # Pillow missing or unreadable image — serve the original
             pass
 
-    # Invisible forensic mark — every NON-OWNER view (both levels; invisible has
-    # no UX cost). The embedded ID is the viewer's tamper-evident access_log
+    # Invisible forensic mark — EVERY view, owners included (Mark, 2026-07-15:
+    # "no one escapes — not IT admins, not users, not superadmins"). Creating a
+    # file doesn't exempt its creator from the audit trail; an owner-shaped hole
+    # is still a hole. The embedded ID is the viewer's tamper-evident access_log
     # entry, so an auditor can trace a leaked copy to who viewed it and when.
-    # Owners skip (they are the source). Design doc: forensic-watermarking-design.
+    # Design doc: forensic-watermarking-design.
     watermarked = False
-    if node["owner"] != uid and entry and _wm_enabled(node["owner"]):
+    if entry and _wm_enabled(node["owner"]):
         import watermark
         content, serve_type, watermarked = watermark.apply(
             content, serve_type, entry.get("entry_hash", ""))
@@ -1185,9 +1187,13 @@ async def download_plan(request: Request, node_id: str):
         raise HTTPException(status_code=403,
                             detail="Your access is view-only — ask the owner for download access"
                             if level == "view" else "No active on-chain grant for you")
-    if node["owner"] != uid:
-        # Grantee downloads must carry the forensic mark, which only the server
-        # path can embed — 501 makes the client fall back to /api/download.
+    if _wm_enabled(node["owner"]):
+        # Watermarked downloads are universal — owners included (Mark, 2026-07-15).
+        # The forensic mark can only be embedded server-side, and client-side
+        # reassembly delivers the bit-perfect original, so issuing a plan would be
+        # an unmarked, untraceable copy for anyone. 501 makes the client fall back
+        # to /api/download. Orgs that explicitly opted out of marking (0017) keep
+        # the fast in-browser path — for every role equally.
         raise HTTPException(status_code=501, detail="Server-mediated download (forensic marking)")
     _record_access(node, uid, "file.download_plan")
     try:
@@ -1245,12 +1251,14 @@ async def download(request: Request, node_id: str):
     except XinsereIntegrityError as exc:
         raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
 
-    # Forensic mark on every NON-OWNER download (Mark, 2026-07-15): the delivered
-    # copy embeds this access's on-chain-logged ID, so a leaked file traces to
-    # its recipient. The response hash is the DELIVERED copy's hash — attribution
-    # over frozen-hash; owners still get the bit-perfect original.
+    # Forensic mark on EVERY download, owners included (Mark, 2026-07-15: universal
+    # audit is the brand promise — no role escapes, or the audit trail has a
+    # creator-shaped blank). The delivered copy embeds this access's on-chain-logged
+    # ID, so a leaked file traces to whoever pulled it. The response hash is the
+    # DELIVERED copy's hash — attribution over frozen-hash. Bit-perfect originals
+    # remain retrievable only for platform audit via the stored fragments.
     content, marked = r.content, False
-    if node["owner"] != uid and entry and _wm_enabled(node["owner"]):
+    if entry and _wm_enabled(node["owner"]):
         import watermark
         content, _, marked = watermark.apply(
             content, r.content_type or "application/octet-stream",
@@ -1320,15 +1328,14 @@ async def download_folder(request: Request, node_id: str):
                 skipped += 1
                 continue
             content = r.content
-            if f["owner"] != uid:
-                entry = _record_access(f, uid, "file.download")
-                if entry and _wm_enabled(f["owner"]):
-                    import watermark
-                    content, _, _ = watermark.apply(
-                        content, f.get("content_type") or "application/octet-stream",
-                        entry.get("entry_hash", ""))
-            else:
-                _record_access(f, uid, "file.download")
+            # Universal forensic mark (Mark, 2026-07-15) — owners' copies in a
+            # folder ZIP are marked exactly like everyone else's.
+            entry = _record_access(f, uid, "file.download")
+            if entry and _wm_enabled(f["owner"]):
+                import watermark
+                content, _, _ = watermark.apply(
+                    content, f.get("content_type") or "application/octet-stream",
+                    entry.get("entry_hash", ""))
             z.writestr(relpath, content)
             added += 1
     if not added:

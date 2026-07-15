@@ -150,6 +150,37 @@ def request_reset(request: Request, email: str = Form(...)):
     return {"ok": True, "message": "If that email has an account, a reset link is on its way."}
 
 
+@router.post("/reset-complete")
+def reset_complete(access_token: str = Form(...), new_password: str = Form(...)):
+    """Public: finish a password recovery. The caller presents the short-lived
+    GoTrue session token minted when the emailed recovery link was verified
+    (delivered to the page in the URL fragment) — that token IS the proof they
+    own the mailbox, so no current password is required."""
+    errs = password_errors(new_password)
+    if errs:
+        raise HTTPException(status_code=400,
+                            detail="Password must include " + ", ".join(errs) + ".")
+    try:
+        au = supa.get_auth_user(access_token)
+    except Exception:
+        au = {}
+    if not au.get("id"):
+        raise HTTPException(status_code=401,
+                            detail="Reset link is invalid or has expired — request a new one.")
+    try:
+        supa.update_password(access_token, new_password)
+    except supa.SupabaseError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail or "Could not set password")
+    try:
+        supa.set_account_security(_svc(), au["id"],
+                                  {"must_change_password": False,
+                                   "password_changed_at": supa._now_iso()})
+    except Exception:
+        pass  # the password DID change; the flag clear is best-effort
+    notify.password_changed((au.get("email") or "").lower(), "")
+    return {"ok": True}
+
+
 # --- two-factor (TOTP) ------------------------------------------------------
 
 @router.post("/mfa/enroll")

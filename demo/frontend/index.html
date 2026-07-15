@@ -350,6 +350,10 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
 .gs-empty{padding:12px;color:var(--faint);font-size:.85rem;}
 @media (max-width:760px){.gsearch{max-width:none;}}
 /* full-page search results */
+/* Search results page: block flow — NOT the tile grid (full-width rows need it,
+ * and group headings must sit on their own line). */
+#grid.srch{display:block;padding:6px 8px;min-height:auto;}
+.srgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:14px;padding:4px 0 14px;}
 .sr-grp{margin:26px 0 10px;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);}
 .sr-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--edge);
   border-radius:11px;margin-bottom:8px;background:var(--panel);cursor:pointer;}
@@ -441,6 +445,13 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
 
 <script src="/xinsere-client.js"></script>
 <script>
+/* Password-recovery safety net: if GoTrue's redirect allowlist rejects our
+ * /security?step=pw redirect_to, it falls back to the Site URL (here) with the
+ * recovery session still in the URL fragment. Forward it to the page that can
+ * actually finish the reset. */
+if(/[#&](type=recovery|error_description=)/.test(location.hash))
+  location.replace("/security?step=pw"+location.hash);
+
 const api = (path, opts={}) => fetch(path, {credentials:"same-origin", ...opts});
 const $ = (s)=>document.querySelector(s);
 function mark(el){ el.appendChild(document.getElementById("mark").content.cloneNode(true)); }
@@ -776,11 +787,6 @@ function groupResults(results){
   results.forEach(n=>{ (g[assetGroup(n)]=g[assetGroup(n)]||[]).push(n); });
   return GROUP_ORDER.filter(k=>g[k]).map(k=>[k,g[k]]);
 }
-function resultIcon(n){
-  if(n.type==="folder")return "folder";
-  const k=previewKind(n.content_type);
-  return k==="img"?"img":k==="video"?"vid":"file";
-}
 function openResult(n){
   gsClose();
   if(n.type==="folder"){ setView("mine"); openFolder(n.id); return; }
@@ -810,7 +816,7 @@ gsQ.addEventListener("input",()=>{
         const h=document.createElement("div"); h.className="gs-grp"; h.textContent=grp; gsDrop.appendChild(h);
         items.slice(0,5).forEach(n=>{
           const b=document.createElement("button"); b.type="button"; b.className="gs-row";
-          b.innerHTML=`${svg(resultIcon(n))}<span class="gnm">${esc(n.name)}</span>`+
+          b.innerHTML=`${n.type==="folder"?svg("folder"):fileIconHtml(n.name)}<span class="gnm">${esc(n.name)}</span>`+
             `<span class="gmeta">${n.type==="folder"?"folder":fmtSize(n.size)}${n.mine?"":" · "+esc(n.owner_name)}</span>`;
           b.onclick=()=>openResult(n);
           gsDrop.appendChild(b);
@@ -838,13 +844,20 @@ async function showSearchResults(term){
   document.querySelectorAll(".side .nav").forEach(b=>b.classList.remove("active"));
   $("#tools").style.visibility="hidden";
   $("#crumbs").innerHTML=`<span class="cur">Search — “${esc(term)}” <span class="note">${results.length}${results.length>=200?"+":""} result${results.length!==1?"s":""}</span></span>`;
-  const g=$("#grid"); g.className="drop grid"; g.innerHTML="";
+  const g=$("#grid"); g.className="drop grid srch"; g.innerHTML="";
   if(!results.length){ g.innerHTML=`<div class="empty"><div class="o"></div>No matches for “${esc(term)}”.</div>`; return; }
   for(const [grp,items] of groupResults(results)){
     const h=document.createElement("div"); h.className="sr-grp"; h.textContent=`${grp} · ${items.length}`; g.appendChild(h);
+    if(LAYOUT==="grid"){
+      // Same tile cards as the folder grid — names, verified type + size, preview/download.
+      const wrap=document.createElement("div"); wrap.className="srgrid";
+      renderCards(wrap, items, false);
+      g.appendChild(wrap);
+      continue;
+    }
     items.forEach(n=>{
       const r=document.createElement("div"); r.className="sr-row";
-      r.innerHTML=`${svg(resultIcon(n))}<span class="nm">${esc(n.name)}`+
+      r.innerHTML=`${n.type==="folder"?svg("folder"):fileIconHtml(n.name)}<span class="nm">${esc(n.name)}`+
         `<span class="sub">${n.mine?"My files":"Shared · from "+esc(n.owner_name)}${n.created_at?" · "+new Date(n.created_at).toLocaleDateString():""}</span></span>`+
         `<span class="meta">${n.type==="folder"?"Folder":`${typeLabel(n.content_type)||"File"}${n.size?" · "+fmtSize(n.size):""}`}</span>`;
       r.onclick=()=>openResult(n);
@@ -1314,7 +1327,9 @@ async function downloadFile(n, btn){
     const url=URL.createObjectURL(blob);
     const a=document.createElement("a"); a.href=url; a.download=dlName(n.name, n.content_type); document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    done("✓ Bit-perfect — SHA-256 verified"+(sha?" · "+sha.slice(0,10)+"…":""));
+    done(r.headers.get("X-Watermarked")==="true"
+      ? "✓ Verified · forensically watermarked — this copy is traceable to you"+(sha?" · "+sha.slice(0,10)+"…":"")
+      : "✓ Bit-perfect — SHA-256 verified"+(sha?" · "+sha.slice(0,10)+"…":""));
   }catch(e){ done("✗ Download failed — "+(e.message||e)); }
 }
 
@@ -1540,7 +1555,11 @@ function openShare(node){
 function applyLayoutButtons(){ document.querySelectorAll("#viewtoggle button").forEach(b=>b.classList.toggle("on", b.dataset.layout===LAYOUT)); }
 document.querySelectorAll("#viewtoggle button").forEach(b=>{
   b.innerHTML = b.dataset.layout==="list" ? svg("listv") : svg("gridv");
-  b.addEventListener("click", ()=>{ LAYOUT=b.dataset.layout; localStorage.setItem("xin-layout",LAYOUT); applyLayoutButtons(); renderGrid(LAST, LAST_MANAGE); });
+  b.addEventListener("click", ()=>{ LAYOUT=b.dataset.layout; localStorage.setItem("xin-layout",LAYOUT); applyLayoutButtons();
+    // Re-render IN PLACE. The search page isn't fed by renderGrid — re-running the
+    // search keeps the user on their results instead of dumping them back in My Files.
+    if(CUR_LOC && CUR_LOC.kind==="search") showSearchResults(CUR_LOC.term);
+    else renderGrid(LAST, LAST_MANAGE); });
 });
 applyLayoutButtons();
 

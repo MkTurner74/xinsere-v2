@@ -1,10 +1,11 @@
 """End-to-end forensic-watermarking + audit loop through the real app endpoints.
 
-These are the integration checks Mark asked for: prove that a non-owner download
-is actually watermarked, that the embedded mark is the viewer's access-log entry
-(so it resolves back through the audit path), that owners get clean bit-perfect
-copies, and that the org override gates it. Pipeline / chain / session / access
-log are stubbed; watermark + app wiring are exercised for real.
+These are the integration checks Mark asked for: prove that EVERY download is
+actually watermarked — owners included, per the universal-audit policy (Mark,
+2026-07-15: no role escapes, not owners, not admins) — that the embedded mark is
+the viewer's access-log entry (so it resolves back through the audit path), and
+that only the explicit org override (0017) gates it. Pipeline / chain / session /
+access log are stubbed; watermark + app wiring are exercised for real.
 """
 import hashlib
 import io
@@ -73,14 +74,17 @@ def _setup(monkeypatch, *, viewer, owner=OWNER, level="download",
 
 # --- download: the core loop ------------------------------------------------------
 
-def test_owner_download_is_clean_and_bit_perfect(monkeypatch):
-    node, content, _ = _setup(monkeypatch, viewer=OWNER)
+def test_owner_download_is_marked_like_everyone_else(monkeypatch):
+    """Universal audit: creating a file doesn't exempt its creator — an owner's
+    copy carries a forensic mark traceable to the owner's own access entry."""
+    node, content, recorded = _setup(monkeypatch, viewer=OWNER)
     r = client.get("/api/download/fil_x")
     assert r.status_code == 200
-    assert r.headers["X-Watermarked"] == "false"
-    assert r.content == content                                  # untouched
-    assert r.headers["X-Content-SHA256"] == node["sha"]          # original hash
-    assert not watermark.extract(r.content)                      # no mark
+    assert r.headers["X-Watermarked"] == "true"
+    assert r.content != content                                  # bytes changed
+    assert r.headers["X-Content-SHA256"] == hashlib.sha256(r.content).hexdigest()
+    assert recorded["actor_id"] == OWNER and recorded["action"] == "file.download"
+    assert watermark.forensic_mark(ENTRY_HASH) in watermark.extract(r.content)
 
 
 def test_grantee_download_is_marked_and_traceable(monkeypatch):
@@ -117,7 +121,7 @@ def test_view_only_grantee_cannot_download(monkeypatch):
     body=r.json(); assert "view-only" in (body.get("detail") or body.get("error") or "").lower()
 
 
-# --- preview: marked for non-owner, clean for owner --------------------------------
+# --- preview: marked for EVERYONE — grantees and owners alike ----------------------
 
 def test_preview_marks_non_owner(monkeypatch):
     node, content, recorded = _setup(monkeypatch, viewer=GRANTEE, level="view")
@@ -128,12 +132,13 @@ def test_preview_marks_non_owner(monkeypatch):
     assert watermark.forensic_mark(ENTRY_HASH) in watermark.extract(r.content)
 
 
-def test_preview_clean_for_owner(monkeypatch):
-    node, content, _ = _setup(monkeypatch, viewer=OWNER, level="download")
+def test_preview_marks_owner_too(monkeypatch):
+    node, content, recorded = _setup(monkeypatch, viewer=OWNER, level="download")
     r = client.get("/api/preview/fil_x")
     assert r.status_code == 200
-    assert r.headers.get("X-Watermarked") == "false"
-    assert not watermark.extract(r.content)
+    assert r.headers.get("X-Watermarked") == "true"
+    assert recorded["actor_id"] == OWNER
+    assert watermark.forensic_mark(ENTRY_HASH) in watermark.extract(r.content)
 
 
 # --- audit trace resolves an extracted mark back to the access --------------------

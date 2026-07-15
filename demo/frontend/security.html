@@ -47,6 +47,18 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
 
   <div id="forced" class="banner hidden">Your administrator requires you to set a new password before continuing.</div>
 
+  <!-- password recovery (arrived via emailed reset link — not signed in) -->
+  <div class="card hidden" id="card-recover">
+    <h2>Set a new password</h2>
+    <p class="note">You followed a password-reset link, so you can choose a new password now.</p>
+    <label>New password</label>
+    <input id="rc-new" type="password" autocomplete="new-password">
+    <p class="note" style="margin:6px 0 0">Must be at least 12 characters with an uppercase letter, a lowercase letter, a number, and a symbol.</p>
+    <label>Confirm new password</label><input id="rc-new2" type="password" autocomplete="new-password">
+    <div class="err" id="rc-err"></div><div class="ok" id="rc-ok"></div>
+    <button class="btn" id="rc-go">Set password</button>
+  </div>
+
   <!-- appearance -->
   <div class="card" id="card-appearance">
     <h2>Appearance</h2>
@@ -116,6 +128,15 @@ async function api(path,opts={}){
 }
 const step=new URLSearchParams(location.search).get("step");
 let FACTOR=null;
+
+/* ---- password recovery: the emailed GoTrue link verifies the token and lands
+ * here with a short-lived session in the URL fragment (#access_token=…&type=recovery).
+ * That token is the proof of mailbox ownership — show the set-new-password card
+ * and DON'T run the signed-in flow (its 401 would bounce to the login page). */
+const HASH=new URLSearchParams(location.hash.replace(/^#/,""));
+const RECOVERY_TOKEN=HASH.get("type")==="recovery"?HASH.get("access_token"):null;
+const HASH_ERR=HASH.get("error_description")||HASH.get("error");
+if(RECOVERY_TOKEN||HASH_ERR) history.replaceState(null,"",location.pathname+location.search); // keep the token out of the address bar
 
 /* ---- appearance (shared xin-theme key with the main app) ---- */
 function applyTheme(t){
@@ -239,7 +260,36 @@ $("#mfa-disable").addEventListener("click", async ()=>{
   try{ await api("/api/account/mfa/disable",{method:"POST"}); load(); }catch(e){ alert(e.message); }
 });
 
-load();
+/* ---- complete a password recovery ---- */
+$("#rc-go").addEventListener("click", async ()=>{
+  $("#rc-err").textContent=""; $("#rc-ok").textContent="";
+  const np=$("#rc-new").value;
+  const ce=pwComplexityErrors(np);
+  if(ce.length){ $("#rc-err").textContent="Password needs: "+ce.join(", ")+"."; return; }
+  if(np!==$("#rc-new2").value){ $("#rc-err").textContent="New passwords don't match."; return; }
+  const btn=$("#rc-go"); btn.disabled=true;
+  try{
+    await api("/api/account/reset-complete",{method:"POST",body:form({access_token:RECOVERY_TOKEN,new_password:np})});
+    $("#rc-ok").textContent="Password set — taking you to sign in…";
+    setTimeout(()=>location.href="/",1200);
+  }catch(e){ $("#rc-err").textContent=e.message; btn.disabled=false; }
+});
+
+function enterRecoveryMode(){
+  // Only the recovery card (plus appearance) — the rest needs a signed-in session.
+  $("#card-pw").classList.add("hidden");
+  $("#card-2fa").classList.add("hidden");
+  $("#card-recover").classList.remove("hidden");
+  $("#rc-new").focus();
+}
+if(RECOVERY_TOKEN) enterRecoveryMode();
+else if(HASH_ERR){
+  $("#card-pw").classList.add("hidden"); $("#card-2fa").classList.add("hidden");
+  const d=document.createElement("div"); d.className="banner";
+  d.innerHTML=`That reset link is invalid or has expired. <a class="link" href="/recover">Request a new one</a>.`;
+  document.querySelector(".wrap").insertBefore(d, $("#card-recover"));
+}
+else load();
 </script>
 </body>
 </html>
