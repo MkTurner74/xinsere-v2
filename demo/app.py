@@ -959,16 +959,17 @@ def _authorize(node: dict, uid: str, need: str = "download") -> tuple[bool, str,
     return False, "none", "none"
 
 
-def _record_access(node: dict, uid: str, action: str) -> None:
+def _record_access(node: dict, uid: str, action: str) -> dict | None:
     """Interactive-plane access telemetry into the tamper-evident access_log
-    (0005/0014) — same ground truth the machine API writes. Fail-open by design."""
+    (0005/0014) — same ground truth the machine API writes. Fail-open by design.
+    Returns the entry (its entry_hash seeds the forensic watermark)."""
     try:
         import access_log
-        access_log.record(org_id=None, actor_id=uid, actor_type="user", action=action,
-                          file_id=node.get("file_id"), node_id=node.get("id"),
-                          bytes=node.get("size") or 0)
+        return access_log.record(org_id=None, actor_id=uid, actor_type="user",
+                                 action=action, file_id=node.get("file_id"),
+                                 node_id=node.get("id"), bytes=node.get("size") or 0)
     except Exception:
-        pass
+        return None
 
 
 # Content types the in-browser viewer will render inline. HTML/SVG are the XSS
@@ -1012,7 +1013,7 @@ async def preview(request: Request, node_id: str):
         r = get_pipeline().retrieve(node["file_id"])
     except XinsereIntegrityError as exc:
         raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
-    _record_access(node, uid, "file.view")
+    entry = _record_access(node, uid, "file.view")
 
     content = r.content
     # Large raster images: serve a downscaled rendition. A 10 MB camera JPEG is
@@ -1037,17 +1038,15 @@ async def preview(request: Request, node_id: str):
         except Exception:   # Pillow missing or unreadable image — serve the original
             pass
 
-    # Forensic watermark — VIEW-ONLY grantees only. Owners/downloaders can fetch
-    # the clean original anyway; for view-only, every render carries who saw it
-    # and when, so a screenshot is attributable. Deterrence, not DRM.
+    # Invisible forensic mark — every NON-OWNER view (both levels; invisible has
+    # no UX cost). The embedded ID is the viewer's tamper-evident access_log
+    # entry, so an auditor can trace a leaked copy to who viewed it and when.
+    # Owners skip (they are the source). Design doc: forensic-watermarking-design.
     watermarked = False
-    if level == "view":
+    if node["owner"] != uid and entry:
         import watermark
-        prof = supa.get_profile(token, uid) or {}
-        who = prof.get("email") or prof.get("name") or uid
-        new_content, new_type = watermark.apply(content, serve_type, who)
-        watermarked = new_content is not content
-        content, serve_type = new_content, new_type
+        content, serve_type, watermarked = watermark.apply(
+            content, serve_type, entry.get("entry_hash", ""))
 
     headers = {
         "Content-Disposition": f'inline; filename="{node["name"]}"',
