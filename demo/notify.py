@@ -57,6 +57,30 @@ def send_email(to: str, subject: str, text: str, html: str | None = None) -> boo
         return False
 
 
+def password_reset(to: str, link: str, name: str = "") -> bool:
+    """Send a branded Xinsere password-reset link (delivered by us via SES, not by
+    GoTrue's default mailer, so it comes from Xinsere)."""
+    who = name.split()[0] if name else "there"
+    subject = f"Reset your {APP_NAME} password"
+    text = (f"Hi {who},\n\n"
+            f"We received a request to reset your {APP_NAME} password. "
+            f"Open the link below to choose a new one:\n\n{link}\n\n"
+            f"This link expires shortly and can be used once. "
+            f"If you didn't request this, you can safely ignore this email — "
+            f"your password won't change.\n\n"
+            f"— {APP_NAME} Security")
+    html = (f"<p>Hi {who},</p>"
+            f"<p>We received a request to reset your <strong>{APP_NAME}</strong> "
+            f"password. Choose a new one here:</p>"
+            f'<p><a href="{link}" style="display:inline-block;background:#5B3DF5;'
+            f'color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;'
+            f'font-weight:600">Reset password</a></p>'
+            f"<p style=\"color:#667\">This link expires shortly and can be used once. "
+            f"If you didn't request this, ignore this email — your password won't change.</p>"
+            f"<p>— {APP_NAME} Security</p>")
+    return send_email(to, subject, text, html)
+
+
 def password_changed(to: str, name: str = "") -> bool:
     """Notify a user their account password was just changed (security heads-up so a
     change they didn't make is noticed)."""

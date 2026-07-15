@@ -132,13 +132,21 @@ def change_password(request: Request, current_password: str = Form(...),
 
 
 @router.post("/request-reset")
-def request_reset(email: str = Form(...)):
-    """Public: email a password-reset link. Always returns ok (never reveals whether
-    the address exists). Requires SMTP configured in Supabase to actually send."""
+def request_reset(request: Request, email: str = Form(...)):
+    """Public: email a Xinsere-branded password-reset link. We mint the recovery
+    link via the admin API and deliver it ourselves through SES (notify.py), so the
+    email comes from Xinsere — not GoTrue's default 'powered by Supabase' mailer.
+    Always returns ok (never reveals whether the address exists)."""
+    addr = email.strip().lower()
     try:
-        supa.request_password_reset(email)
-    except supa.SupabaseError as exc:
-        _log.warning("password reset request failed for %s: %s", email, exc)
+        # Land the recovery link back on the app's own origin.
+        redirect_to = str(request.base_url).rstrip("/") + "/security?step=pw"
+        link = supa.generate_recovery_link(addr, redirect_to)
+        if link:
+            prof = supa.profile_by_email(supa.SERVICE_ROLE_KEY, addr)
+            notify.password_reset(addr, link, (prof or {}).get("name", ""))
+    except Exception as exc:   # never reveal existence, never 500 the caller
+        _log.warning("password reset request failed for %s: %s", addr, exc)
     return {"ok": True, "message": "If that email has an account, a reset link is on its way."}
 
 

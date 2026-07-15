@@ -119,15 +119,27 @@ def update_password(access_token: str, new_password: str) -> dict:
     return _gotrue("PUT", "/user", access_token, body={"password": new_password})
 
 
-def request_password_reset(email: str) -> None:
-    """Send a password-reset email (GoTrue /recover). Public; needs SMTP configured
-    in Supabase. Never reveals whether the address exists (caller returns 200 always)."""
+def generate_recovery_link(email: str, redirect_to: str | None = None) -> str | None:
+    """Admin API: mint a password-recovery action link WITHOUT sending an email,
+    so we can deliver it ourselves (branded, via SES) instead of GoTrue's default
+    'powered by Supabase' mailer. Returns the link, or None for an unknown email
+    (caller stays quiet either way). Service-role only."""
+    if not SERVICE_ROLE_KEY:
+        raise SupabaseError(500, "Service role key not configured")
+    body = {"type": "recovery", "email": email.strip().lower()}
+    if redirect_to:
+        body["redirect_to"] = redirect_to
     r = requests.post(
-        f"{SUPABASE_URL}/auth/v1/recover",
-        headers={"apikey": ANON_KEY, "Content-Type": "application/json"},
-        json={"email": email.strip().lower()}, timeout=_TIMEOUT)
-    if r.status_code >= 400 and r.status_code != 422:  # 422 = unknown email; stay quiet
+        f"{SUPABASE_URL}/auth/v1/admin/generate_link",
+        headers={"apikey": SERVICE_ROLE_KEY, "Authorization": f"Bearer {SERVICE_ROLE_KEY}",
+                 "Content-Type": "application/json"},
+        json=body, timeout=_TIMEOUT)
+    if r.status_code == 404 or r.status_code == 422:   # no such user — stay quiet
+        return None
+    if r.status_code >= 400:
         raise SupabaseError(r.status_code, r.text)
+    d = r.json()
+    return d.get("action_link") or (d.get("properties") or {}).get("action_link")
 
 
 def mfa_list_factors(access_token: str) -> list[dict]:
