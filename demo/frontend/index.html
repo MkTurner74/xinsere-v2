@@ -631,6 +631,8 @@ function renderList(g, children, canManage){
         if(previewKind(n.content_type)){
           const vw=document.createElement("button"); vw.className="mini"; vw.textContent="View";
           vw.onclick=(e)=>{e.stopPropagation();openPreview(n);}; act0.appendChild(vw);
+          r.style.cursor="pointer";
+          r.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openPreview(n); };
         }
         if((n.access||"download")!=="view"){
           const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
@@ -674,6 +676,8 @@ function renderCards(g, children, canManage){
         if(previewKind(n.content_type)){
           const vw=document.createElement("button"); vw.className="mini"; vw.textContent="View";
           vw.onclick=(e)=>{e.stopPropagation();openPreview(n);}; acts.appendChild(vw);
+          t.style.cursor="pointer";
+          t.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openPreview(n); };
         }
         if((n.access||"download")!=="view"){
           const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
