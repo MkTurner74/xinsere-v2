@@ -814,11 +814,18 @@ async def share(request: Request, node_id: str = Form(...),
     Merkle leaf binds the level on-chain. `co-owner` is reserved, not yet accepted."""
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
-    if share_type not in ("view", "download"):
-        raise HTTPException(status_code=400, detail="share_type must be view or download")
+    if share_type not in ("view", "download", "co-owner"):
+        raise HTTPException(status_code=400, detail="share_type must be view, download or co-owner")
     node = supa.get_node(token, node_id)
-    if not node or node["owner"] != uid:
-        raise HTTPException(status_code=403, detail="You can only share your own items")
+    if not node:
+        raise HTTPException(status_code=403, detail="You can only share items you can access")
+    if node["owner"] != uid:
+        # Co-owners may re-share (0016): a co-owner grant on the node or any ancestor.
+        covering = supa.shares_covering(token, node_id)
+        if not any(sh["grantee"] == uid and sh.get("share_type") == "co-owner"
+                   for sh in covering):
+            raise HTTPException(status_code=403,
+                                detail="Only the owner or a co-owner can share this")
 
     if not grantee and email:
         addr = email.strip().lower()
@@ -885,14 +892,14 @@ async def share(request: Request, node_id: str = Form(...),
         raise HTTPException(status_code=502,
                             detail="On-chain grant failed [chain_grant_failed] — retry")
 
-    rec = supa.insert_share(token, node_id, grantee, last_tx, share_type)
+    rec = supa.insert_share(svc, node_id, grantee, last_tx, share_type)  # svc: co-owner shares pass RLS
     pmap = _profiles_map(token)
     return {"ok": True, "grantee": _public(pmap.get(grantee, {"id": grantee})),
             "tx": rec.get("tx"), "files_granted": len(files),
             "share_type": share_type, "cascade": node["type"] == "folder"}
 
 
-_LEVEL_RANK = {"view": 1, "download": 2}
+_LEVEL_RANK = {"view": 1, "download": 2, "co-owner": 2}
 
 
 def _has_access(file_id: str, uid: str) -> tuple[bool, str, str]:
@@ -1092,6 +1099,10 @@ async def download_plan(request: Request, node_id: str):
         raise HTTPException(status_code=403,
                             detail="Your access is view-only — ask the owner for download access"
                             if level == "view" else "No active on-chain grant for you")
+    if node["owner"] != uid:
+        # Grantee downloads must carry the forensic mark, which only the server
+        # path can embed — 501 makes the client fall back to /api/download.
+        raise HTTPException(status_code=501, detail="Server-mediated download (forensic marking)")
     _record_access(node, uid, "file.download_plan")
     try:
         # 30 min TTL: a retried/slow transfer must not see its fragment URLs
@@ -1142,11 +1153,25 @@ async def download(request: Request, node_id: str):
         raise HTTPException(status_code=403,
                             detail="Your access is view-only — ask the owner for download access"
                             if level == "view" else "No active on-chain grant for you")
-    _record_access(node, uid, "file.download")
+    entry = _record_access(node, uid, "file.download")
     try:
         r = get_pipeline().retrieve(node["file_id"])
     except XinsereIntegrityError as exc:
         raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
+
+    # Forensic mark on every NON-OWNER download (Mark, 2026-07-15): the delivered
+    # copy embeds this access's on-chain-logged ID, so a leaked file traces to
+    # its recipient. The response hash is the DELIVERED copy's hash — attribution
+    # over frozen-hash; owners still get the bit-perfect original.
+    content, marked = r.content, False
+    if node["owner"] != uid and entry:
+        import watermark
+        content, _, marked = watermark.apply(
+            content, r.content_type or "application/octet-stream",
+            entry.get("entry_hash", ""))
+    import hashlib as _hashlib
+    delivered_sha = _hashlib.sha256(content).hexdigest() if marked else node.get("sha", "")
+
     t = r.timings or {}
     # Compact per-stage breakdown, visible in the browser Network tab (and logged
     # server-side in full). Handy for the perf pass: shows S3-vs-KMS split.
@@ -1156,16 +1181,67 @@ async def download(request: Request, node_id: str):
                   f"kmsmax={t.get('kms_decrypt', {}).get('max')}ms "
                   f"verify={t.get('verify_sha_ms')}ms workers={t.get('workers')}")
     return StreamingResponse(
-        io.BytesIO(r.content),
+        io.BytesIO(content),
         media_type=r.content_type,
         headers={
             "Content-Disposition": f'attachment; filename="{node["name"]}"',
-            "X-Content-SHA256": node.get("sha", ""),
-            "X-Integrity": "verified-bit-perfect",
+            "X-Content-SHA256": delivered_sha,
+            "X-Watermarked": "true" if marked else "false",
+            "X-Integrity": "forensically-marked" if marked else "verified-bit-perfect",
             "X-Retrieve-Timing": timing_hdr,
             "Access-Control-Expose-Headers": "X-Content-SHA256, X-Integrity, X-Retrieve-Timing",
         },
     )
+
+
+@app.get("/api/download-folder/{node_id}")
+async def download_folder(request: Request, node_id: str):
+    """ZIP a folder. Each file passes the same on-chain download gate; files the
+    caller can't download (view-only) are skipped, not leaked. Non-owner copies
+    carry the per-access forensic mark, same as single-file downloads."""
+    import hashlib as _hashlib
+    import zipfile
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["type"] != "folder":
+        raise HTTPException(status_code=404, detail="Folder not found")
+    files = supa.files_under(token, node_id)
+    if not files:
+        raise HTTPException(status_code=404, detail="Folder is empty")
+    buf = io.BytesIO()
+    added = skipped = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            allowed, _, _ = _authorize(f, uid, need="download")
+            if not allowed:
+                skipped += 1
+                continue
+            try:
+                r = get_pipeline().retrieve(f["file_id"])
+            except Exception:
+                skipped += 1
+                continue
+            content = r.content
+            if f["owner"] != uid:
+                entry = _record_access(f, uid, "file.download")
+                if entry:
+                    import watermark
+                    content, _, _ = watermark.apply(
+                        content, f.get("content_type") or "application/octet-stream",
+                        entry.get("entry_hash", ""))
+            else:
+                _record_access(f, uid, "file.download")
+            z.writestr(f["name"], content)
+            added += 1
+    if not added:
+        raise HTTPException(status_code=403, detail="No downloadable files in this folder")
+    data = buf.getvalue()
+    return StreamingResponse(io.BytesIO(data), media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{node["name"]}.zip"',
+        "X-Files-Included": str(added), "X-Files-Skipped": str(skipped),
+        "X-Content-SHA256": _hashlib.sha256(data).hexdigest(),
+    })
 
 
 # --- routers: machine API, admin console, gated docs -------------------------

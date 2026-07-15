@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import secrets
 
-from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 import authn
 import orgs
@@ -281,6 +281,58 @@ def audit_log(s: dict = Depends(authn.require_admin), limit: int = 100,
         needle = actor.strip().lower()
         rows = [r for r in rows if needle in (r.get("actor_email") or "").lower()]
     return {"rows": rows, "anchors": anchors}
+
+
+# --- forensic audit: trace a found file back to who accessed it --------------------
+
+@router.post("/audit-file")
+async def audit_file(s: dict = Depends(authn.require_admin), file: UploadFile = File(...)):
+    """Upload a suspect file; extract embedded forensic marks (XIN-FWM-<16hex of
+    an access_log entry_hash>) and resolve each to the tamper-evident access
+    record — who, what, when, and whether that day is sealed on-chain."""
+    import watermark
+    content = await file.read()
+    marks = watermark.extract(content)
+    matches = []
+    for m in marks:
+        hexid = m.rsplit("-", 1)[-1]
+        try:
+            rows = supa._rest("GET", "/access_log", supa.SERVICE_ROLE_KEY, params={
+                "entry_hash": f"like.{hexid}*",
+                "select": "ts,day,actor_id,actor_type,action,file_id,node_id,bytes,entry_hash",
+                "limit": "3"}) or []
+        except supa.SupabaseError:
+            rows = []
+        for r in rows:
+            prof = {}
+            try:
+                got = supa._rest("GET", "/profiles", supa.SERVICE_ROLE_KEY,
+                                 params={"id": f"eq.{r['actor_id']}", "select": "email,name"})
+                prof = got[0] if got else {}
+            except supa.SupabaseError:
+                pass
+            node = {}
+            if r.get("node_id"):
+                try:
+                    got = supa._rest("GET", "/nodes", supa.SERVICE_ROLE_KEY,
+                                     params={"id": f"eq.{r['node_id']}", "select": "name,owner"})
+                    node = got[0] if got else {}
+                except supa.SupabaseError:
+                    pass
+            anchor = None
+            try:
+                got = supa._rest("GET", "/access_log_anchors", supa.SERVICE_ROLE_KEY,
+                                 params={"day": f"eq.{r['day']}", "select": "tx_hash,anchored_at"})
+                anchor = got[0] if got else None
+            except supa.SupabaseError:
+                pass
+            matches.append({"mark": m, "ts": r["ts"], "action": r["action"],
+                            "actor_email": prof.get("email"), "actor_name": prof.get("name"),
+                            "actor_type": r["actor_type"], "file_name": node.get("name"),
+                            "file_id": r.get("file_id"), "entry_hash": r["entry_hash"],
+                            "anchor_tx": (anchor or {}).get("tx_hash"),
+                            "sealed": bool((anchor or {}).get("tx_hash"))})
+    return {"filename": file.filename, "marks_found": marks, "matches": matches}
 
 
 # --- platform config (read-only summary for Settings) -------------------------------

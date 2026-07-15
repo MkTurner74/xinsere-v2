@@ -373,6 +373,16 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
   <section id="view-audit" class="hidden">
     <h1 class="viewtitle">Audit log</h1>
     <p class="viewsub">Every data access, recorded against the individual acting identity. Append-only; each day's entries are sealed with a Merkle root anchored on Polygon.</p>
+
+    <div class="panel" style="margin-bottom:22px;">
+      <h2 style="margin:0 0 6px;">Trace a file</h2>
+      <p class="note">Found a file in the wild? Upload it — embedded forensic marks resolve to who accessed it, when, and the on-chain seal.</p>
+      <div class="row" style="margin-top:10px;">
+        <input type="file" id="trace-file">
+        <button class="btn" id="trace-go" type="button">Trace</button>
+      </div>
+      <div id="trace-out" style="margin-top:12px;"></div>
+    </div>
     <div class="toolbar">
       <span class="row">
         <input id="au-day" type="date" title="Day">
@@ -563,6 +573,30 @@ async function loadAudit(){
                   :`<span class="pill unanchored" title="Anchors daily">pending</span>`}</td></tr>`;
   }).join("");
 }
+$("#trace-go").addEventListener("click",async()=>{
+  const f=$("#trace-file").files[0]; const out=$("#trace-out");
+  if(!f){ out.innerHTML=`<span class="note">Pick a file first.</span>`; return; }
+  out.innerHTML=`<span class="note">Extracting marks…</span>`;
+  const fd=new FormData(); fd.append("file",f);
+  try{
+    const r=await fetch("/api/admin/audit-file",{method:"POST",body:fd});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||d.error||"Trace failed");
+    if(!d.marks_found.length){ out.innerHTML=`<span class="note">No Xinsere forensic marks found in “${esc(f.name)}”. The file may pre-date marking, be owner-original, or have been aggressively re-encoded.</span>`; return; }
+    out.innerHTML=d.matches.length?d.matches.map(m=>`<div class="run">
+        <div class="top"><div><strong>${esc(m.actor_email||m.actor_name||"unknown actor")}</strong>
+          <span class="note mono">${esc(m.mark)}</span></div>
+          <span class="pill ${m.sealed?"live":"pending"}">${m.sealed?"sealed on-chain":"seal pending"}</span></div>
+        <div class="metrics">
+          <span><b>${esc(m.action)}</b></span>
+          <span>${fmtDT(m.ts)}</span>
+          <span>${esc(m.file_name||m.file_id||"")}</span>
+          <span>${esc(m.actor_type)}</span>
+          ${m.anchor_tx?`<span><a class="link mono" target="_blank" href="https://amoy.polygonscan.com/tx/${esc(m.anchor_tx)}">anchor tx</a></span>`:""}
+        </div></div>`).join("")
+      :`<span class="note">Marks found (${d.marks_found.map(esc).join(", ")}) but no matching access record — check the log retention.</span>`;
+  }catch(e){ out.innerHTML=`<span class="note">✗ ${esc(e.message)}</span>`; }
+});
 $("#au-apply").addEventListener("click",()=>loadAudit().catch(e=>alert(e.message)));
 $("#au-clear").addEventListener("click",()=>{
   $("#au-day").value="";$("#au-actor").value="";$("#au-action").value="";

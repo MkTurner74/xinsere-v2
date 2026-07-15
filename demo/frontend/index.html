@@ -306,6 +306,16 @@ if(sessionStorage.getItem("xin-authed")==="1")document.documentElement.dataset.a
    can fall back to the OS light popup while inheriting our light text */
 select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
 
+/* share permission radios */
+.perm-opts{display:flex;flex-direction:column;gap:8px;margin:6px 0 14px;}
+.perm-opt{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--edge);
+  border-radius:11px;cursor:pointer;}
+.perm-opt:hover{background:var(--panel-2);}
+.perm-opt:has(input:checked){border-color:var(--edge-strong);background:var(--panel-2);}
+.perm-opt input{accent-color:var(--violet-br);width:16px;height:16px;flex:none;}
+.perm-opt b{display:block;font-size:.9rem;}
+.perm-opt i{display:block;font-style:normal;font-size:.78rem;color:var(--muted);}
+
 /* global search */
 .gsearch{position:relative;flex:1;max-width:440px;margin:0 12px;}
 .gsearch input{width:100%;padding:9px 14px;border-radius:10px;border:1px solid var(--edge);
@@ -478,6 +488,12 @@ const ICON={
   listv:'<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
   dots:'<circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/>',
   eye:'<path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  doc:'<path d="M14 3v5h5"/><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M8.5 12h7M8.5 15h7M8.5 18h4"/>',
+  sheet:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16M4 15h16M9.5 4v16M15 4v16"/>',
+  slides:'<rect x="3.5" y="5" width="17" height="12" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M13 9.5h4.5M13 12.5h4.5"/><path d="M12 17v3"/>',
+  pdf:'<path d="M14 3v5h5"/><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M8.5 13.5c2 .8 5 .8 7 0M8.5 16.5h7"/>',
+  audio:'<path d="M9 18V6l10-2v12"/><circle cx="6.8" cy="18" r="2.2"/><circle cx="16.8" cy="16" r="2.2"/>',
+  zip:'<path d="M14 3v5h5"/><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M9 5h2M9 8h2M9 11h2M9 14h2"/>',
   info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.6h.01"/>'
 };
 function svg(name, cls){ return `<svg class="svgi${cls?" "+cls:""}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]||""}</svg>`; }
@@ -490,10 +506,25 @@ function iconBtn(icon, title, fn, cls){
   return b;
 }
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
-function fileIconName(name){ const e=(name.split(".").pop()||"").toLowerCase();
-  if(["png","jpg","jpeg","gif","webp","tif","tiff","svg","bmp","heic"].includes(e)) return "img";
-  if(["mp4","mov","avi","webm","mkv","m4v"].includes(e)) return "vid";
-  return "file"; }
+/* Per-type icon + color so a wall of files is scannable. Colors echo the
+ * familiar app families (Word blue, Excel green, PowerPoint orange, PDF red)
+ * lightened for the dark canvas — our own generic glyphs, no vendor logos. */
+const FILE_STYLES={
+  pdf:{icon:"pdf",color:"#F26D6D"},
+  doc:{icon:"doc",color:"#6FA2F2"},docx:{icon:"doc",color:"#6FA2F2"},
+  xls:{icon:"sheet",color:"#4CC38A"},xlsx:{icon:"sheet",color:"#4CC38A"},csv:{icon:"sheet",color:"#4CC38A"},
+  ppt:{icon:"slides",color:"#F2955F"},pptx:{icon:"slides",color:"#F2955F"},key:{icon:"slides",color:"#F2955F"},
+  txt:{icon:"doc",color:"#9AA3C7"},md:{icon:"doc",color:"#9AA3C7"},json:{icon:"doc",color:"#9AA3C7"},
+  zip:{icon:"zip",color:"#D9A03F"},gz:{icon:"zip",color:"#D9A03F"},rar:{icon:"zip",color:"#D9A03F"},"7z":{icon:"zip",color:"#D9A03F"},
+  mp3:{icon:"audio",color:"#E86FA8"},wav:{icon:"audio",color:"#E86FA8"},m4a:{icon:"audio",color:"#E86FA8"},aac:{icon:"audio",color:"#E86FA8"},
+};
+["png","jpg","jpeg","gif","webp","tif","tiff","svg","bmp","heic"].forEach(e=>FILE_STYLES[e]={icon:"img",color:"#45C4D9"});
+["mp4","mov","avi","webm","mkv","m4v"].forEach(e=>FILE_STYLES[e]={icon:"vid",color:"#B08CFF"});
+function fileStyle(name){ const e=(name.split(".").pop()||"").toLowerCase();
+  return FILE_STYLES[e]||{icon:"file",color:"var(--word)"}; }
+function fileIconName(name){ return fileStyle(name).icon; }
+function fileIconHtml(name){ const s=fileStyle(name);
+  return `<span style="color:${s.color}">${svg(s.icon)}</span>`; }
 function iconFor(name){ const e=(name.split(".").pop()||"").toLowerCase();
   const m={pdf:"▤",xlsx:"▦",xls:"▦",csv:"▦",mov:"▷",mp4:"▷",zip:"◫",png:"▣",jpg:"▣",jpeg:"▣",doc:"▤",docx:"▤",key:"◈",txt:"≡"};
   return m[e]||"▧"; }
@@ -785,8 +816,10 @@ function renderList(g, children, canManage){
         `<span class="col-type">Folder</span><span class="col-size"></span>`+
         `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
       if(!trash) r.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
+      if(!trash) r.querySelector(".col-act").appendChild(
+        iconBtn("download","Download folder as ZIP",(e,b)=>downloadFolder(n,b),"dl"));
     } else {
-      r.innerHTML=`<span class="ic">${svg(fileIconName(n.name))}</span>`+
+      r.innerHTML=`<span class="ic">${fileIconHtml(n.name)}</span>`+
         `<span class="nm" title="${esc(n.name)}">${esc(n.name)}<span class="sub">SHA-256 ${(n.sha256||"").slice(0,12)}…</span></span>`+
         `<span class="col-type">${typeLabel(n.content_type)||"—"}</span>`+
         `<span class="col-size"><span class="secured-i" title="${n.frags} fragments · AES-256-GCM · on-chain permissioned">${svg("shield")}</span> ${fmtSize(n.size)}</span>`+
@@ -822,16 +855,16 @@ function renderCards(g, children, canManage){
       t.innerHTML=`<div class="ic">${svg("folder")}</div><div class="nm">${esc(n.name)}</div><div class="mt">Folder</div>`;
       if(!trash) t.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
       if(trash){ const acts=document.createElement("div"); acts.className="acts"; trashActions(acts, n); t.appendChild(acts); }
-      else if(canManage && mine){
+      else {
         const acts=document.createElement("div"); acts.className="acts";
-        const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share";
-        sb.onclick=(e)=>{e.stopPropagation();openShare(n);}; acts.appendChild(sb);
-        t.appendChild(acts); t.appendChild(kebab(n));
+        acts.appendChild(iconBtn("download","Download folder as ZIP",(e,b)=>downloadFolder(n,b),"dl"));
+        if(canManage && mine){ acts.appendChild(iconBtn("share","Share",()=>openShare(n))); t.appendChild(kebab(n)); }
+        t.appendChild(acts);
       }
       if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
     } else {
       t.innerHTML=`<span class="sec-badge" title="Secured — fragmented · AES-256-GCM · on-chain permissioned · SHA-256 verified">${svg("shield")}</span>`+
-        `<div class="ic">${svg(fileIconName(n.name))}</div><div class="nm" title="${esc(n.name)}">${esc(n.name)}</div>`+
+        `<div class="ic">${fileIconHtml(n.name)}</div><div class="nm" title="${esc(n.name)}">${esc(n.name)}</div>`+
         `<div class="mt">${typeLabel(n.content_type)?`<span title="Verified content type — a rename can't change it">${typeLabel(n.content_type)}</span> · `:""}<span title="${n.frags} fragments">${fmtSize(n.size)}</span></div>`;
       const acts=document.createElement("div"); acts.className="acts";
       if(trash){ trashActions(acts, n); }
@@ -1122,6 +1155,21 @@ function openPreview(n){
   })();
 }
 
+async function downloadFolder(n, btn){
+  const T=newTask(n.name);
+  if(btn){ btn.classList.add("loading"); btn.innerHTML='<span class="btnspin"></span>'; }
+  const done=(m)=>{ T.done(m); if(btn){ btn.classList.remove("loading"); btn.innerHTML=svg(btn.dataset.icon||"download"); } };
+  try{
+    T.set("Reassembling folder & packing ZIP…",{indet:true});
+    const r=await api("/api/download-folder/"+n.id);
+    if(!r.ok){ done("✗ "+((await r.json()).error||"Folder download failed")); return; }
+    const b=await r.blob(); const url=URL.createObjectURL(b);
+    const a=document.createElement("a"); a.href=url; a.download=n.name+".zip"; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),4000);
+    done(`✓ ${n.name}.zip — ${r.headers.get("X-Files-Included")||"?"} files`);
+  }catch(e){ done("✗ "+e.message); }
+}
+
 /* ---- download (on-chain check -> fetch -> verify bit-perfect) ---- */
 async function downloadFile(n, btn){
   // Button shows a fixed-width spinner (not long text) so the card never reflows;
@@ -1283,14 +1331,16 @@ grid.addEventListener("drop",e=>{ if(VIEW!=="mine")return; const fs=[...e.dataTr
 /* ---- share modal ---- */
 function openShare(node){
   const bg=document.createElement("div"); bg.className="modal-bg";
-  bg.innerHTML=`<div class="modal"><h3>Share “${node.name}”</h3>
+  bg.innerHTML=`<div class="modal" style="width:min(560px,94vw);max-width:none;">
+    <h3>Share “${node.name}”</h3>
     <p class="msub">${node.type==="folder"?"Everyone you add can access every file inside.":"Choose what people you add are allowed to do."}</p>
-    <div style="display:flex;align-items:center;gap:8px;margin:0 0 10px;">
-      <span class="msub" style="margin:0;">People you add can</span>
-      <select class="share-perm" style="padding:7px 10px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:13px;">
-        <option value="download">view &amp; download</option>
-        <option value="view">view only — no download</option>
-      </select>
+    <div class="perm-opts" role="radiogroup" aria-label="Permission level">
+      <label class="perm-opt"><input type="radio" name="share-perm" value="view">
+        <span><b>Read only</b><i>View in the browser — no download</i></span></label>
+      <label class="perm-opt"><input type="radio" name="share-perm" value="download" checked>
+        <span><b>Download / Edit</b><i>View and download files</i></span></label>
+      <label class="perm-opt"><input type="radio" name="share-perm" value="co-owner">
+        <span><b>Co-Owner</b><i>Full access — can re-share with others</i></span></label>
     </div>
     <input class="share-q" type="text" autocomplete="off" placeholder="Search people by name or email…"
       style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
@@ -1308,7 +1358,8 @@ function openShare(node){
   const close=()=>{ if(bg.parentNode) document.body.removeChild(bg); };
   const refresh=()=>{ close(); openFolder(CURRENT); };
 
-  const permSel=bg.querySelector(".share-perm");
+  const permVal=()=>bg.querySelector('input[name="share-perm"]:checked').value;
+  const permSel={get value(){return permVal();}};
 
   // Grant to an existing user id (from typeahead) — real on-chain grant.
   async function shareUser(uid, name, btn){
@@ -1338,7 +1389,7 @@ function openShare(node){
     current.innerHTML=(node.shared_with||[]).length?`<p class="msub" style="margin:8px 0 4px;">Shared with <span style="opacity:.65">— re-add a person to change their permission</span></p>`:``;
     (node.shared_with||[]).forEach(u=>{
       const row=document.createElement("div"); row.className="person";
-      const lvl=u.share_type==="view"?"view only":"can download";
+      const lvl=u.share_type==="view"?"read only":u.share_type==="co-owner"?"co-owner":"download / edit";
       row.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email||u.id}</span><span class="st">${lvl} ✓</span>`;
       const rm=document.createElement("button"); rm.className="rm"; rm.textContent="Revoke";
       rm.onclick=(e)=>{ e.stopPropagation(); revokeUser(u); };
