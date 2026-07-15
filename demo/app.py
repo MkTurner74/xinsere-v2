@@ -966,6 +966,30 @@ def _authorize(node: dict, uid: str, need: str = "download") -> tuple[bool, str,
     return False, "none", "none"
 
 
+def _wm_enabled(owner_uid: str) -> bool:
+    """Org override for forensic watermarking (0017). Keyed off the FILE OWNER's
+    org membership; multi-org users mark if ANY org requires it; users with no
+    org (or any lookup failure, or pre-0017) FAIL TOWARD MARKING — the override
+    can only ever relax, never silently disable by accident."""
+    svc = supa.SERVICE_ROLE_KEY
+    if not svc:
+        return True
+    try:
+        mems = supa._rest("GET", "/org_members", svc,
+                          params={"user_id": f"eq.{owner_uid}", "select": "org_id"}) or []
+        ids = [m["org_id"] for m in mems]
+        if not ids:
+            return True
+        orgs_rows = supa._rest("GET", "/organizations", svc,
+                               params={"id": f"in.({','.join(ids)})",
+                                       "select": "watermark_downloads"}) or []
+        if not orgs_rows:
+            return True
+        return any(o.get("watermark_downloads", True) for o in orgs_rows)
+    except Exception:
+        return True
+
+
 def _record_access(node: dict, uid: str, action: str) -> dict | None:
     """Interactive-plane access telemetry into the tamper-evident access_log
     (0005/0014) — same ground truth the machine API writes. Fail-open by design.
@@ -1050,7 +1074,7 @@ async def preview(request: Request, node_id: str):
     # entry, so an auditor can trace a leaked copy to who viewed it and when.
     # Owners skip (they are the source). Design doc: forensic-watermarking-design.
     watermarked = False
-    if node["owner"] != uid and entry:
+    if node["owner"] != uid and entry and _wm_enabled(node["owner"]):
         import watermark
         content, serve_type, watermarked = watermark.apply(
             content, serve_type, entry.get("entry_hash", ""))
@@ -1164,7 +1188,7 @@ async def download(request: Request, node_id: str):
     # its recipient. The response hash is the DELIVERED copy's hash — attribution
     # over frozen-hash; owners still get the bit-perfect original.
     content, marked = r.content, False
-    if node["owner"] != uid and entry:
+    if node["owner"] != uid and entry and _wm_enabled(node["owner"]):
         import watermark
         content, _, marked = watermark.apply(
             content, r.content_type or "application/octet-stream",
@@ -1236,7 +1260,7 @@ async def download_folder(request: Request, node_id: str):
             content = r.content
             if f["owner"] != uid:
                 entry = _record_access(f, uid, "file.download")
-                if entry:
+                if entry and _wm_enabled(f["owner"]):
                     import watermark
                     content, _, _ = watermark.apply(
                         content, f.get("content_type") or "application/octet-stream",

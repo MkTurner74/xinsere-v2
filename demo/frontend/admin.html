@@ -331,6 +331,14 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
       <div class="empty hidden" id="key-empty">No API keys yet.</div>
     </div>
 
+    <h2>Security</h2>
+    <div class="panel">
+      <div class="dz-row">
+        <span class="note"><strong>Forensic watermarking</strong> — every download or preview by a non-owner embeds an invisible, on-chain-logged mark tracing the copy to its recipient. Recommended on.</span>
+        <button class="btn ghost sm" id="od-wm" type="button">…</button>
+      </div>
+    </div>
+
     <div class="danger-zone">
       <h2>Danger zone</h2>
       <div class="dz-row" id="dz-suspend-row">
@@ -796,6 +804,14 @@ async function openOrg(id){
   showView("org");
   $("#od-name").innerHTML=`${esc(d.org.name)} <span class="pill ${d.org.status}">${d.org.status}</span>`;
   $("#od-meta").textContent=`slug: ${d.org.slug} · service identity (party_id): ${d.org.service_user}`;
+  const wmBtn=$("#od-wm"), wmOn=d.org.watermark_downloads!==false;
+  wmBtn.textContent=wmOn?"On — click to disable":"Off — click to enable";
+  wmBtn.className="btn sm "+(wmOn?"ghost":"danger");
+  wmBtn.onclick=async()=>{
+    if(wmOn&&!confirm(`Disable forensic watermarking for ${d.org.name}? Downloads by non-owners will no longer carry traceable marks.`))return;
+    try{await api(`/api/admin/orgs/${id}/watermark`,{method:"POST",body:form({enabled:wmOn?"false":"true"})});openOrg(id);}
+    catch(e){alert(e.message);}
+  };
   $("#dz-suspend-row").classList.toggle("hidden",d.org.status!=="active");
   $("#dz-activate-row").classList.toggle("hidden",d.org.status!=="suspended");
 

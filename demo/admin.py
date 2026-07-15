@@ -89,6 +89,20 @@ def org_detail(org_id: str, s: dict = Depends(authn.require_admin)):
     return {"org": org, "members": members, "keys": orgs.org_keys(org_id)}
 
 
+@router.post("/orgs/{org_id}/watermark")
+def org_watermark(org_id: str, s: dict = Depends(authn.require_admin),
+                  enabled: str = Form(...)):
+    """Org-level forensic-watermarking override (0017). Default on; opt-out is
+    an explicit admin action per organization."""
+    if not orgs.get_org(org_id):
+        raise HTTPException(status_code=404, detail="Organization not found")
+    val = enabled.lower() in ("1", "true", "on", "yes")
+    supa._rest("PATCH", "/organizations", supa.SERVICE_ROLE_KEY,
+               params={"id": f"eq.{org_id}"}, prefer="return=minimal",
+               json_body={"watermark_downloads": val})
+    return {"ok": True, "watermark_downloads": val}
+
+
 @router.post("/orgs/{org_id}/status")
 def org_status(org_id: str, s: dict = Depends(authn.require_admin), status: str = Form(...)):
     if status not in ("active", "suspended"):
