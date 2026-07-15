@@ -6,7 +6,7 @@
 <title>Xinsere — Secure Files</title>
 <style>
   :root{
-    --bg:#0A0713;--bg-2:#0F0B1E;--panel:rgba(255,255,255,0.035);--panel-2:rgba(146,119,255,0.06);
+    --bg:#0A0713;--bg-2:#0F0B1E;--panel:rgba(255,255,255,0.035);--panel-2:rgba(146,119,255,0.06);--menu-bg:#17112A;
     --edge:rgba(146,119,255,0.16);--edge-strong:rgba(146,119,255,0.34);
     --violet-br:#8A6BFF;--violet:#5B3DF5;--violet-deep:#2E2170;--word:#9277FF;
     --mint:#4FE3C1;--coral:#FF8B7A;--text:#ECE9F8;--muted:#9A93B8;--faint:#6E6688;
@@ -20,7 +20,7 @@
   /* Light theme: same violet/mint brand, inverted canvas. Toggled via
      data-theme on <html>; persisted in localStorage. Dark is the default. */
   :root[data-theme="light"]{
-    --bg:#F4F2FB;--bg-2:#FFFFFF;--panel:rgba(91,61,245,0.05);--panel-2:rgba(91,61,245,0.09);
+    --bg:#F4F2FB;--bg-2:#FFFFFF;--panel:rgba(91,61,245,0.05);--panel-2:rgba(91,61,245,0.09);--menu-bg:#FFFFFF;
     --edge:rgba(91,61,245,0.18);--edge-strong:rgba(91,61,245,0.38);
     --word:#5B3DF5;--mint:#0C9E81;--coral:#D94F3C;
     --text:#1B1633;--muted:#565073;--faint:#8B85A8;
@@ -278,7 +278,7 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
 .userbtn{display:flex;align-items:center;gap:8px;background:none;border:0;color:inherit;cursor:pointer;padding:4px 8px;border-radius:10px}
 .userbtn:hover{background:rgba(255,255,255,.06)}
 .userbtn .caret{font-size:.7rem;opacity:.6}
-.usermenu .menu{position:absolute;right:0;top:calc(100% + 8px);background:var(--panel,#141830);border:1px solid var(--edge,#2a3060);border-radius:12px;padding:6px;min-width:190px;box-shadow:0 14px 34px rgba(0,0,0,.45);z-index:60;display:flex;flex-direction:column}
+.usermenu .menu{position:absolute;right:0;top:calc(100% + 8px);background:var(--menu-bg,#141830);border:1px solid var(--edge,#2a3060);border-radius:12px;padding:6px;min-width:190px;box-shadow:0 14px 34px rgba(0,0,0,.45);z-index:60;display:flex;flex-direction:column}
 .usermenu .menu.hidden{display:none}
 .usermenu .menu-item{display:block;text-align:left;background:none;border:0;color:var(--text,#eef1ff);padding:10px 12px;border-radius:8px;font-size:.92rem;cursor:pointer;text-decoration:none;width:100%}
 .usermenu .menu-item:hover{background:rgba(255,255,255,.07)}
@@ -291,7 +291,6 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
   <div class="topbar">
     <div class="brand"><span id="top-mark"></span><span class="word">Xinsere</span></div>
     <div class="me">
-      <button class="theme-toggle" title="Switch light/dark mode" aria-label="Switch light/dark mode"></button>
       <div class="usermenu">
         <button class="userbtn" id="user-btn" type="button" aria-haspopup="true" aria-expanded="false">
           <span class="avatar" id="me-av"></span><span id="me-name"></span><span class="caret">▾</span>

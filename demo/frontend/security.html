@@ -4,8 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Security · Xinsere</title>
+<script>/* apply saved theme before first paint (no flash); dark is default */
+document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark";</script>
 <style>
   :root{--bg:#0b0d1a;--panel:#141830;--panel-2:#1b2040;--edge:#2a3060;--text:#eef1ff;--muted:#9aa3c7;--brand:#8A6BFF;--mint:#4FE3C1;--rose:#FF8B7A;}
+  :root[data-theme="light"]{--bg:#F4F2FB;--panel:#FFFFFF;--panel-2:#EFEDF9;--edge:rgba(91,61,245,0.22);--text:#1B1533;--muted:#5E5A78;--brand:#5B3DF5;--mint:#0E8E74;--rose:#C7452F;}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
   .wrap{max-width:560px;margin:0 auto;padding:40px 20px;}
@@ -29,6 +32,9 @@
   .qr{background:#fff;border-radius:12px;padding:16px;margin:12px 0;width:232px;display:flex;align-items:center;justify-content:center}
   .qr svg,.qr img{display:block;width:200px;height:200px;shape-rendering:crispEdges;image-rendering:pixelated}
   .secret{font-family:ui-monospace,monospace;background:var(--panel-2);border:1px solid var(--edge);border-radius:8px;padding:10px 12px;word-break:break-all;font-size:1rem;letter-spacing:2px;text-align:center}
+  .seg{display:flex;gap:8px}
+  .seg .btn{margin-top:4px}
+  .btn.ghost.active{border-color:var(--brand);color:var(--brand);font-weight:600}
   .hidden{display:none}
 </style>
 </head>
@@ -40,6 +46,16 @@
   </div>
 
   <div id="forced" class="banner hidden">Your administrator requires you to set a new password before continuing.</div>
+
+  <!-- appearance -->
+  <div class="card" id="card-appearance">
+    <h2>Appearance</h2>
+    <p class="note">Choose how Xinsere looks on this device.</p>
+    <div class="seg">
+      <button class="btn ghost" id="theme-dark" type="button">Dark</button>
+      <button class="btn ghost" id="theme-light" type="button">Light</button>
+    </div>
+  </div>
 
   <!-- 2FA login step-up -->
   <div class="card hidden" id="step-mfa">
@@ -100,6 +116,17 @@ async function api(path,opts={}){
 }
 const step=new URLSearchParams(location.search).get("step");
 let FACTOR=null;
+
+/* ---- appearance (shared xin-theme key with the main app) ---- */
+function applyTheme(t){
+  document.documentElement.dataset.theme=t;
+  localStorage.setItem("xin-theme",t);
+  $("#theme-dark").classList.toggle("active",t==="dark");
+  $("#theme-light").classList.toggle("active",t==="light");
+}
+$("#theme-dark").addEventListener("click",()=>applyTheme("dark"));
+$("#theme-light").addEventListener("click",()=>applyTheme("light"));
+applyTheme(document.documentElement.dataset.theme||"dark");
 
 async function load(){
   let st={};
