@@ -124,6 +124,15 @@ def client_js() -> HTMLResponse:
         return HTMLResponse(f.read(), media_type="application/javascript")
 
 
+@app.get("/mfa", response_class=HTMLResponse)
+def mfa_page() -> HTMLResponse:
+    """Dedicated, non-dismissible two-factor challenge shown at login when a
+    verified factor exists. The session stays MFA-pending (no data access) until
+    the code is verified here."""
+    with open(os.path.join(_HERE, "frontend", "mfa.html"), "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
 @app.get("/recover", response_class=HTMLResponse)
 def recover_page() -> HTMLResponse:
     """Public account-recovery page: request a Xinsere-branded reset link with
@@ -201,6 +210,11 @@ async def login(request: Request, identifier: str = Form(...), password: str = F
         mfa_factor = verified[0].get("id") if verified else None
     except Exception:
         pass
+    # Hard MFA gate: mark the session pending until the TOTP challenge is met.
+    # authn.session() blocks all data routes while pending, so the challenge
+    # can't be skipped by dismissing a page.
+    request.session["mfa_pending"] = bool(mfa_factor)
+    request.session["mfa_factor_id"] = mfa_factor or ""
     return {"ok": True, "user": _public(prof),
             "must_change_password": must_change,
             "email_verified": email_verified,
@@ -392,6 +406,8 @@ async def me(request: Request):
         pass
     return {"user": _public(prof), "others": others,
             "must_change_password": must_change,
+            "mfa_required": bool(request.session.get("mfa_pending")),
+            "mfa_factor_id": request.session.get("mfa_factor_id", ""),
             "admin": is_platform_admin(uid, prof)}
 
 

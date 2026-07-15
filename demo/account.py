@@ -201,6 +201,7 @@ def mfa_verify(request: Request, factor_id: str = Form(...), code: str = Form(..
     if grant and grant.get("access_token"):
         request.session["sb"] = supa.session_from_grant(
             {**grant, "user": grant.get("user") or {"id": uid}})
+    request.session["mfa_pending"] = False   # challenge satisfied — unlock the session
     try:
         supa.set_account_security(_svc(), uid, {"mfa_enabled": True})
     except Exception:

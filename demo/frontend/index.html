@@ -608,7 +608,7 @@ $("#login-form").addEventListener("submit", async (e)=>{
   const d=await r.json();
   // Security step-ups are handled on the dedicated /security page (2FA challenge,
   // forced password change) so the main app never renders half-authenticated.
-  if(d.mfa_required){ location.href="/security?step=mfa"; return; }
+  if(d.mfa_required){ location.href="/mfa"; return; }
   if(d.must_change_password){ location.href="/security?step=pw"; return; }
   await boot();
 });
@@ -653,6 +653,7 @@ async function boot(){
     return;
   }
   const d=await r.json(); ME=d.user; OTHERS=d.others;
+  if(d.mfa_required){ location.href="/mfa"; return; }
   if(d.must_change_password){ location.href="/security?step=pw"; return; }
   sessionStorage.setItem("xin-authed","1");
   document.documentElement.dataset.authed="1";

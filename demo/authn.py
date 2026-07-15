@@ -25,11 +25,24 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get(
     "mark.turner@entertainmenttechnologists.com,mark.turner@xinsere.com").split(",") if e.strip()}
 
 
+# Endpoints reachable while a login MFA step-up is still pending. Everything else
+# is hard-blocked until the TOTP challenge is satisfied, so the challenge can't be
+# skipped by closing a page — the app has no usable session until AAL2.
+_MFA_PENDING_OK = {
+    "/api/logout", "/api/me",
+    "/api/account/mfa/verify", "/api/account/mfa/challenge",
+    "/api/account/security-status",
+}
+
+
 def session(request: Request) -> dict:
-    """Return the live Supabase session, refreshing the token if near expiry."""
+    """Return the live Supabase session, refreshing the token if near expiry.
+    Hard-blocks data access while a login MFA challenge is unsatisfied."""
     s = request.session.get("sb")
     if not s:
         raise HTTPException(status_code=401, detail="Not signed in")
+    if request.session.get("mfa_pending") and request.url.path not in _MFA_PENDING_OK:
+        raise HTTPException(status_code=403, detail="mfa_required")
     if s["expires_at"] - time.time() < 60:
         try:
             s = supa.session_from_grant(supa.refresh(s["refresh_token"]))
