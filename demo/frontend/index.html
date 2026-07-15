@@ -143,7 +143,7 @@
   /* LIST VIEW — compact rows (default). Header + rows share ONE grid template
      so columns always line up. */
   #grid.listview{display:block;padding:4px;min-height:auto;}
-  .lhead,.lrow{display:grid;grid-template-columns:34px minmax(0,1fr) 60px 148px 78px 116px;align-items:center;gap:12px;padding:9px 14px;}
+  .lhead,.lrow{display:grid;grid-template-columns:22px 34px minmax(0,1fr) 60px 148px 78px 116px;align-items:center;gap:12px;padding:9px 14px;}
   .lhead{font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--faint);border-bottom:1px solid var(--edge);}
   .lrow{border-radius:9px;cursor:default;}
   .lrow:hover{background:var(--panel-2);}
@@ -161,13 +161,25 @@
   .lrow .shared .avatar{width:22px;height:22px;font-size:0.6rem;margin-right:-7px;border:2px solid var(--task-bg);}
   .lrow .mini.dl{font-size:0.74rem;font-weight:600;padding:5px 13px;border-radius:8px;border:0;color:#fff;background:linear-gradient(135deg,var(--violet-br),var(--violet));}
   @media(max-width:680px){
-    .lhead,.lrow{grid-template-columns:34px minmax(0,1fr) 120px 116px;}
+    .lhead,.lrow{grid-template-columns:22px 34px minmax(0,1fr) 120px 116px;}
     .col-type,.col-share{display:none;}
   }
   /* GRID VIEW — tightened cards */
   #grid:not(.listview) .tile{padding:13px 12px;}
   #grid:not(.listview) .tile .ic{width:40px;height:40px;margin-bottom:9px;}
   #grid:not(.listview) .tile .ic .svgi{width:20px;height:20px;}
+
+  /* MULTI-SELECT — checkbox column (list), hover checks (grid), selection tint */
+  .selbox{width:15px;height:15px;flex:none;accent-color:var(--violet);cursor:pointer;margin:0;}
+  .lrow.selected{background:rgba(138,107,255,.10);}
+  .tile{position:relative;}
+  .tile.selected{background:rgba(138,107,255,.10);border-color:var(--violet);}
+  .tile .selbox{position:absolute;top:9px;left:9px;z-index:2;opacity:0;transition:opacity .12s;}
+  .tile:hover .selbox,.tile .selbox:checked,#grid.has-sel .tile .selbox{opacity:1;}
+  .selinfo{display:inline-flex;align-items:center;gap:8px;font-size:.82rem;color:var(--word);
+    border:1px solid var(--edge-strong);border-radius:999px;padding:3px 6px 3px 12px;white-space:nowrap;}
+  .selinfo button{background:transparent;border:0;color:var(--muted);cursor:pointer;font-size:.9rem;line-height:1;padding:2px 6px;}
+  .selinfo button:hover{color:var(--text);}
 
   /* modal */
   .modal-bg{position:fixed;inset:0;background:var(--scrim);display:grid;place-items:center;z-index:30;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
@@ -279,8 +291,8 @@ if(sessionStorage.getItem("xin-authed")==="1")document.documentElement.dataset.a
     <p>Secure files. Shared with proof.</p>
 
     <form id="login-form">
-      <div class="field"><label>Email</label><input id="u" type="email" autocomplete="username" placeholder="you@company.com"></div>
-      <div class="field"><label>Password</label><input id="p" type="password" autocomplete="current-password"></div>
+      <div class="field"><label for="u">Email</label><input id="u" type="email" autocomplete="username" placeholder="you@company.com"></div>
+      <div class="field"><label for="p">Password</label><input id="p" type="password" autocomplete="current-password"></div>
       <button class="btn full" type="submit">Sign in</button>
       <div class="login-hint">Access is by invitation only.</div>
     </form>
@@ -424,6 +436,7 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
       <div class="bar">
         <button class="navback hidden" id="navback" type="button" title="Back" aria-label="Back">‹ Back</button>
         <div class="crumbs" id="crumbs"></div>
+        <span class="selinfo hidden" id="selinfo"></span>
         <div class="viewtoggle" id="viewtoggle">
           <button data-layout="list" title="List view" aria-label="List view"></button>
           <button data-layout="grid" title="Grid view" aria-label="Grid view"></button>
@@ -474,6 +487,53 @@ let ME=null, OTHERS=[], VIEW="mine", CURRENT=null; // CURRENT folder id
 let LAYOUT=localStorage.getItem("xin-layout")||"list";  // list (default) | grid
 let LAST=[], LAST_MANAGE=true;                           // last rendered set, for view re-render
 let TRASH_MODE=false;                                    // rendering the Trash view (Restore/Erase actions)
+
+/* ---- multi-select (list + grid): checkbox column, shift+click range,
+ * ctrl/cmd+click toggle; bulk actions via right-click / kebab / row icons.
+ * Selection lives on node ids over LAST; cleared on navigation, preserved
+ * across a list<->grid layout toggle (same LAST reference). ---- */
+let SEL=new Set(), SEL_ANCHOR=-1;
+function selClear(){ SEL.clear(); SEL_ANCHOR=-1; }
+function selNodes(){ return LAST.filter(n=>SEL.has(n.id)); }
+function selToggle(id){ SEL.has(id)?SEL.delete(id):SEL.add(id); }
+function selRange(a,b){ const [lo,hi]=a<b?[a,b]:[b,a];
+  for(let i=lo;i<=hi&&i<LAST.length;i++) SEL.add(LAST[i].id); }
+function refreshSelUI(){
+  const g=$("#grid");
+  g.classList.toggle("has-sel", SEL.size>0);
+  g.querySelectorAll("[data-nid]").forEach(el=>{
+    const on=SEL.has(el.dataset.nid);
+    el.classList.toggle("selected", on);
+    const box=el.querySelector(".selbox"); if(box) box.checked=on;
+  });
+  const all=g.querySelector("#selall");
+  if(all){ all.checked=SEL.size>0&&SEL.size===LAST.length; all.indeterminate=SEL.size>0&&SEL.size<LAST.length; }
+  const pill=$("#selinfo");
+  if(SEL.size>0){
+    pill.innerHTML=`${SEL.size} selected <button type="button" title="Clear selection (Esc)">✕</button>`;
+    pill.querySelector("button").onclick=()=>{ selClear(); refreshSelUI(); };
+    pill.classList.remove("hidden");
+  } else pill.classList.add("hidden");
+}
+/* Wire one rendered row/tile for selection. idx = its index in LAST. */
+function wireSelect(el, box, n, idx){
+  el.dataset.nid=n.id;
+  box.addEventListener("click",(e)=>{
+    e.stopPropagation();
+    if(e.shiftKey && SEL_ANCHOR>=0) selRange(SEL_ANCHOR, idx);
+    else { selToggle(n.id); SEL_ANCHOR=idx; }
+    refreshSelUI();
+  });
+  el.addEventListener("click",(e)=>{
+    if(e.ctrlKey||e.metaKey){ selToggle(n.id); SEL_ANCHOR=idx; refreshSelUI(); }
+    else if(e.shiftKey && SEL_ANCHOR>=0){ selRange(SEL_ANCHOR, idx); refreshSelUI(); }
+  });
+  el.addEventListener("contextmenu",(e)=>{
+    if(SEL.size>1 && SEL.has(n.id)){ e.preventDefault(); openMultiCtx(e); }
+  });
+}
+/* Modifier clicks are selection gestures — open/preview handlers must ignore them. */
+function isSelectClick(e){ return e.ctrlKey||e.metaKey||e.shiftKey; }
 
 function avatarHtml(u){ return `<span class="avatar" style="background:linear-gradient(135deg,${u.grad[0]},${u.grad[1]})">${u.initials}</span>`; }
 function fmtSize(b){ if(b==null) return ""; const u=["B","KB","MB","GB"];let i=0;while(b>=1024&&i<3){b/=1024;i++;}return b.toFixed(b<10&&i>0?1:0)+" "+u[i]; }
@@ -761,13 +821,15 @@ function renderCrumbs(crumbs){
 }
 
 function renderGrid(children, canManage){
+  if(children!==LAST) selClear();   // navigation resets selection; a layout toggle (same array) keeps it
   LAST=children; LAST_MANAGE=canManage;
   const g=$("#grid");
   g.classList.toggle("listview", LAYOUT==="list");
   g.innerHTML="";
-  if(!children.length){ g.innerHTML=`<div class="empty"><div class="o"></div>${canManage?"Drop files here, or use Upload.":"Nothing shared with you yet."}</div>`; return; }
+  if(!children.length){ refreshSelUI(); g.innerHTML=`<div class="empty"><div class="o"></div>${canManage?"Drop files here, or use Upload.":"Nothing shared with you yet."}</div>`; return; }
   if(LAYOUT==="list") renderList(g, children, canManage);
   else renderCards(g, children, canManage);
+  refreshSelUI();
 }
 
 /* ---- global search: as-you-type dropdown grouped by asset type; Enter opens
@@ -876,25 +938,33 @@ function facepile(n){ return (n.shared_with&&n.shared_with.length)
 
 /* Compact list rows (default) — the app-like layout. */
 function renderList(g, children, canManage){
+  const trash=TRASH_MODE;
   const head=document.createElement("div"); head.className="lhead";
-  head.innerHTML=`<span style="width:30px"></span><span class="nm">Name</span>`+
+  head.innerHTML=`<span>${trash?"":'<input type="checkbox" class="selbox" id="selall" title="Select all">'}</span>`+
+    `<span style="width:30px"></span><span class="nm">Name</span>`+
     `<span class="col-type">Type</span><span class="col-size">Security</span>`+
     `<span class="col-share">Shared</span><span class="col-act" style="width:150px"></span>`;
   g.appendChild(head);
-  const trash=TRASH_MODE;
-  children.forEach(n=>{
+  const selall=head.querySelector("#selall");
+  if(selall) selall.addEventListener("click",()=>{
+    if(SEL.size===children.length) selClear();
+    else children.forEach(n=>SEL.add(n.id));
+    refreshSelUI();
+  });
+  children.forEach((n,idx)=>{
     const mine=n.owner===ME.id;
     const r=document.createElement("div"); r.className="lrow "+n.type;
+    const selcell=trash?`<span></span>`:`<span><input type="checkbox" class="selbox"></span>`;
     if(n.type==="folder"){
-      r.innerHTML=`<span class="ic">${svg("folder")}</span>`+
+      r.innerHTML=selcell+`<span class="ic">${svg("folder")}</span>`+
         `<span class="nm">${esc(n.name)}<span class="sub">Folder${mine?"":" · from "+esc(n.owner_name)}</span></span>`+
         `<span class="col-type">Folder</span><span class="col-size"></span>`+
         `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
-      if(!trash) r.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
+      if(!trash) r.onclick=(e)=>{ if(isSelectClick(e)) return; if(!e.target.closest("button,a,.ctx,.selbox")) openFolder(n.id); };
       if(!trash) r.querySelector(".col-act").appendChild(
-        iconBtn("download","Download folder as ZIP",(e,b)=>downloadFolder(n,b),"dl"));
+        iconBtn("download","Download folder as ZIP",(e,b)=>{ if(SEL.size>1&&SEL.has(n.id)) bulkDownload(selNodes()); else downloadFolder(n,b); },"dl"));
     } else {
-      r.innerHTML=`<span class="ic">${fileIconHtml(n.name)}</span>`+
+      r.innerHTML=selcell+`<span class="ic">${fileIconHtml(n.name)}</span>`+
         `<span class="nm" title="${esc(n.name)}">${esc(n.name)}<span class="sub">SHA-256 ${(n.sha256||"").slice(0,12)}…</span></span>`+
         `<span class="col-type">${typeLabel(n.content_type)||"—"}</span>`+
         `<span class="col-size"><span class="secured-i" title="${n.frags} fragments · AES-256-GCM · on-chain permissioned">${svg("shield")}</span> ${fmtSize(n.size)}</span>`+
@@ -904,10 +974,10 @@ function renderList(g, children, canManage){
         if(previewKind(n.content_type)){
           act0.appendChild(iconBtn("eye","View",()=>openPreview(n)));
           r.style.cursor="pointer";
-          r.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openPreview(n); };
+          r.onclick=(e)=>{ if(isSelectClick(e)) return; if(!e.target.closest("button,a,.ctx,.selbox")) openPreview(n); };
         }
         if((n.access||"download")!=="view"){
-          const dl=iconBtn("download","Download",(e,b)=>downloadFile(n,b),"dl");
+          const dl=iconBtn("download","Download",(e,b)=>{ if(SEL.size>1&&SEL.has(n.id)) bulkDownload(selNodes()); else downloadFile(n,b); },"dl");
           act0.appendChild(dl);
           if(!mine) gateOnChain(n, dl);
         }
@@ -916,6 +986,7 @@ function renderList(g, children, canManage){
     const act=r.querySelector(".col-act");
     if(trash){ trashActions(act, n); }
     else if(canManage && mine){ act.appendChild(iconBtn("share","Share",()=>openShare(n))); act.appendChild(kebab(n)); }
+    if(!trash) wireSelect(r, r.querySelector(".selbox"), n, idx);
     g.appendChild(r);
   });
 }
@@ -923,16 +994,17 @@ function renderList(g, children, canManage){
 /* Grid cards — tightened, shield icon for Secured, proof moved to the kebab. */
 function renderCards(g, children, canManage){
   const trash=TRASH_MODE;
-  children.forEach(n=>{
+  const selectable=!trash && children===LAST;   // search-page tiles reuse this renderer without selection
+  children.forEach((n,idx)=>{
     const mine=n.owner===ME.id;
     const t=document.createElement("div"); t.className="tile "+n.type;
     if(n.type==="folder"){
       t.innerHTML=`<div class="ic">${svg("folder")}</div><div class="nm">${esc(n.name)}</div><div class="mt">Folder</div>`;
-      if(!trash) t.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openFolder(n.id); };
+      if(!trash) t.onclick=(e)=>{ if(isSelectClick(e)) return; if(!e.target.closest("button,a,.ctx,.selbox")) openFolder(n.id); };
       if(trash){ const acts=document.createElement("div"); acts.className="acts"; trashActions(acts, n); t.appendChild(acts); }
       else {
         const acts=document.createElement("div"); acts.className="acts";
-        acts.appendChild(iconBtn("download","Download folder as ZIP",(e,b)=>downloadFolder(n,b),"dl"));
+        acts.appendChild(iconBtn("download","Download folder as ZIP",(e,b)=>{ if(SEL.size>1&&SEL.has(n.id)) bulkDownload(selNodes()); else downloadFolder(n,b); },"dl"));
         if(canManage && mine){ acts.appendChild(iconBtn("share","Share",()=>openShare(n))); t.appendChild(kebab(n)); }
         t.appendChild(acts);
       }
@@ -947,10 +1019,10 @@ function renderCards(g, children, canManage){
         if(previewKind(n.content_type)){
           acts.appendChild(iconBtn("eye","View",()=>openPreview(n)));
           t.style.cursor="pointer";
-          t.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openPreview(n); };
+          t.onclick=(e)=>{ if(isSelectClick(e)) return; if(!e.target.closest("button,a,.ctx,.selbox")) openPreview(n); };
         }
         if((n.access||"download")!=="view"){
-          const dl=iconBtn("download","Download",(e,b)=>downloadFile(n,b),"dl");
+          const dl=iconBtn("download","Download",(e,b)=>{ if(SEL.size>1&&SEL.has(n.id)) bulkDownload(selNodes()); else downloadFile(n,b); },"dl");
           acts.appendChild(dl);
           if(!mine) gateOnChain(n, dl);
         }
@@ -960,6 +1032,11 @@ function renderCards(g, children, canManage){
       if(!mine && !trash){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name+(n.access==="view"?" · view only":""); t.appendChild(o); }
       if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
     }
+    if(selectable){
+      const box=document.createElement("input"); box.type="checkbox"; box.className="selbox";
+      t.prepend(box);
+      wireSelect(t, box, n, idx);
+    }
     g.appendChild(t);
   });
 }
@@ -967,9 +1044,60 @@ function renderCards(g, children, canManage){
 /* ---- file management: kebab menu, rename, move, delete ---- */
 function kebab(n){
   const b=document.createElement("button"); b.className="kebab"; b.innerHTML=svg("dots","dots"); b.title="More actions";
-  b.onclick=(e)=>{ e.stopPropagation(); openCtx(e, n); };
+  // With a multi-selection that includes this item, ••• acts on the whole selection.
+  b.onclick=(e)=>{ e.stopPropagation(); if(SEL.size>1&&SEL.has(n.id)) openMultiCtx(e); else openCtx(e, n); };
   return b;
 }
+
+/* ---- bulk actions over the current selection ---- */
+function bulkDownload(nodes){
+  // Each item gets its own task line (the task stack handles concurrency);
+  // folders arrive as ZIPs, files individually — watermark rules apply per file.
+  nodes.forEach(n=>{ if(n.type==="folder") downloadFolder(n,null); else if((n.access||"download")!=="view") downloadFile(n,null); });
+  const skipped=nodes.filter(n=>n.type!=="folder"&&(n.access||"download")==="view").length;
+  if(skipped) toast(`${skipped} view-only file${skipped>1?"s":""} skipped (no download access)`);
+}
+async function bulkTrash(nodes){
+  if(!confirm(`Move ${nodes.length} items to Trash?\n\nRecoverable for 30 days, then auto-erased.`)) return;
+  const T=newTask(`${nodes.length} items`); T.set("Moving to Trash…",{indet:true});
+  let ok=0, failed=0;
+  const done=[];
+  for(const n of nodes){
+    const fd=new FormData(); fd.append("node_id",n.id);
+    const r=await api("/api/delete",{method:"POST",body:fd});
+    if(r.ok){ ok++; done.push(n); } else failed++;
+  }
+  T.done(failed?`Moved ${ok}/${nodes.length} to Trash — ${failed} failed`:`${ok} item${ok>1?"s":""} moved to Trash`);
+  selClear();
+  openFolder(CURRENT);
+  if(done.length) undoToast(`${done.length} item${done.length>1?"s":""} moved to Trash`, async ()=>{
+    for(const n of done){ const f2=new FormData(); f2.append("node_id",n.id); await api("/api/restore",{method:"POST",body:f2}); }
+    openFolder(CURRENT);
+  });
+}
+function openMultiCtx(e){
+  const nodes=selNodes(); if(!nodes.length) return;
+  document.querySelectorAll(".ctx").forEach(el=>el.remove());
+  const m=document.createElement("div"); m.className="ctx";
+  const add=(icon, label, fn, danger)=>{ const x=document.createElement("button");
+    x.innerHTML=svg(icon)+`<span>${label}</span>`; if(danger) x.className="danger";
+    x.onclick=()=>{ m.remove(); fn(); }; m.appendChild(x); };
+  const N=nodes.length;
+  add("download", `Download ${N} items`, ()=>bulkDownload(nodes));
+  // Move/Trash need ownership of everything selected (share/rename stay per-item).
+  if(nodes.every(n=>n.owner===ME.id)){
+    add("moveto", `Move ${N} items to…`, ()=>openMove(nodes));
+    add("trash", `Move ${N} items to Trash`, ()=>bulkTrash(nodes), true);
+  }
+  document.body.appendChild(m);
+  const r=m.getBoundingClientRect();
+  m.style.left=Math.min(e.clientX, innerWidth-r.width-10)+"px";
+  m.style.top=Math.min(e.clientY, innerHeight-r.height-10)+"px";
+  setTimeout(()=>addEventListener("click", ()=>m.remove(), {once:true}));
+}
+document.addEventListener("keydown",(e)=>{
+  if(e.key==="Escape" && SEL.size){ selClear(); refreshSelUI(); }
+});
 function openCtx(e, n){
   document.querySelectorAll(".ctx").forEach(el=>el.remove());
   const m=document.createElement("div"); m.className="ctx";
@@ -1017,16 +1145,17 @@ async function renameItem(n){
   undoToast(`Renamed to “${name}”`, async ()=>{ await doRename(n.id, old); openFolder(CURRENT); });
 }
 
-async function listFolders(excludeId){
+async function listFolders(excludeIds){
   // Flatten the folder tree (owner's own) for the move picker, skipping the
-  // subtree rooted at excludeId (a folder can't move into itself).
+  // subtrees rooted at excludeIds (a folder can't move into itself).
+  const excl=new Set(excludeIds?[].concat(excludeIds):[]);
   const out=[];
   async function walk(id, depth){
     const r=await api("/api/tree?folder="+encodeURIComponent(id)); if(!r.ok) return;
     const d=await r.json();
     if(!id){ out.push({id:d.folder.id, name:"My Files", depth:0}); }
     for(const c of d.children){
-      if(c.type!=="folder" || c.id===excludeId) continue;
+      if(c.type!=="folder" || excl.has(c.id)) continue;
       out.push({id:c.id, name:c.name, depth:depth+1});
       await walk(c.id, depth+1);
     }
@@ -1036,15 +1165,18 @@ async function listFolders(excludeId){
 }
 
 async function openMove(n){
+  // Accepts one node or an array (multi-select "Move N items to…").
+  const nodes=Array.isArray(n)?n:[n];
+  const title=nodes.length>1?`Move ${nodes.length} items`:`Move “${esc(nodes[0].name)}”`;
   const bg=document.createElement("div"); bg.className="modal-bg";
-  bg.innerHTML=`<div class="modal"><h3>Move “${n.name}”</h3>
+  bg.innerHTML=`<div class="modal"><h3>${title}</h3>
     <p class="msub">Choose a destination folder. Shares inherited from the old and new location are reconciled on-chain.</p>
     <div class="folderpick"><em style="color:var(--faint);font-size:0.82rem;">Loading folders…</em></div>
     <button class="btn-ghost btn full x">Cancel</button></div>`;
   bg.querySelector(".x").onclick=()=>bg.remove();
   bg.addEventListener("click",e=>{ if(e.target===bg) bg.remove(); });
   document.body.appendChild(bg);
-  const folders=await listFolders(n.type==="folder"?n.id:null);
+  const folders=await listFolders(nodes.filter(x=>x.type==="folder").map(x=>x.id));
   const holder=bg.querySelector(".folderpick"); holder.innerHTML="";
   folders.forEach(f=>{
     const b=document.createElement("button");
@@ -1053,15 +1185,19 @@ async function openMove(n){
     if(f.id===CURRENT) b.disabled=true;   // already here
     b.onclick=async ()=>{
       bg.remove();
-      const T=newTask(n.name);
+      const T=newTask(nodes.length>1?`${nodes.length} items`:nodes[0].name);
       T.set("Moving & reconciling on-chain shares…",{indet:true});
-      const fd=new FormData(); fd.append("node_id",n.id); fd.append("new_parent",f.id);
-      const r=await api("/api/move",{method:"POST",body:fd});
-      if(r.ok){
-        const d=await r.json();
-        const rec=d.reconciliation||{};
-        T.done(rec.errors ? `Moved — ⚠ ${rec.errors} on-chain share update${rec.errors>1?"s":""} failed (retry via re-share)` : "Moved to "+f.name);
-      } else T.done("✗ "+((await r.json()).error||"Move failed"));
+      let ok=0, recErrors=0, failed=0;
+      for(const x of nodes){
+        const fd=new FormData(); fd.append("node_id",x.id); fd.append("new_parent",f.id);
+        const r=await api("/api/move",{method:"POST",body:fd});
+        if(r.ok){ ok++; recErrors+=((await r.json()).reconciliation||{}).errors||0; }
+        else failed++;
+      }
+      const probs=[failed?`${failed} failed`:"", recErrors?`⚠ ${recErrors} on-chain share update${recErrors>1?"s":""} failed (retry via re-share)`:""].filter(Boolean).join(" · ");
+      T.done(probs?`Moved ${ok}/${nodes.length} to ${f.name} — ${probs}`
+                  :(nodes.length>1?`Moved ${ok} items to ${f.name}`:"Moved to "+f.name));
+      selClear();
       openFolder(CURRENT);
     };
     holder.appendChild(b);

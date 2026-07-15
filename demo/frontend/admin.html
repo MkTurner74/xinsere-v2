@@ -568,7 +568,7 @@ async function loadAudit(){
   $("#au-count").textContent=`${rows.length} entries`;
   $("#au-empty").classList.toggle("hidden",rows.length>0);
   $("#au-table tbody").innerHTML=rows.map(r=>{
-    const a=anchors[String(r.day)];
+    const a=anchors[(r.ts||"").slice(0,13)]||anchors[String(r.day)]; // hourly seal (0018) first, legacy daily fallback
     const sealed=a&&a.tx_hash;
     return `<tr>
       <td class="note">${fmtDT(r.ts)}</td>

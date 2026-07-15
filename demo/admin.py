@@ -308,7 +308,9 @@ def audit_log(s: dict = Depends(authn.require_admin), limit: int = 100,
         r["actor_name"] = p.get("name")
         r["org_name"] = org_names.get(r.get("org_id"))
 
-    # Anchor status for the days present, so the UI can badge tamper-evident rows.
+    # Anchor status so the UI can badge tamper-evident rows. Hourly per-org seals
+    # (0018) and legacy daily seals share one map — keys are 'YYYY-MM-DDTHH' and
+    # 'YYYY-MM-DD' respectively, so they can't collide; the UI checks hour first.
     days = sorted({str(r["day"]) for r in rows if r.get("day")})
     anchors = {}
     if days:
@@ -318,6 +320,17 @@ def audit_log(s: dict = Depends(authn.require_admin), limit: int = 100,
             anchors = {str(a["day"]): a for a in got}
         except supa.SupabaseError:
             pass
+    periods = sorted({str(r["ts"])[:13] for r in rows if r.get("ts")})
+    if periods:
+        try:
+            got = supa._rest("GET", "/access_log_anchor_periods", supa.SERVICE_ROLE_KEY,
+                             params={"period": f"in.({','.join(periods)})",
+                                     "select": "period,tx_hash,anchored_at"}) or []
+            for a in got:
+                if a.get("tx_hash"):
+                    anchors[a["period"]] = a
+        except supa.SupabaseError:
+            pass  # pre-0018 (table not migrated yet) — day anchors still badge
     if actor.strip():  # post-filter on resolved email (substring, case-insensitive)
         needle = actor.strip().lower()
         rows = [r for r in rows if needle in (r.get("actor_email") or "").lower()]
@@ -374,13 +387,23 @@ def _resolve_marks(marks: list[str], filename: str | None) -> dict:
                     node = got[0] if got else {}
                 except supa.SupabaseError:
                     pass
+            # Seal status: the hourly per-org anchor (0018) seals first; fall back
+            # to the legacy daily anchor for pre-0018 history.
             anchor = None
             try:
-                got = supa._rest("GET", "/access_log_anchors", supa.SERVICE_ROLE_KEY,
-                                 params={"day": f"eq.{r['day']}", "select": "tx_hash,anchored_at"})
-                anchor = got[0] if got else None
+                got = supa._rest("GET", "/access_log_anchor_periods", supa.SERVICE_ROLE_KEY,
+                                 params={"period": f"eq.{str(r['ts'])[:13]}",
+                                         "select": "tx_hash,anchored_at", "order": "seq.asc"})
+                anchor = next((g for g in got or [] if g.get("tx_hash")), None)
             except supa.SupabaseError:
                 pass
+            if not anchor:
+                try:
+                    got = supa._rest("GET", "/access_log_anchors", supa.SERVICE_ROLE_KEY,
+                                     params={"day": f"eq.{r['day']}", "select": "tx_hash,anchored_at"})
+                    anchor = got[0] if got else None
+                except supa.SupabaseError:
+                    pass
             matches.append({"mark": m, "ts": r["ts"], "action": r["action"],
                             "actor_email": prof.get("email"), "actor_name": prof.get("name"),
                             "actor_type": r["actor_type"], "file_name": node.get("name"),

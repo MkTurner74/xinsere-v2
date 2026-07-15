@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import supa
 
@@ -170,9 +170,9 @@ def _upsert_anchor(token: str, day: str, root: str, count: int,
 
 
 def anchor_day(token: str, day: str, chain_client=None) -> dict:
-    """Build the Merkle root over `day`'s entry_hashes and anchor it on-chain, so
-    no row from that day can be altered/deleted without breaking the immutable
-    root. Idempotent: an already-anchored day (tx present) is returned untouched;
+    """LEGACY daily commingled anchor — kept for backfilling days that predate the
+    hourly per-org scheme (0018) and for verifying historical daily anchors.
+    Idempotent: an already-anchored day (tx present) is returned untouched;
     an empty day records the genesis root without spending gas."""
     existing = get_anchor(token, day)
     if existing and existing.get("tx_hash"):
@@ -191,3 +191,110 @@ def anchor_day(token: str, day: str, chain_client=None) -> dict:
     _upsert_anchor(token, day, root, count, tx=tx, anchored_at=_now_iso())
     _log.info("anchored access log day=%s entries=%d root=%s tx=%s", day, count, root[:12], tx)
     return {"day": day, "root": root, "count": count, "tx": tx, "status": "anchored"}
+
+
+# --- hourly, per-org anchor (0018) -------------------------------------------
+#
+# Two-level Merkle per UTC hour: one root PER ORG over that org's entry_hashes,
+# then one GLOBAL root over org-root leaves — a single flat-gas tx seals every
+# tenant, and each tenant verifies its own trail against its own root (a proof
+# only ever exposes opaque sibling org-roots, never another tenant's entries).
+#
+# Future volume trigger (Mark, 2026-07-15): when an org crosses N unanchored
+# entries mid-hour, seal early as (period, seq+1) over the remaining ts range —
+# the schema and leaf construction already support it; only the trigger and the
+# range bookkeeping need writing. Hourly cadence itself may also tighten if
+# traffic grows; the cost is one tx per seal regardless of entry count.
+
+PLATFORM_ORG = "platform"   # bucket for entries recorded without an org_id
+
+
+def period_of(ts: str) -> str:
+    """UTC hour key for a timestamp: '2026-07-15T14'."""
+    return ts[:13]
+
+
+def org_leaf(org_id: str, root: str) -> str:
+    """Global-tree leaf binding an org to its root: sha256(sha256(org_id) || root).
+    Hashing the org id first gives a fixed-width prefix, so no delimiter games."""
+    oid = hashlib.sha256(org_id.encode("utf-8")).digest()
+    return hashlib.sha256(oid + bytes.fromhex(root)).hexdigest()
+
+
+def build_org_roots(entries: list[dict]) -> dict[str, tuple[str, int]]:
+    """{org_id: (merkle_root, count)} — same deterministic (ts, id) ordering as
+    the daily root. Orgs absent from `entries` simply don't appear (no row is
+    ever written for a silent org)."""
+    by_org: dict[str, list[dict]] = {}
+    for e in entries:
+        by_org.setdefault(e.get("org_id") or PLATFORM_ORG, []).append(e)
+    out = {}
+    for org, es in by_org.items():
+        ordered = sorted(es, key=lambda e: (e.get("ts", ""), e.get("id", "")))
+        out[org] = (merkle_root([e["entry_hash"] for e in ordered]), len(ordered))
+    return out
+
+
+def build_global_root(org_roots: dict[str, tuple[str, int]]) -> str:
+    """Root over org_leaf(org, root) in sorted-org order (deterministic)."""
+    return merkle_root([org_leaf(org, org_roots[org][0]) for org in sorted(org_roots)])
+
+
+def _period_entries(token: str, period: str) -> list[dict]:
+    start = f"{period}:00:00+00:00"
+    end = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat()
+    return supa._rest("GET", "/access_log", token,
+                      params={"and": f"(ts.gte.{start},ts.lt.{end})",
+                              "select": "id,ts,org_id,entry_hash", "order": "ts.asc"}) or []
+
+
+def get_period_anchor(token: str, period: str, seq: int = 0) -> dict | None:
+    rows = supa._rest("GET", "/access_log_anchor_periods", token,
+                      params={"period": f"eq.{period}", "seq": f"eq.{seq}",
+                              "select": "*", "limit": 1})
+    return rows[0] if rows else None
+
+
+def anchor_period(token: str, period: str, chain_client=None) -> dict:
+    """Seal one UTC hour: per-org roots + one global root + one on-chain tx.
+    Idempotent (an already-sealed period returns untouched). A period with no
+    entries writes NOTHING — no rows, no tx (Mark, 2026-07-15: silence costs
+    nothing)."""
+    existing = get_period_anchor(token, period)
+    if existing and existing.get("tx_hash"):
+        return {"period": period, "root": existing["merkle_root"],
+                "count": existing["entry_count"], "tx": existing["tx_hash"],
+                "status": "already-anchored"}
+    entries = _period_entries(token, period)
+    if not entries:
+        return {"period": period, "root": GENESIS, "count": 0, "tx": None,
+                "status": "empty-skipped"}
+    org_roots = build_org_roots(entries)
+    root = build_global_root(org_roots)
+    count = len(entries)
+    from_ts = f"{period}:00:00+00:00"
+    to_ts = (datetime.fromisoformat(from_ts) + timedelta(hours=1)).isoformat()
+    # Pending rows first (root reproducible even if the tx below dies mid-flight).
+    supa._rest("POST", "/access_log_org_roots", token,
+               prefer="return=minimal,resolution=merge-duplicates",
+               json_body=[{"period": period, "seq": 0, "org_id": org,
+                           "merkle_root": r, "entry_count": c}
+                          for org, (r, c) in sorted(org_roots.items())])
+    supa._rest("POST", "/access_log_anchor_periods", token,
+               prefer="return=minimal,resolution=merge-duplicates",
+               json_body={"period": period, "seq": 0, "from_ts": from_ts, "to_ts": to_ts,
+                          "merkle_root": root, "entry_count": count,
+                          "org_count": len(org_roots)})
+    if chain_client is None:
+        from chain import CHAIN as chain_client
+    tx = chain_client.grant_batch(bytes.fromhex(root), count)
+    supa._rest("POST", "/access_log_anchor_periods", token,
+               prefer="return=minimal,resolution=merge-duplicates",
+               json_body={"period": period, "seq": 0, "from_ts": from_ts, "to_ts": to_ts,
+                          "merkle_root": root, "entry_count": count,
+                          "org_count": len(org_roots), "tx_hash": tx,
+                          "anchored_at": _now_iso()})
+    _log.info("anchored access log period=%s orgs=%d entries=%d root=%s tx=%s",
+              period, len(org_roots), count, root[:12], tx)
+    return {"period": period, "root": root, "count": count,
+            "orgs": len(org_roots), "tx": tx, "status": "anchored"}

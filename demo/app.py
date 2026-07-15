@@ -796,8 +796,10 @@ async def anchor_access_log(request: Request):
     'tamper-evident' claim real: once a day's root is anchored, no row from that
     day can be altered/deleted without breaking the immutable on-chain root.
 
-    Auth: same cron/manual-secret gate as purge-expired. A daily Vercel cron calls
-    it; anchors yesterday (UTC) by default, or ?day=YYYY-MM-DD for a backfill."""
+    Auth: same cron/manual-secret gate as purge-expired. An hourly Vercel cron
+    calls it; seals the PREVIOUS full hour (UTC) per-org (0018) by default.
+    ?period=YYYY-MM-DDTHH backfills a specific hour; ?day=YYYY-MM-DD runs the
+    legacy daily commingled anchor (pre-0018 backfill only)."""
     cron_secret = os.environ.get("CRON_SECRET")
     manual_secret = os.environ.get("XINSERE_PURGE_SECRET")
     authed = ((cron_secret and request.headers.get("authorization") == f"Bearer {cron_secret}")
@@ -807,14 +809,17 @@ async def anchor_access_log(request: Request):
     svc = supa.SERVICE_ROLE_KEY
     if not svc:
         raise HTTPException(status_code=501, detail="Service role key not configured")
-    day = request.query_params.get("day") or \
-        (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
     import access_log
     try:
-        return {"ok": True, **access_log.anchor_day(svc, day)}
+        day = request.query_params.get("day")
+        if day:   # legacy daily backfill
+            return {"ok": True, **access_log.anchor_day(svc, day)}
+        period = request.query_params.get("period") or \
+            access_log.period_of((datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
+        return {"ok": True, **access_log.anchor_period(svc, period)}
     except Exception as exc:
-        logging.getLogger("xinsere.app").error("access-log anchor failed day=%s: %s", day, exc)
-        raise HTTPException(status_code=502, detail=f"Anchor failed for {day} — retry")
+        logging.getLogger("xinsere.app").error("access-log anchor failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Anchor failed — retry")
 
 
 @app.post("/api/unshare")

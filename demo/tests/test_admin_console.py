@@ -49,6 +49,9 @@ def test_audit_log_resolves_actors_and_anchors(monkeypatch):
             return [{"id": "uid-1", "email": "user@acme.com", "name": "User"}]
         if path == "/access_log_anchors":
             return [{"day": "2026-07-14", "tx_hash": "0xabc", "anchored_at": "2026-07-15T00:01:00Z"}]
+        if path == "/access_log_anchor_periods":   # hourly seals (0018)
+            return [{"period": "2026-07-14T10", "tx_hash": "0xhourly",
+                     "anchored_at": "2026-07-14T11:05:00Z"}]
         raise AssertionError(f"unexpected path {path}")
 
     monkeypatch.setattr(supa, "_rest", fake_rest)
@@ -61,6 +64,8 @@ def test_audit_log_resolves_actors_and_anchors(monkeypatch):
         assert body["rows"][0]["actor_email"] == "user@acme.com"
         assert body["rows"][0]["org_name"] == "Acme"
         assert body["anchors"]["2026-07-14"]["tx_hash"] == "0xabc"
+        # hourly seal exposed alongside the daily one (UI prefers the hour key)
+        assert body["anchors"]["2026-07-14T10"]["tx_hash"] == "0xhourly"
     finally:
         _reset()
 
