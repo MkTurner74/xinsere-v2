@@ -234,6 +234,9 @@
   .theme-toggle:hover{color:var(--text);border-color:var(--edge-strong);}
   #login .theme-toggle{position:absolute;top:18px;right:20px;}
   html[data-authed="1"] #login{display:none !important;}
+  .navback{background:var(--panel-2);border:1px solid var(--edge);color:var(--word);
+    border-radius:9px;padding:6px 12px;font-size:.85rem;font-weight:600;margin-right:6px;flex:none;}
+  .navback:hover{border-color:var(--edge-strong);background:var(--panel);}
   .tile .nm{font-size:.92rem;line-height:1.32;white-space:normal;display:-webkit-box;
     -webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
     word-break:break-word;min-height:2.6em;}
@@ -241,6 +244,7 @@
 </style>
 </head>
 <body>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E">
 <script>/* apply saved theme before first paint (no flash); dark is default */
 document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark";
 /* known-authed hint: hide the login screen pre-paint so navigating back from
@@ -414,6 +418,7 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
     </aside>
     <main class="main" id="main">
       <div class="bar">
+        <button class="navback hidden" id="navback" type="button" title="Back" aria-label="Back">‹ Back</button>
         <div class="crumbs" id="crumbs"></div>
         <div class="viewtoggle" id="viewtoggle">
           <button data-layout="list" title="List view" aria-label="List view"></button>
@@ -663,6 +668,26 @@ async function boot(){
   setView("mine");
 }
 
+/* ---- navigation history (SPA back button; browser back doesn't fit here) ---- */
+let CUR_LOC=null; const HIST=[]; let _navSuppress=false;
+function setLoc(desc){
+  if(!_navSuppress && CUR_LOC && JSON.stringify(CUR_LOC)!==JSON.stringify(desc)) HIST.push(CUR_LOC);
+  CUR_LOC=desc; const bb=$("#navback"); if(bb) bb.classList.toggle("hidden", HIST.length===0);
+}
+function restoreLoc(desc){
+  _navSuppress=true;
+  if(desc.kind==="folder") openFolder(desc.id);
+  else if(desc.kind==="shared"){ VIEW="shared"; markNav(); loadShared(); }
+  else if(desc.kind==="sharedby"){ VIEW="sharedby"; markNav(); loadSharedByMe(); }
+  else if(desc.kind==="trash"){ VIEW="trash"; markNav(); loadTrash(); }
+  else if(desc.kind==="search"){ showSearchResults(desc.term); }
+  _navSuppress=false;
+}
+function navBack(){ if(!HIST.length) return; const prev=HIST.pop(); restoreLoc(prev); CUR_LOC=prev;
+  const bb=$("#navback"); if(bb) bb.classList.toggle("hidden", HIST.length===0); }
+function markNav(){ document.querySelectorAll(".side .nav").forEach(b=>b.classList.toggle("active",b.dataset.view===VIEW)); }
+$("#navback")?.addEventListener("click",navBack);
+
 /* ---- views ---- */
 document.querySelectorAll(".side .nav").forEach(b=>b.addEventListener("click",()=>setView(b.dataset.view)));
 function setView(v){
@@ -675,6 +700,7 @@ function setView(v){
   else loadShared();
 }
 async function loadTrash(){
+  setLoc({kind:"trash"});
   const r=await api("/api/trash"); const d=r.ok?await r.json():{children:[]};
   const n=(d.children||[]).length;
   $("#crumbs").innerHTML=`<span class="cur">Trash</span>`+
@@ -694,17 +720,20 @@ async function emptyTrash(){
 }
 
 async function openFolder(folderId){
+  setLoc({kind:"folder",id:folderId||""});
   const r=await api("/api/tree?folder="+encodeURIComponent(folderId));
   if(!r.ok){ toast((await r.json()).error||"Error"); return; }
   const d=await r.json(); CURRENT=d.folder.id;
   renderCrumbs(d.breadcrumbs); renderGrid(d.children, true);
 }
 async function loadShared(){
+  setLoc({kind:"shared"});
   const r=await api("/api/shared"); const d=await r.json();
   $("#crumbs").innerHTML=`<span class="cur">Shared with me</span>`;
   renderGrid(d.children, false);
 }
 async function loadSharedByMe(){
+  setLoc({kind:"sharedby"});
   const r=await api("/api/shared-by-me"); const d=r.ok?await r.json():{children:[]};
   $("#crumbs").innerHTML=`<span class="cur">Shared by me <span class="note">${(d.children||[]).length} item${(d.children||[]).length!==1?"s":""} you've shared — click Share to change or revoke</span></span>`;
   // canManage=true so each tile shows Share (opens the manage/revoke modal); these are all owned by you.
@@ -806,6 +835,7 @@ gsQ.addEventListener("keydown",async e=>{
 document.addEventListener("click",e=>{ if(!e.target.closest(".gsearch")) gsClose(); });
 
 async function showSearchResults(term){
+  setLoc({kind:"search",term});
   gsClose();
   const results=await gsFetch(term, 200) ?? gsLast;
   TRASH_MODE=false;
@@ -840,7 +870,7 @@ function renderList(g, children, canManage){
   const head=document.createElement("div"); head.className="lhead";
   head.innerHTML=`<span style="width:30px"></span><span class="nm">Name</span>`+
     `<span class="col-type">Type</span><span class="col-size">Security</span>`+
-    `<span class="col-share">Shared</span><span class="col-act" style="width:104px"></span>`;
+    `<span class="col-share">Shared</span><span class="col-act" style="width:150px"></span>`;
   g.appendChild(head);
   const trash=TRASH_MODE;
   children.forEach(n=>{
@@ -876,7 +906,7 @@ function renderList(g, children, canManage){
     }
     const act=r.querySelector(".col-act");
     if(trash){ trashActions(act, n); }
-    else if(canManage && mine){ act.appendChild(kebab(n)); }
+    else if(canManage && mine){ act.appendChild(iconBtn("share","Share",()=>openShare(n))); act.appendChild(kebab(n)); }
     g.appendChild(r);
   });
 }
