@@ -112,6 +112,14 @@
   .tile .acts .mini{font-size:0.74rem;font-weight:600;padding:6px 10px;border-radius:8px;border:1px solid var(--edge-strong);background:transparent;color:var(--word);}
   .tile .acts .mini:hover{background:var(--panel-2);}
   .tile .acts .mini.dl{color:#fff;background:linear-gradient(135deg,var(--violet-br),var(--violet));border-color:transparent;}
+  /* icon-only action buttons — fixed footprint so tiles never overflow */
+  .iconbtn{display:inline-grid;place-items:center;width:34px;height:30px;padding:0;
+    border:1px solid var(--edge-strong);border-radius:8px;background:transparent;
+    color:var(--word);cursor:pointer;flex:none;}
+  .iconbtn:hover{background:var(--panel-2);}
+  .iconbtn.dl{color:#fff;background:linear-gradient(135deg,var(--violet-br),var(--violet));border-color:transparent;}
+  .iconbtn:disabled{opacity:.4;cursor:default;}
+  .iconbtn .svgi{width:15px;height:15px;}
   .tile .shared{display:flex;gap:-6px;margin-top:10px;align-items:center;}
   .tile .shared .avatar{width:20px;height:20px;font-size:0.6rem;margin-right:-6px;border:2px solid var(--bg-2);}
   .tile .proof{display:block;font-size:0.68rem;color:var(--mint);margin-top:8px;text-decoration:none;}
@@ -303,6 +311,17 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
 .viewer-top .vsec svg{width:13px;height:13px}
 .viewer-top .vclose{background:none;border:none;color:inherit;font-size:1.05rem;opacity:.7;padding:4px 8px}
 .viewer-top .vclose:hover{opacity:1}
+.viewer-main{flex:1;min-height:0;display:flex}
+.viewer-info{width:290px;flex:none;border-left:1px solid var(--edge,rgba(146,119,255,.16));padding:16px 18px;overflow-y:auto;font-size:.83rem}
+.viewer-info h4{margin:14px 0 8px;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--faint,#6E6688)}
+.viewer-info h4:first-child{margin-top:0}
+.vkv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--edge,rgba(146,119,255,.1))}
+.vkv:last-child{border-bottom:none}
+.vkv span{color:var(--muted,#9A93B8)}
+.vkv b{font-weight:600;text-align:right;overflow-wrap:anywhere}
+.vsha span{display:block;color:var(--muted,#9A93B8);margin-bottom:4px}
+.vsha code{display:block;font-family:var(--mono,monospace);font-size:.68rem;word-break:break-all;color:var(--mint,#4FE3C1);background:rgba(0,0,0,.25);border:1px solid var(--edge,rgba(146,119,255,.16));border-radius:8px;padding:8px 10px;margin-bottom:6px}
+@media (max-width:860px){.viewer-info{display:none}}
 .viewer-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.25)}
 .viewer-body img{max-width:100%;max-height:100%;object-fit:contain}
 .viewer-body video{max-width:100%;max-height:100%}
@@ -419,9 +438,19 @@ const ICON={
   trash:'<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/>',
   gridv:'<rect x="4" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.4"/>',
   listv:'<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
-  dots:'<circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/>'
+  dots:'<circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/>',
+  eye:'<path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.6h.01"/>'
 };
 function svg(name, cls){ return `<svg class="svgi${cls?" "+cls:""}" viewBox="0 0 24 24" aria-hidden="true">${ICON[name]||""}</svg>`; }
+/* icon action button — fixed size, tooltip carries the verb */
+function iconBtn(icon, title, fn, cls){
+  const b=document.createElement("button"); b.type="button";
+  b.className="iconbtn"+(cls?" "+cls:""); b.title=title; b.setAttribute("aria-label",title);
+  b.dataset.icon=icon; b.innerHTML=svg(icon);
+  b.onclick=(e)=>{ e.stopPropagation(); fn(e,b); };
+  return b;
+}
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function fileIconName(name){ const e=(name.split(".").pop()||"").toLowerCase();
   if(["png","jpg","jpeg","gif","webp","tif","tiff","svg","bmp","heic"].includes(e)) return "img";
@@ -629,14 +658,13 @@ function renderList(g, children, canManage){
       if(!trash){
         const act0=r.querySelector(".col-act");
         if(previewKind(n.content_type)){
-          const vw=document.createElement("button"); vw.className="mini"; vw.textContent="View";
-          vw.onclick=(e)=>{e.stopPropagation();openPreview(n);}; act0.appendChild(vw);
+          act0.appendChild(iconBtn("eye","View",()=>openPreview(n)));
           r.style.cursor="pointer";
           r.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openPreview(n); };
         }
         if((n.access||"download")!=="view"){
-          const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-          dl.onclick=()=>downloadFile(n, dl); act0.appendChild(dl);
+          const dl=iconBtn("download","Download",(e,b)=>downloadFile(n,b),"dl");
+          act0.appendChild(dl);
           if(!mine) gateOnChain(n, dl);
         }
       }
@@ -667,24 +695,22 @@ function renderCards(g, children, canManage){
       if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
     } else {
       t.innerHTML=`<div class="ic">${svg(fileIconName(n.name))}</div><div class="nm" title="${esc(n.name)}">${esc(n.name)}</div>`+
-        `<div class="mt"><span class="secured-i" title="Fragmented · AES-256-GCM · on-chain permissioned">${svg("shield")}</span> Secured`+
-        `${typeLabel(n.content_type)?` · <span title="Verified content type — a rename can't change it">${typeLabel(n.content_type)}</span>`:""} · <span title="${n.frags} fragments">${fmtSize(n.size)}</span></div>`+
-        `${n.sha256?`<div class="sha" title="SHA-256 taken before encryption; re-checked on download">SHA-256 <b>${n.sha256.slice(0,12)}</b>…</div>`:""}`;
+        `<div class="mt"><span class="secured-i" title="Fragmented · AES-256-GCM · on-chain permissioned · SHA-256 verified">${svg("shield")}</span> Secured`+
+        `${typeLabel(n.content_type)?` · <span title="Verified content type — a rename can't change it">${typeLabel(n.content_type)}</span>`:""} · <span title="${n.frags} fragments">${fmtSize(n.size)}</span></div>`;
       const acts=document.createElement("div"); acts.className="acts";
       if(trash){ trashActions(acts, n); }
       else {
         if(previewKind(n.content_type)){
-          const vw=document.createElement("button"); vw.className="mini"; vw.textContent="View";
-          vw.onclick=(e)=>{e.stopPropagation();openPreview(n);}; acts.appendChild(vw);
+          acts.appendChild(iconBtn("eye","View",()=>openPreview(n)));
           t.style.cursor="pointer";
           t.onclick=(e)=>{ if(!e.target.closest("button,a,.ctx")) openPreview(n); };
         }
         if((n.access||"download")!=="view"){
-          const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-          dl.onclick=()=>downloadFile(n, dl); acts.appendChild(dl);
+          const dl=iconBtn("download","Download",(e,b)=>downloadFile(n,b),"dl");
+          acts.appendChild(dl);
           if(!mine) gateOnChain(n, dl);
         }
-        if(canManage && mine){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); t.appendChild(kebab(n)); }
+        if(canManage && mine){ acts.appendChild(iconBtn("share","Share",()=>openShare(n))); t.appendChild(kebab(n)); }
       }
       t.appendChild(acts);
       if(!mine && !trash){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name+(n.access==="view"?" · view only":""); t.appendChild(o); }
@@ -866,24 +892,25 @@ async function eraseItem(n, fromMain){
 async function gateOnChain(n, btn){
   btn.disabled=true; btn.classList.add("loading"); btn.title="Confirming on-chain grant…";
   btn.innerHTML='<span class="btnspin"></span>';
+  const restore=()=>{ btn.innerHTML=btn.dataset.icon?svg(btn.dataset.icon):"Download"; };
   for(let a=0;a<5;a++){
     try{
       const r=await api("/api/verify/"+n.id);
       if(r.ok){
         const v=await r.json();
         if(v.allowed && v.can_download!==false){
-          btn.disabled=false; btn.classList.remove("loading"); btn.textContent="Download";
-          btn.title="On-chain grant confirmed"; return;
+          btn.disabled=false; btn.classList.remove("loading"); restore();
+          btn.title="Download — on-chain grant confirmed"; return;
         }
         if(v.allowed && v.can_download===false){
-          btn.classList.remove("loading"); btn.textContent="View only";
-          btn.title="Your on-chain grant is view-only — use the View button"; return;
+          btn.classList.remove("loading"); restore();
+          btn.title="Your on-chain grant is view-only — use View"; return;
         }
       }
     }catch(e){}
     await new Promise(res=>setTimeout(res, 1500*(a+1)));
   }
-  btn.classList.remove("loading"); btn.textContent="No grant";
+  btn.classList.remove("loading"); restore();
   btn.title="No active on-chain grant found for you";
 }
 
@@ -906,17 +933,57 @@ function openPreview(n){
             : kind==="video" ? `<video src="${src}" controls autoplay controlsList="nodownload"></video>`
             : kind==="audio" ? `<audio src="${src}" controls autoplay controlsList="nodownload"></audio>`
             :                  `<iframe src="${src}" title="${esc(n.name)}"></iframe>`;
+  const infoOn=localStorage.getItem("xin-viewer-info")!=="0";
   bg.innerHTML=`<div class="viewer">
     <div class="viewer-top"><span class="vnm" title="${esc(n.name)}">${esc(n.name)}</span>
       <span class="vsec" title="Reassembled and decrypted server-side for viewing — keys never leave Xinsere">${svg("shield")} secure view</span>
-      <button class="vclose" aria-label="Close">✕</button></div>
-    <div class="viewer-body">${body}</div></div>`;
+      <button class="iconbtn vinfo" type="button" title="File & provenance info">${svg("info")}</button>
+      <button class="vclose" type="button" aria-label="Close">✕</button></div>
+    <div class="viewer-main">
+      <div class="viewer-body">${body}</div>
+      <aside class="viewer-info${infoOn?"":" hidden"}">
+        <h4>File</h4>
+        <div class="vkv"><span>Type</span><b>${esc(typeLabel(n.content_type)||n.content_type||"—")}</b></div>
+        <div class="vkv"><span>Size</span><b>${fmtSize(n.size)}</b></div>
+        <div class="vkv"><span>Owner</span><b>${esc(n.owner_name||"—")}</b></div>
+        <div class="vkv"><span>Added</span><b>${n.created_at?new Date(n.created_at).toLocaleDateString():"—"}</b></div>
+        <h4>Integrity</h4>
+        <div class="vsha" title="Taken before encryption; re-verified on every retrieval">
+          <span>SHA-256 — re-verified on every retrieval</span>
+          <code>${esc(n.sha256||"—")}</code></div>
+        <div class="vkv"><span>Storage</span><b>${esc(n.frags||"—")} encrypted fragments</b></div>
+        <div class="vkv"><span>Cipher</span><b>AES-256-GCM per fragment</b></div>
+        <h4>Provenance</h4>
+        <div class="vprov"><span class="note">Verifying on-chain…</span></div>
+      </aside>
+    </div></div>`;
   const close=()=>{ if(bg.parentNode) document.body.removeChild(bg); document.removeEventListener("keydown",onKey); };
   const onKey=(e)=>{ if(e.key==="Escape") close(); };
   bg.querySelector(".vclose").onclick=close;
+  bg.querySelector(".vinfo").onclick=()=>{
+    const p=bg.querySelector(".viewer-info"); p.classList.toggle("hidden");
+    localStorage.setItem("xin-viewer-info", p.classList.contains("hidden")?"0":"1");
+  };
   bg.addEventListener("click",e=>{ if(e.target===bg) close(); });
   document.addEventListener("keydown",onKey);
   document.body.appendChild(bg);
+
+  // Provenance: live on-chain verification for THIS viewer + the contract address.
+  (async()=>{
+    const el=bg.querySelector(".vprov"); if(!el) return;
+    try{
+      const r=await api("/api/verify/"+n.id); const v=await r.json();
+      const how={"amoy-contract":"per-file grant","amoy-batch":"Merkle batch proof",
+                 "owner-fallback":"owner (grant not yet anchored)"}[v.source]||v.source;
+      const lvl=v.level==="view"?"view only":"view & download";
+      el.innerHTML=
+        `<div class="vkv"><span>Access</span><b>${v.allowed?lvl:"none"}</b></div>`+
+        `<div class="vkv"><span>Verified</span><b>${v.allowed?`on-chain · ${esc(how)}`:"no active grant"}</b></div>`+
+        `<div class="vkv"><span>Network</span><b>Polygon Amoy</b></div>`+
+        (v.contract?`<div class="vkv"><span>Contract</span><b><a class="link mono" target="_blank" rel="noopener"
+           href="https://amoy.polygonscan.com/address/${esc(v.contract)}">${esc(v.contract.slice(0,10))}…${esc(v.contract.slice(-6))}</a></b></div>`:"");
+    }catch(e){ el.innerHTML=`<div class="vkv"><span>Verified</span><b>check failed — retry</b></div>`; }
+  })();
 }
 
 /* ---- download (on-chain check -> fetch -> verify bit-perfect) ---- */
@@ -925,8 +992,9 @@ async function downloadFile(n, btn){
   // the descriptive per-stage status + progress bar live in this download's own
   // task line — concurrent downloads each get their own.
   const T=newTask(n.name);
-  if(btn){ btn.classList.add("loading"); btn.dataset.label=btn.textContent; btn.innerHTML='<span class="btnspin"></span>'; }
-  const done=(msg)=>{ T.done(msg); if(btn){ btn.classList.remove("loading"); btn.textContent=btn.dataset.label||"Download"; } };
+  if(btn){ btn.classList.add("loading"); if(!btn.dataset.icon) btn.dataset.label=btn.textContent; btn.innerHTML='<span class="btnspin"></span>'; }
+  const done=(msg)=>{ T.done(msg); if(btn){ btn.classList.remove("loading");
+    if(btn.dataset.icon) btn.innerHTML=svg(btn.dataset.icon); else btn.textContent=btn.dataset.label||"Download"; } };
   try{
     T.set("Checking permission on-chain…",{indet:true});
     const rv=await api("/api/verify/"+n.id); const v=await rv.json();
