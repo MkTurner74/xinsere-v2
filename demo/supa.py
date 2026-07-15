@@ -516,6 +516,19 @@ def files_under(token: str, node_id: str) -> list[dict]:
     return out
 
 
+def search_nodes(token: str, q: str, limit: int = 60) -> list[dict]:
+    """Name search over every live node the CALLER can see — the user token means
+    RLS scopes results to their own tree + shared subtrees. PostgREST filter
+    metacharacters and ilike wildcards are stripped so q is always literal."""
+    q = "".join(c for c in q if c not in "\\%*,()").strip()[:64]
+    if not q:
+        return []
+    return _rest("GET", "/nodes", token, params={
+        "name": f"ilike.*{q}*", "deleted_at": "is.null",
+        "select": "id,name,type,parent,owner,size,frags,sha,content_type,created_at",
+        "order": "name.asc", "limit": str(limit)}) or []
+
+
 # shares ------------------------------------------------------------------
 # share_type reads fall back to the legacy column set if migration 0016 hasn't
 # been applied yet, so the deploy is safe in either order. The flag avoids

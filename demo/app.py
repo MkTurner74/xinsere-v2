@@ -313,6 +313,26 @@ def _reconcile_pending(user_id: str, email: str) -> dict:
     return {"materialized": done}
 
 
+@app.get("/api/search")
+async def search_nodes(request: Request, q: str = "", limit: int = 60):
+    """Global as-you-type search over the caller's visible tree (own + shared —
+    RLS enforces the scope because the query runs on the USER token)."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    rows = supa.search_nodes(token, q, limit=max(1, min(int(limit or 60), 200)))
+    pmap = _profiles_map(token)
+    out = []
+    for n in rows:
+        owner = pmap.get(n["owner"]) or {}
+        out.append({"id": n["id"], "name": n["name"], "type": n["type"],
+                    "parent": n.get("parent"), "mine": n["owner"] == uid,
+                    "owner": n["owner"], "owner_name": owner.get("name") or "",
+                    "size": n.get("size"), "frags": n.get("frags"),
+                    "sha256": n.get("sha") or "", "content_type": n.get("content_type"),
+                    "created_at": n.get("created_at")})
+    return {"query": q, "results": out}
+
+
 @app.get("/api/users/search")
 async def users_search(request: Request, q: str = ""):
     """Typeahead for sharing — matches name/username/email, excludes self."""
@@ -993,6 +1013,30 @@ async def preview(request: Request, node_id: str):
     except XinsereIntegrityError as exc:
         raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
     _record_access(node, uid, "file.view")
+
+    content = r.content
+    # Large raster images: serve a downscaled rendition. A 10 MB camera JPEG is
+    # ~30x the bytes a screen needs, and preview buffers fully before first byte —
+    # this is why images felt slow next to small PDFs. The ORIGINAL stays
+    # bit-perfect for download; only the transient view copy is resized.
+    if (ctype.startswith("image/") and not is_svg and ctype != "image/gif"
+            and len(content) > 1_000_000):
+        try:
+            from PIL import Image, ImageOps
+            img = Image.open(io.BytesIO(content))
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((2048, 2048))
+            out = io.BytesIO()
+            if img.mode in ("RGBA", "LA", "P"):
+                img.save(out, "PNG", optimize=True)
+                serve_type = "image/png"
+            else:
+                img.save(out, "JPEG", quality=82, progressive=True)
+                serve_type = "image/jpeg"
+            content = out.getvalue()
+        except Exception:   # Pillow missing or unreadable image — serve the original
+            pass
+
     headers = {
         "Content-Disposition": f'inline; filename="{node["name"]}"',
         "X-Content-Type-Options": "nosniff",
@@ -1001,7 +1045,7 @@ async def preview(request: Request, node_id: str):
     }
     if is_svg:   # neuter scripts if the SVG is opened as a document
         headers["Content-Security-Policy"] = "sandbox; script-src 'none'"
-    return StreamingResponse(io.BytesIO(r.content), media_type=serve_type, headers=headers)
+    return StreamingResponse(io.BytesIO(content), media_type=serve_type, headers=headers)
 
 
 @app.get("/api/verify/{node_id}")

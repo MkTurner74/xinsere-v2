@@ -5,3 +5,5 @@ cryptography>=42.0
 web3>=6.15
 boto3>=1.34
 requests>=2.31
+Pillow>=10.3
+segno>=1.6

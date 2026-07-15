@@ -170,7 +170,7 @@
   #grid:not(.listview) .tile .ic .svgi{width:20px;height:20px;}
 
   /* modal */
-  .modal-bg{position:fixed;inset:0;background:var(--scrim);display:grid;place-items:center;z-index:30;backdrop-filter:blur(3px);}
+  .modal-bg{position:fixed;inset:0;background:var(--scrim);display:grid;place-items:center;z-index:30;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
   .modal{width:360px;background:var(--bg-2);border:1px solid var(--edge-strong);border-radius:18px;padding:22px;}
   .modal h3{margin:0 0 4px;font-size:1.02rem;}
   .modal .msub{color:var(--muted);font-size:0.82rem;margin:0 0 16px;}
@@ -212,6 +212,10 @@
   .kebab:hover{background:var(--panel-2);color:var(--text);}
   .tile>.kebab{position:absolute;top:8px;right:8px;opacity:0;transition:opacity .12s;}
   .tile:hover>.kebab{opacity:1;}
+  /* shield badge: everything in Xinsere is secured — one quiet mark, top-right */
+  .tile>.sec-badge{position:absolute;top:10px;right:11px;color:var(--mint);opacity:.8;transition:opacity .12s;}
+  .tile>.sec-badge .svgi{width:14px;height:14px;}
+  .tile:has(>.kebab):hover>.sec-badge{opacity:0;}   /* yield the corner to the kebab on hover */
   .ctx{position:fixed;z-index:45;background:var(--task-bg);border:1px solid var(--edge-strong);border-radius:11px;padding:6px;min-width:172px;box-shadow:0 14px 40px -10px rgba(0,0,0,0.55);display:flex;flex-direction:column;}
   .ctx button{background:transparent;border:0;color:var(--text);text-align:left;padding:8px 11px;border-radius:8px;font-size:0.84rem;display:flex;align-items:center;gap:10px;}
   .ctx button .svgi{color:var(--muted);font-size:1rem;}
@@ -302,6 +306,35 @@ if(sessionStorage.getItem("xin-authed")==="1")document.documentElement.dataset.a
    can fall back to the OS light popup while inheriting our light text */
 select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
 
+/* global search */
+.gsearch{position:relative;flex:1;max-width:440px;margin:0 12px;}
+.gsearch input{width:100%;padding:9px 14px;border-radius:10px;border:1px solid var(--edge);
+  background:var(--input-bg,rgba(0,0,0,.25));color:inherit;font:inherit;font-size:.9rem;outline:none;}
+.gsearch input:focus{border-color:var(--edge-strong);}
+.gs-drop{position:absolute;left:0;right:0;top:calc(100% + 8px);z-index:70;
+  background:var(--menu-bg,#17112A);border:1px solid var(--edge);border-radius:12px;
+  padding:6px;max-height:min(60vh,480px);overflow-y:auto;box-shadow:0 18px 44px rgba(0,0,0,.5);}
+.gs-grp{font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);
+  padding:8px 10px 4px;}
+.gs-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;
+  border:0;border-radius:8px;padding:8px 10px;color:var(--text);cursor:pointer;font-size:.88rem;}
+.gs-row:hover,.gs-row.sel{background:var(--panel-2);}
+.gs-row .svgi{width:15px;height:15px;color:var(--muted);flex:none;}
+.gs-row .gnm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.gs-row .gmeta{color:var(--faint);font-size:.75rem;flex:none;}
+.gs-more{padding:8px 10px;color:var(--word);font-size:.8rem;background:none;border:0;cursor:pointer;width:100%;text-align:left;}
+.gs-empty{padding:12px;color:var(--faint);font-size:.85rem;}
+@media (max-width:760px){.gsearch{max-width:none;}}
+/* full-page search results */
+.sr-grp{margin:26px 0 10px;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);}
+.sr-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--edge);
+  border-radius:11px;margin-bottom:8px;background:var(--panel);cursor:pointer;}
+.sr-row:hover{border-color:var(--edge-strong);}
+.sr-row .svgi{width:17px;height:17px;color:var(--muted);flex:none;}
+.sr-row .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sr-row .nm .sub{display:block;font-size:.74rem;color:var(--faint);}
+.sr-row .meta{color:var(--muted);font-size:.8rem;flex:none;}
+
 /* in-browser secure viewer */
 .viewer-bg{position:fixed;inset:0;background:rgba(4,3,10,.86);z-index:80;display:flex;align-items:center;justify-content:center;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
 .viewer{width:min(94vw,1180px);height:min(92vh,860px);display:flex;flex-direction:column;background:var(--menu-bg,#141026);border:1px solid var(--edge,rgba(146,119,255,.3));border-radius:14px;overflow:hidden}
@@ -333,6 +366,11 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
 <div id="app" class="hidden">
   <div class="topbar">
     <div class="brand"><span id="top-mark"></span><span class="word">Xinsere</span></div>
+    <div class="gsearch">
+      <input id="gs-q" type="search" placeholder="Search files and folders…" autocomplete="off"
+             aria-label="Search files and folders">
+      <div class="gs-drop hidden" id="gs-drop" role="listbox"></div>
+    </div>
     <div class="me">
       <div class="usermenu">
         <button class="userbtn" id="user-btn" type="button" aria-haspopup="true" aria-expanded="false">
@@ -629,6 +667,104 @@ function renderGrid(children, canManage){
   else renderCards(g, children, canManage);
 }
 
+/* ---- global search: as-you-type dropdown grouped by asset type; Enter opens
+ * a full results page. Scope = everything the caller can see (RLS server-side). */
+function assetGroup(n){
+  if(n.type==="folder")return "Folders";
+  const ct=(n.content_type||"").toLowerCase();
+  if(ct.startsWith("image/"))return "Images";
+  if(ct.startsWith("video/"))return "Video";
+  if(ct.startsWith("audio/"))return "Audio";
+  if(ct==="application/pdf"||ct.includes("word")||ct.includes("presentation")||ct.includes("spreadsheet")||ct.includes("msword")||ct.startsWith("text/")||ct.includes("json"))return "Documents";
+  return "Other";
+}
+const GROUP_ORDER=["Folders","Documents","Images","Video","Audio","Other"];
+function groupResults(results){
+  const g={};
+  results.forEach(n=>{ (g[assetGroup(n)]=g[assetGroup(n)]||[]).push(n); });
+  return GROUP_ORDER.filter(k=>g[k]).map(k=>[k,g[k]]);
+}
+function resultIcon(n){
+  if(n.type==="folder")return "folder";
+  const k=previewKind(n.content_type);
+  return k==="img"?"img":k==="video"?"vid":"file";
+}
+function openResult(n){
+  gsClose();
+  if(n.type==="folder"){ setView("mine"); openFolder(n.id); return; }
+  if(previewKind(n.content_type)){ openPreview(n); return; }
+  setView("mine"); openFolder(n.parent||"");   // no preview: open its location
+}
+const gsQ=$("#gs-q"), gsDrop=$("#gs-drop");
+let gsTimer=null, gsSeq=0, gsLast=[];
+function gsClose(){ gsDrop.classList.add("hidden"); }
+async function gsFetch(term, limit){
+  const r=await api("/api/search?q="+encodeURIComponent(term)+(limit?"&limit="+limit:""));
+  if(!r.ok) return null;
+  return (await r.json()).results||[];
+}
+gsQ.addEventListener("input",()=>{
+  clearTimeout(gsTimer);
+  const term=gsQ.value.trim(); const mine=++gsSeq;
+  if(term.length<2){ gsClose(); return; }
+  gsTimer=setTimeout(async()=>{
+    const results=await gsFetch(term);
+    if(results===null||mine!==gsSeq) return;
+    gsLast=results;
+    gsDrop.innerHTML="";
+    if(!results.length){ gsDrop.innerHTML=`<div class="gs-empty">No matches for “${esc(term)}”.</div>`; }
+    else{
+      for(const [grp,items] of groupResults(results)){
+        const h=document.createElement("div"); h.className="gs-grp"; h.textContent=grp; gsDrop.appendChild(h);
+        items.slice(0,5).forEach(n=>{
+          const b=document.createElement("button"); b.type="button"; b.className="gs-row";
+          b.innerHTML=`${svg(resultIcon(n))}<span class="gnm">${esc(n.name)}</span>`+
+            `<span class="gmeta">${n.type==="folder"?"folder":fmtSize(n.size)}${n.mine?"":" · "+esc(n.owner_name)}</span>`;
+          b.onclick=()=>openResult(n);
+          gsDrop.appendChild(b);
+        });
+      }
+      const more=document.createElement("button"); more.type="button"; more.className="gs-more";
+      more.textContent=`See all ${results.length}${results.length>=60?"+":""} results ↵`;
+      more.onclick=()=>showSearchResults(gsQ.value.trim());
+      gsDrop.appendChild(more);
+    }
+    gsDrop.classList.remove("hidden");
+  },230);
+});
+gsQ.addEventListener("keydown",async e=>{
+  if(e.key==="Escape"){ gsClose(); gsQ.blur(); }
+  if(e.key==="Enter"){ e.preventDefault(); const t=gsQ.value.trim(); if(t.length>=2) showSearchResults(t); }
+});
+document.addEventListener("click",e=>{ if(!e.target.closest(".gsearch")) gsClose(); });
+
+async function showSearchResults(term){
+  gsClose();
+  const results=await gsFetch(term, 200) ?? gsLast;
+  TRASH_MODE=false;
+  document.querySelectorAll(".side .nav").forEach(b=>b.classList.remove("active"));
+  $("#tools").style.visibility="hidden";
+  $("#crumbs").innerHTML=`<span class="cur">Search — “${esc(term)}” <span class="note">${results.length}${results.length>=200?"+":""} result${results.length!==1?"s":""}</span></span>`;
+  const g=$("#grid"); g.className="drop grid"; g.innerHTML="";
+  if(!results.length){ g.innerHTML=`<div class="empty"><div class="o"></div>No matches for “${esc(term)}”.</div>`; return; }
+  for(const [grp,items] of groupResults(results)){
+    const h=document.createElement("div"); h.className="sr-grp"; h.textContent=`${grp} · ${items.length}`; g.appendChild(h);
+    items.forEach(n=>{
+      const r=document.createElement("div"); r.className="sr-row";
+      r.innerHTML=`${svg(resultIcon(n))}<span class="nm">${esc(n.name)}`+
+        `<span class="sub">${n.mine?"My files":"Shared · from "+esc(n.owner_name)}${n.created_at?" · "+new Date(n.created_at).toLocaleDateString():""}</span></span>`+
+        `<span class="meta">${n.type==="folder"?"Folder":`${typeLabel(n.content_type)||"File"}${n.size?" · "+fmtSize(n.size):""}`}</span>`;
+      r.onclick=()=>openResult(n);
+      const acts=document.createElement("span"); acts.className="row";
+      if(n.type!=="folder"&&previewKind(n.content_type))
+        acts.appendChild(iconBtn("eye","View",()=>openPreview(n)));
+      acts.appendChild(iconBtn("moveto","Open location",()=>{ setView("mine"); openFolder(n.type==="folder"?n.id:(n.parent||"")); }));
+      r.appendChild(acts);
+      g.appendChild(r);
+    });
+  }
+}
+
 function facepile(n){ return (n.shared_with&&n.shared_with.length)
   ? `<span class="shared">`+n.shared_with.map(u=>avatarHtml(u)).join("")+`</span>` : ""; }
 
@@ -694,9 +830,9 @@ function renderCards(g, children, canManage){
       }
       if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
     } else {
-      t.innerHTML=`<div class="ic">${svg(fileIconName(n.name))}</div><div class="nm" title="${esc(n.name)}">${esc(n.name)}</div>`+
-        `<div class="mt"><span class="secured-i" title="Fragmented · AES-256-GCM · on-chain permissioned · SHA-256 verified">${svg("shield")}</span> Secured`+
-        `${typeLabel(n.content_type)?` · <span title="Verified content type — a rename can't change it">${typeLabel(n.content_type)}</span>`:""} · <span title="${n.frags} fragments">${fmtSize(n.size)}</span></div>`;
+      t.innerHTML=`<span class="sec-badge" title="Secured — fragmented · AES-256-GCM · on-chain permissioned · SHA-256 verified">${svg("shield")}</span>`+
+        `<div class="ic">${svg(fileIconName(n.name))}</div><div class="nm" title="${esc(n.name)}">${esc(n.name)}</div>`+
+        `<div class="mt">${typeLabel(n.content_type)?`<span title="Verified content type — a rename can't change it">${typeLabel(n.content_type)}</span> · `:""}<span title="${n.frags} fragments">${fmtSize(n.size)}</span></div>`;
       const acts=document.createElement("div"); acts.className="acts";
       if(trash){ trashActions(acts, n); }
       else {
