@@ -91,6 +91,52 @@ def image(content: bytes, mark: str, base_type: str) -> tuple[bytes, str]:
     return out.getvalue(), "image/jpeg"
 
 
+# --- channel: Office OOXML (docx/xlsx/pptx = zip containers) --------------------
+
+_OFFICE_TYPES = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+)
+_CUSTOM_XML = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+               '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"'
+               ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+               '<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="XinsereFWM">'
+               '<vt:lpwstr>%s</vt:lpwstr></property></Properties>')
+
+
+def office(content: bytes, mark: str) -> bytes:
+    """Embed the mark as a custom document property (docProps/custom.xml) —
+    Office apps carry custom properties through edits and re-saves, unlike an
+    alien zip entry. Wires the part into [Content_Types].xml and _rels/.rels."""
+    import re as _re
+    import zipfile
+    src = zipfile.ZipFile(io.BytesIO(content))
+    names = set(src.namelist())
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "docProps/custom.xml":
+                data = data.replace(b"</Properties>",
+                    ('<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="99" '
+                     'name="XinsereFWM"><vt:lpwstr>' + mark + "</vt:lpwstr></property></Properties>"
+                     ).encode())
+            elif item.filename == "[Content_Types].xml" and "docProps/custom.xml" not in names:
+                data = data.replace(b"</Types>",
+                    b'<Override PartName="/docProps/custom.xml" ContentType="application/'
+                    b'vnd.openxmlformats-officedocument.custom-properties+xml"/></Types>')
+            elif item.filename == "_rels/.rels" and "docProps/custom.xml" not in names:
+                data = data.replace(b"</Relationships>",
+                    b'<Relationship Id="rIdXinFWM" Type="http://schemas.openxmlformats.org/'
+                    b'officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/>'
+                    b"</Relationships>")
+            z.writestr(item, data)
+        if "docProps/custom.xml" not in names:
+            z.writestr("docProps/custom.xml", _CUSTOM_XML % mark)
+    return out.getvalue()
+
+
 # --- apply / extract -------------------------------------------------------------
 
 def apply(content: bytes, serve_type: str, entry_hash: str) -> tuple[bytes, str, bool]:
@@ -108,6 +154,8 @@ def apply(content: bytes, serve_type: str, entry_hash: str) -> tuple[bytes, str,
         if base.startswith("image/") and base not in ("image/svg+xml", "image/gif"):
             data, new_type = image(content, mark, base)
             return data, new_type, True
+        if base in _OFFICE_TYPES:
+            return office(content, mark), serve_type, True
     except Exception as exc:   # noqa: BLE001
         _log.warning("forensic mark failed type=%s: %s", serve_type, exc)
     return content, serve_type, False
@@ -117,6 +165,15 @@ def extract(content: bytes) -> list[str]:
     """Auditor side: pull every Phase-1 forensic ID out of a suspect file."""
     found = set(m.decode() for m in re.findall(
         (_MARK_PREFIX + r"[0-9a-f]{16}").encode(), content))
+    # Office/zip containers compress their parts — scan each entry too.
+    try:
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            for name in z.namelist():
+                for m in re.findall((_MARK_PREFIX + r"[0-9a-f]{16}").encode(), z.read(name)):
+                    found.add(m.decode())
+    except Exception:   # noqa: BLE001 — not a zip
+        pass
     # zero-width channel
     try:
         s = content.decode("utf-8", "ignore")

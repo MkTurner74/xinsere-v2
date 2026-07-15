@@ -307,6 +307,20 @@ async def audit_file(s: dict = Depends(authn.require_admin), file: UploadFile = 
     import watermark
     content = await file.read()
     marks = watermark.extract(content)
+    return _resolve_marks(marks, file.filename)
+
+
+@router.post("/audit-marks")
+def audit_marks(s: dict = Depends(authn.require_admin), marks: str = Form(...),
+                filename: str = Form("")):
+    """Resolve forensic marks the CLIENT extracted (large files never upload —
+    the browser scans locally and posts just the IDs)."""
+    import re
+    good = re.findall(r"XIN-FWM-[0-9a-f]{16}", marks)[:20]
+    return _resolve_marks(sorted(set(good)), filename)
+
+
+def _resolve_marks(marks: list[str], filename: str | None) -> dict:
     matches = []
     for m in marks:
         hexid = m.rsplit("-", 1)[-1]
@@ -346,7 +360,7 @@ async def audit_file(s: dict = Depends(authn.require_admin), file: UploadFile = 
                             "file_id": r.get("file_id"), "entry_hash": r["entry_hash"],
                             "anchor_tx": (anchor or {}).get("tx_hash"),
                             "sealed": bool((anchor or {}).get("tx_hash"))})
-    return {"filename": file.filename, "marks_found": marks, "matches": matches}
+    return {"filename": filename, "marks_found": marks, "matches": matches}
 
 
 # --- platform config (read-only summary for Settings) -------------------------------

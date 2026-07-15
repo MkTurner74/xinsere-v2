@@ -584,10 +584,23 @@ async function loadAudit(){
 $("#trace-go").addEventListener("click",async()=>{
   const f=$("#trace-file").files[0]; const out=$("#trace-out");
   if(!f){ out.innerHTML=`<span class="note">Pick a file first.</span>`; return; }
-  out.innerHTML=`<span class="note">Extracting marks…</span>`;
-  const fd=new FormData(); fd.append("file",f);
+  out.innerHTML=`<span class="note">Scanning file locally…</span>`;
   try{
-    const r=await fetch("/api/admin/audit-file",{method:"POST",body:fd});
+    // Client-side extraction first — big files never upload (serverless body cap).
+    const bytes=new Uint8Array(await f.arrayBuffer());
+    const ascii=new TextDecoder("latin1").decode(bytes);
+    let found=[...new Set(ascii.match(/XIN-FWM-[0-9a-f]{16}/g)||[])];
+    let r;
+    if(found.length){
+      const fd=new FormData(); fd.append("marks",found.join(",")); fd.append("filename",f.name);
+      r=await fetch("/api/admin/audit-marks",{method:"POST",body:fd});
+    }else if(f.size<4_000_000){
+      // Nothing visible raw (compressed containers) — server does the deep scan.
+      const fd=new FormData(); fd.append("file",f);
+      r=await fetch("/api/admin/audit-file",{method:"POST",body:fd});
+    }else{
+      out.innerHTML=`<span class="note">No marks found in a raw scan, and the file is too large to deep-scan in the browser upload (4&nbsp;MB cap). If this is an Office/zip file, extract it and trace an inner document — or note: owner downloads are always clean, and files downloaded before 2026-07-15 pre-date marking.</span>`; return;
+    }
     const d=await r.json();
     if(!r.ok) throw new Error(d.detail||d.error||"Trace failed");
     if(!d.marks_found.length){ out.innerHTML=`<span class="note">No Xinsere forensic marks found in “${esc(f.name)}”. The file may pre-date marking, be owner-original, or have been aggressively re-encoded.</span>`; return; }

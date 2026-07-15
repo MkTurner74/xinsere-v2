@@ -89,3 +89,19 @@ def test_apply_fails_open_on_garbage_and_passthrough_types():
 def test_no_entry_hash_means_no_mark():
     out, _, marked = watermark.apply(b"data", "text/plain", "")
     assert out == b"data" and not marked
+
+
+def test_office_docx_mark_roundtrips_and_stays_valid_zip():
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:   # minimal OOXML skeleton
+        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="x"></Types>')
+        z.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="x"></Relationships>')
+        z.writestr("word/document.xml", "<w:document>quarterly plan</w:document>")
+    ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    out, ctype, marked = watermark.apply(buf.getvalue(), ct, ENTRY)
+    assert marked and ctype == ct
+    z2 = zipfile.ZipFile(io.BytesIO(out))
+    assert "docProps/custom.xml" in z2.namelist()
+    assert b"quarterly plan" in z2.read("word/document.xml")   # content intact
+    assert MARK in watermark.extract(out)                      # zip-aware auditor
