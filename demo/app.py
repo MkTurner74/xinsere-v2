@@ -88,10 +88,26 @@ def node_view(node: dict, viewer: str, token: str, pmap: dict) -> dict:
     if node["owner"] == viewer:
         shares = supa.shares_for_node(token, node["id"])
         v["shared_with"] = [
-            {**_public(pmap[s["grantee"]]), "tx": s["tx"]}
+            {**_public(pmap[s["grantee"]]), "tx": s["tx"],
+             "share_type": s.get("share_type", "download")}
             for s in shares if s["grantee"] in pmap
         ]
     return v
+
+
+def _best_access(a: str | None, b: str | None) -> str | None:
+    order = {None: 0, "view": 1, "download": 2, "co-owner": 3}
+    return a if order.get(a, 0) >= order.get(b, 0) else b
+
+
+def _viewer_share_map(token: str, uid: str) -> dict:
+    """{node_id: share_type} for every share granted to the viewer (RLS lets a
+    grantee read their own share rows)."""
+    try:
+        return {s["node_id"]: s.get("share_type", "download")
+                for s in supa.shares_for_grantee(token, uid)}
+    except Exception:
+        return {}
 
 
 # --- pages ------------------------------------------------------------------
@@ -239,7 +255,8 @@ def _grant_inherited(token: str, node_id: str, file_id: str) -> int:
     try:
         for sh in supa.shares_covering(token, node_id):
             try:
-                share_grants.grant_share(svc, [file_node], sh["grantee"], sh["node_id"], "grant-on-add")
+                share_grants.grant_share(svc, [file_node], sh["grantee"], sh["node_id"],
+                                         "grant-on-add", sh.get("share_type", "download"))
                 granted += 1
             except Exception as exc:
                 logging.getLogger("xinsere.app").warning(
@@ -276,16 +293,18 @@ def _reconcile_pending(user_id: str, email: str) -> dict:
         return {"materialized": 0}
     for p in pending:
         node_id = p["node_id"]
+        stype = p.get("share_type", "download")
         try:
             files = supa.files_under(svc, node_id)
             last_tx = None
             try:
-                res = share_grants.grant_share(svc, files, user_id, node_id, "reconcile-invite")
+                res = share_grants.grant_share(svc, files, user_id, node_id,
+                                               "reconcile-invite", stype)
                 last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
             except Exception as exc:
                 logging.getLogger("xinsere.app").warning(
                     "pending-share grant failed node=%s grantee=%s: %s", node_id, user_id, exc)
-            supa.insert_share(svc, node_id, user_id, last_tx)
+            supa.insert_share(svc, node_id, user_id, last_tx, stype)
             supa.delete_pending_share(svc, p["id"])
             done += 1
         except Exception as exc:
@@ -354,7 +373,29 @@ async def tree(request: Request, folder: str = ""):
     crumbs.reverse()
 
     kids = [node_view(c, uid, token, pmap) for c in supa.children(token, folder_id)]
-    return {"folder": node_view(node, uid, token, pmap), "breadcrumbs": crumbs, "children": kids}
+    fv = node_view(node, uid, token, pmap)
+
+    # Viewer's effective access level (0016) so the UI can offer the right verbs.
+    # Owner => owner. Otherwise the best share on the folder or any ancestor
+    # (crumbs already walk the chain), with a direct share on a child able to
+    # raise (never lower) that child's level. Display-only — the download and
+    # preview gates re-verify on-chain regardless.
+    if node["owner"] == uid:
+        folder_access = "owner"
+    else:
+        smap = _viewer_share_map(token, uid)
+        inherited = None
+        for c in crumbs:
+            inherited = _best_access(inherited, smap.get(c["id"]))
+        folder_access = inherited or "view"   # RLS said visible; default to least
+        for k in kids:
+            k["access"] = (
+                "owner" if k["owner"] == uid
+                else _best_access(folder_access, smap.get(k["id"])))
+    fv["access"] = folder_access
+    for k in kids:
+        k.setdefault("access", "owner" if k["owner"] == uid else folder_access)
+    return {"folder": fv, "breadcrumbs": crumbs, "children": kids}
 
 
 @app.get("/api/shared")
@@ -362,7 +403,11 @@ async def shared(request: Request):
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
     pmap = _profiles_map(token)
-    items = [node_view(n, uid, token, pmap) for n in supa.shared_with(token, uid)]
+    items = []
+    for n in supa.shared_with(token, uid):
+        v = node_view(n, uid, token, pmap)
+        v["access"] = n.get("share_type", "download")   # the viewer's level (0016)
+        items.append(v)
     return {"children": items}
 
 
@@ -503,9 +548,14 @@ async def move(request: Request, node_id: str = Form(...), new_parent: str = For
     # naturally includes (gained) or excludes (lost) the moved subtree, so a single
     # revoke+re-grant per (share_node, grantee) restores the correct grant set.
     # Tracked as (share_node, grantee) pairs so we reanchor the right root.
-    before = {(sh["node_id"], sh["grantee"]) for sh in supa.shares_covering(token, node_id)}
+    before_rows = supa.shares_covering(token, node_id)
+    before = {(sh["node_id"], sh["grantee"]) for sh in before_rows}
     updated = supa.move_node(token, node_id, new_parent)
-    after = {(sh["node_id"], sh["grantee"]) for sh in supa.shares_covering(token, node_id)}
+    after_rows = supa.shares_covering(token, node_id)
+    after = {(sh["node_id"], sh["grantee"]) for sh in after_rows}
+    # Re-anchor at each share's own level (0016) — a view-only share stays view-only.
+    stype = {(sh["node_id"], sh["grantee"]): sh.get("share_type", "download")
+             for sh in [*before_rows, *after_rows]}
     rec = {"reanchored": 0, "revoked": 0, "errors": 0}
     changed = before ^ after   # shares this subtree gained or lost by moving
     svc = supa.SERVICE_ROLE_KEY
@@ -513,7 +563,8 @@ async def move(request: Request, node_id: str = Form(...), new_parent: str = For
         for share_node, g in changed:
             try:
                 files = supa.files_under(svc, share_node)
-                r = share_grants.reanchor_share(svc, share_node, g, files, "move")
+                r = share_grants.reanchor_share(svc, share_node, g, files, "move",
+                                                stype.get((share_node, g), "download"))
                 rec["reanchored"] += 1
                 rec["revoked"] += r.get("revoked", 0)
                 rec["errors"] += r.get("revoke_errors", 0)
@@ -731,13 +782,20 @@ async def unshare(request: Request, node_id: str = Form(...), grantee: str = For
 
 @app.post("/api/share")
 async def share(request: Request, node_id: str = Form(...),
-                grantee: str = Form(None), email: str = Form(None)):
+                grantee: str = Form(None), email: str = Form(None),
+                share_type: str = Form("download")):
     """Share an item. Provide either `grantee` (a user id picked from typeahead) or
     `email`. An email that already has a Xinsere account resolves to an internal
     share (granted now); an email with no account yet becomes a pending invite that
-    materializes when they join — external sharing + viral onboarding."""
+    materializes when they join — external sharing + viral onboarding.
+
+    `share_type` (0016): `download` = view + download (default, today's behavior);
+    `view` = browser preview only — the download endpoints refuse, and the typed
+    Merkle leaf binds the level on-chain. `co-owner` is reserved, not yet accepted."""
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
+    if share_type not in ("view", "download"):
+        raise HTTPException(status_code=400, detail="share_type must be view or download")
     node = supa.get_node(token, node_id)
     if not node or node["owner"] != uid:
         raise HTTPException(status_code=403, detail="You can only share your own items")
@@ -756,8 +814,9 @@ async def share(request: Request, node_id: str = Form(...),
             # write must use the service-role key, not the user's token.
             if not supa.SERVICE_ROLE_KEY:
                 raise HTTPException(status_code=500, detail="Service role key not configured")
-            supa.insert_pending_share(supa.SERVICE_ROLE_KEY, node_id, addr, uid)  # no gas
-            return {"ok": True, "invited": True, "email": addr,
+            supa.insert_pending_share(supa.SERVICE_ROLE_KEY, node_id, addr, uid,
+                                      share_type)  # no gas
+            return {"ok": True, "invited": True, "email": addr, "share_type": share_type,
                     "message": "Invitation created — they'll get access as soon as they join Xinsere."}
 
     if not grantee:
@@ -777,9 +836,28 @@ async def share(request: Request, node_id: str = Form(...),
     if not svc:
         raise HTTPException(status_code=500, detail="Service role key not configured")
     files = supa.files_under(token, node_id)
+
+    # Level change on an existing share (0016): the OLD level's grants must be
+    # revoked before the new ones anchor, or a download-typed leaf would keep
+    # verifying after a downgrade to view. Fail closed: if revocation errors,
+    # abort the re-share (the old level simply stays in force — never a mix).
+    prior = next((sh for sh in supa.shares_for_node(token, node_id)
+                  if sh["grantee"] == grantee), None)
+    if prior and (prior.get("share_type") or "download") != share_type:
+        rev = share_grants.revoke_share(svc, node_id, grantee)
+        errors = rev["errors"]
+        for f in files:   # legacy per-file grants (pre-batch shares)
+            try:
+                CHAIN.revoke(f["file_id"], grantee)   # None = no active grant
+            except Exception:
+                errors += 1
+        if errors:
+            raise HTTPException(status_code=502,
+                                detail="Couldn't revoke the previous permission level — retry")
+
     last_tx = None
     try:
-        res = share_grants.grant_share(svc, files, grantee, node_id, "share")
+        res = share_grants.grant_share(svc, files, grantee, node_id, "share", share_type)
         last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
     except Exception as exc:
         logging.getLogger("xinsere.app").warning(
@@ -787,56 +865,143 @@ async def share(request: Request, node_id: str = Form(...),
         raise HTTPException(status_code=502,
                             detail="On-chain grant failed [chain_grant_failed] — retry")
 
-    rec = supa.insert_share(token, node_id, grantee, last_tx)
+    rec = supa.insert_share(token, node_id, grantee, last_tx, share_type)
     pmap = _profiles_map(token)
     return {"ok": True, "grantee": _public(pmap.get(grantee, {"id": grantee})),
             "tx": rec.get("tx"), "files_granted": len(files),
-            "cascade": node["type"] == "folder"}
+            "share_type": share_type, "cascade": node["type"] == "folder"}
 
 
-def _has_access(file_id: str, uid: str) -> tuple[bool, str]:
-    """Authoritative, FAIL-CLOSED download gate. Returns (allowed, source).
+_LEVEL_RANK = {"view": 1, "download": 2}
 
-    1. Per-file on-chain grant (interactive shares) — CHAIN.verify().
-    2. Merkle batch fallback (bulk-migrated permissions) — replay a cached proof
-       through the contract's verifyBatch. The on-chain root is the authority; the
-       cache is only a hint, and an unanchored/revoked root fails closed there.
+
+def _has_access(file_id: str, uid: str) -> tuple[bool, str, str]:
+    """Authoritative, FAIL-CLOSED access gate. Returns (allowed, source, level)
+    where level is 'download' or 'view' (0016).
+
+    1. Per-file on-chain grant (interactive shares, owner self-grants) —
+       CHAIN.verify(). Untyped by construction => download level.
+    2. Merkle batch fallback — replay a cached proof through the contract's
+       verifyBatch. The LEVEL is bound into the leaf: we recompute the expected
+       leaf from the row's CLAIMED grant_type before replaying, so a DB-flipped
+       type can never verify. A download-typed hit wins immediately; a view-typed
+       hit is kept in case no download grant exists.
 
     Any error or miss returns False — corruption or an outage can only ever block a
     legitimate user, never expose a file."""
     try:
         has, _ = CHAIN.verify(file_id, uid)
         if has:
-            return True, "amoy-contract"
+            return True, "amoy-contract", "download"
     except Exception:
         logging.getLogger("xinsere.app").warning("per-file verify() failed file=%s uid=%s", file_id, uid)
     # Batch fallback: try recent cached proofs; the chain check is what actually grants.
+    view_hit = None
     try:
+        import chain as _chain
+        import merkle as _merkle
+        fh, gh = _chain.file_hash(file_id), _chain.grantee_hash(uid)
         for bg in supa.batch_grants_for(supa.SERVICE_ROLE_KEY, file_id, uid):
+            gtype = bg.get("grant_type") or "download"
+            expected = _merkle.leaf_typed(fh, gh, gtype)
+            if bg["leaf"].lower() != _merkle.hx(expected).lower():
+                continue   # cached row inconsistent with its claimed type — ignore it
             leaf = bytes.fromhex(bg["leaf"][2:])
             root = bytes.fromhex(bg["merkle_root"][2:])
             proof = [bytes.fromhex(p[2:]) for p in bg["proof"]]
             if CHAIN.verify_batch(leaf, root, proof):
-                return True, "amoy-batch"
+                if gtype != "view":
+                    return True, "amoy-batch", "download"
+                view_hit = (True, "amoy-batch", "view")
     except Exception:
         logging.getLogger("xinsere.app").warning("batch verify failed file=%s uid=%s", file_id, uid)
-    return False, "none"
+    if view_hit:
+        return view_hit
+    return False, "none", "none"
 
 
-def _authorize(node: dict, uid: str) -> tuple[bool, str]:
-    """Access decision for a file node. Brand promise: EVERYONE is verified on-chain —
-    the owner is NOT bypassed; they hold an on-chain self-grant like any grantee. The
-    owner is only ever let through as a logged FALLBACK if no grant has been anchored yet
-    (e.g. a fresh upload before its grant lands), so an owner is never locked out of their
-    own file, but the default, expected path is an on-chain verify even for them."""
-    allowed, source = _has_access(node["file_id"], uid)
-    if allowed:
-        return True, source
+def _authorize(node: dict, uid: str, need: str = "download") -> tuple[bool, str, str]:
+    """Access decision for a file node at the required level ('download' or 'view').
+    Brand promise: EVERYONE is verified on-chain — the owner is NOT bypassed; they
+    hold an on-chain self-grant like any grantee. The owner is only ever let through
+    as a logged FALLBACK if no grant has been anchored yet (e.g. a fresh upload
+    before its grant lands), so an owner is never locked out of their own file, but
+    the default, expected path is an on-chain verify even for them."""
+    allowed, source, level = _has_access(node["file_id"], uid)
+    if allowed and _LEVEL_RANK.get(level, 0) >= _LEVEL_RANK.get(need, 2):
+        return True, source, level
     if node["owner"] == uid:
         logging.getLogger("xinsere.app").info(
             "owner on-chain grant missing — allowing via fallback file=%s", node["file_id"])
-        return True, "owner-fallback"
-    return False, "none"
+        return True, "owner-fallback", "download"
+    if allowed:   # has SOME access, just not at the required level (view-only)
+        return False, source, level
+    return False, "none", "none"
+
+
+def _record_access(node: dict, uid: str, action: str) -> None:
+    """Interactive-plane access telemetry into the tamper-evident access_log
+    (0005/0014) — same ground truth the machine API writes. Fail-open by design."""
+    try:
+        import access_log
+        access_log.record(org_id=None, actor_id=uid, actor_type="user", action=action,
+                          file_id=node.get("file_id"), node_id=node.get("id"),
+                          bytes=node.get("size") or 0)
+    except Exception:
+        pass
+
+
+# Content types the in-browser viewer will render inline. HTML/SVG are the XSS
+# vectors of user-uploaded content: HTML is never rendered (re-served as plain
+# text), SVG gets a script-neutering CSP sandbox. Everything else falls back to
+# "no preview" rather than guessing.
+_PREVIEW_SAFE_PREFIXES = ("image/", "video/", "audio/")
+_PREVIEW_TEXT_TYPES = ("text/plain", "text/csv", "text/markdown", "application/json",
+                       "text/html", "application/xml", "text/xml")
+
+
+@app.get("/api/preview/{node_id}")
+async def preview(request: Request, node_id: str):
+    """Server-mediated in-browser viewer — the ONLY retrieval path a `view`-level
+    grant can pass (0016). The file is reassembled server-side and streamed
+    inline: the client never receives fragment URLs or data keys, so a view-only
+    grantee has no bulk/API download path. (What a browser can display can always
+    be screen-captured — `view` prevents key handover and file egress, it is not
+    DRM.) Download-level users get the same endpoint for previews."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["type"] != "file":
+        raise HTTPException(status_code=404, detail="File not found")
+    allowed, _, _ = _authorize(node, uid, need="view")
+    if not allowed:
+        raise HTTPException(status_code=403, detail="No active on-chain grant for you")
+
+    ctype = (node.get("content_type") or "application/octet-stream").split(";")[0].strip().lower()
+    is_svg = ctype == "image/svg+xml"
+    if ctype in _PREVIEW_TEXT_TYPES:
+        serve_type = "text/plain; charset=utf-8"     # HTML/JSON/XML render as text, never execute
+    elif is_svg or any(ctype.startswith(p) for p in _PREVIEW_SAFE_PREFIXES):
+        serve_type = ctype
+    elif ctype == "application/pdf":
+        serve_type = ctype
+    else:
+        raise HTTPException(status_code=415, detail="No in-browser preview for this file type")
+
+    try:
+        r = get_pipeline().retrieve(node["file_id"])
+    except XinsereIntegrityError as exc:
+        raise HTTPException(status_code=422, detail=f"Integrity check failed — {exc}")
+    _record_access(node, uid, "file.view")
+    headers = {
+        "Content-Disposition": f'inline; filename="{node["name"]}"',
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+        "X-Integrity": "verified-bit-perfect",
+    }
+    if is_svg:   # neuter scripts if the SVG is opened as a document
+        headers["Content-Security-Policy"] = "sandbox; script-src 'none'"
+    return StreamingResponse(io.BytesIO(r.content), media_type=serve_type, headers=headers)
 
 
 @app.get("/api/verify/{node_id}")
@@ -846,9 +1011,10 @@ async def verify_access(request: Request, node_id: str):
     node = supa.get_node(token, node_id)
     if not node or node["type"] != "file":
         raise HTTPException(status_code=404, detail="File not found")
-    allowed, source = _authorize(node, uid)  # owner verified on-chain too (no bypass)
-    import chain as _chain
-    return {"allowed": allowed, "source": source, "contract": _chain.CONTRACT}
+    allowed, source, level = _authorize(node, uid, need="view")
+    return {"allowed": allowed, "source": source, "level": level,
+            "can_download": allowed and level == "download",
+            "contract": __import__("chain").CONTRACT}
 
 
 @app.get("/api/download-plan/{node_id}")
@@ -865,9 +1031,12 @@ async def download_plan(request: Request, node_id: str):
     node = supa.get_node(token, node_id)
     if not node or node["type"] != "file":
         raise HTTPException(status_code=404, detail="File not found")
-    allowed, _ = _authorize(node, uid)   # owner verified on-chain too (no bypass)
+    allowed, _, level = _authorize(node, uid, need="download")
     if not allowed:
-        raise HTTPException(status_code=403, detail="No active on-chain grant for you")
+        raise HTTPException(status_code=403,
+                            detail="Your access is view-only — ask the owner for download access"
+                            if level == "view" else "No active on-chain grant for you")
+    _record_access(node, uid, "file.download_plan")
     try:
         # 30 min TTL: a retried/slow transfer must not see its fragment URLs
         # expire mid-download (an expired URL 403s on the Range resume).
@@ -912,9 +1081,12 @@ async def download(request: Request, node_id: str):
     if not node or node["type"] != "file":
         raise HTTPException(status_code=404, detail="File not found")
     # Authoritative permission check reads the BLOCKCHAIN for EVERYONE (owner included).
-    allowed, _ = _authorize(node, uid)
+    allowed, _, level = _authorize(node, uid, need="download")
     if not allowed:
-        raise HTTPException(status_code=403, detail="No active on-chain grant for you")
+        raise HTTPException(status_code=403,
+                            detail="Your access is view-only — ask the owner for download access"
+                            if level == "view" else "No active on-chain grant for you")
+    _record_access(node, uid, "file.download")
     try:
         r = get_pipeline().retrieve(node["file_id"])
     except XinsereIntegrityError as exc:

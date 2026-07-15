@@ -330,20 +330,31 @@ def platform_admins_empty() -> bool:
 
 # pending share invitations (external-email sharing) ----------------------
 
-def insert_pending_share(token: str, node_id: str, email: str, invited_by: str) -> dict:
+def insert_pending_share(token: str, node_id: str, email: str, invited_by: str,
+                         share_type: str = "download") -> dict:
     """Create (or keep) a pending invite for an email with no account yet. Idempotent
     on (node_id, email) via merge-duplicates so re-inviting doesn't error."""
+    body = {"node_id": node_id, "email": email.strip().lower(), "invited_by": invited_by}
+    if share_type and share_type != "download":   # pre-0016 tolerance
+        body["share_type"] = share_type
     rows = _rest("POST", "/pending_shares", token,
                  prefer="return=representation,resolution=merge-duplicates",
-                 json_body={"node_id": node_id, "email": email.strip().lower(),
-                            "invited_by": invited_by})
+                 json_body=body)
     return rows[0] if rows else {"node_id": node_id, "email": email}
 
 
 def pending_shares_for_email(token: str, email: str) -> list[dict]:
-    return _rest("GET", "/pending_shares", token,
-                 params={"email": f"eq.{email.strip().lower()}",
-                         "select": "id,node_id,invited_by"}) or []
+    try:
+        rows = _rest("GET", "/pending_shares", token,
+                     params={"email": f"eq.{email.strip().lower()}",
+                             "select": "id,node_id,invited_by,share_type"}) or []
+    except SupabaseError:   # pre-0016
+        rows = _rest("GET", "/pending_shares", token,
+                     params={"email": f"eq.{email.strip().lower()}",
+                             "select": "id,node_id,invited_by"}) or []
+    for r in rows:
+        r.setdefault("share_type", "download")
+    return rows
 
 
 def pending_shares_for_node(token: str, node_id: str) -> list[dict]:
@@ -486,8 +497,10 @@ def shares_covering(token: str, node_id: str) -> list[dict]:
     """Shares on the node itself or ANY ancestor — everyone with inherited access.
     Used for grant-on-add (late-added files) and revoke-on-delete."""
     ids = [node_id] + [a["id"] for a in ancestors(token, node_id)]
-    return _rest("GET", "/shares", token,
-                 params={"node_id": f"in.({','.join(ids)})", "select": "node_id,grantee,tx"})
+    return _shares_select(
+        token,
+        {"node_id": f"in.({','.join(ids)})", "select": "node_id,grantee,tx,share_type"},
+        {"node_id": f"in.({','.join(ids)})", "select": "node_id,grantee,tx"})
 
 
 def files_under(token: str, node_id: str) -> list[dict]:
@@ -504,17 +517,53 @@ def files_under(token: str, node_id: str) -> list[dict]:
 
 
 # shares ------------------------------------------------------------------
+# share_type reads fall back to the legacy column set if migration 0016 hasn't
+# been applied yet, so the deploy is safe in either order. The flag avoids
+# re-paying the failed request on every call once we know the column is absent.
+_SHARE_TYPE_COLUMN = True
 
-def insert_share(token: str, node_id: str, grantee: str, tx: str | None) -> dict:
+
+def _shares_select(token: str, params_with: dict, params_without: dict) -> list[dict]:
+    global _SHARE_TYPE_COLUMN
+    if _SHARE_TYPE_COLUMN:
+        try:
+            return _rest("GET", "/shares", token, params=params_with) or []
+        except SupabaseError:
+            _SHARE_TYPE_COLUMN = False
+    rows = _rest("GET", "/shares", token, params=params_without) or []
+    for r in rows:
+        r.setdefault("share_type", "download")
+    return rows
+
+
+def insert_share(token: str, node_id: str, grantee: str, tx: str | None,
+                 share_type: str = "download") -> dict:
+    """Upsert on (node_id, grantee). share_type is always sent when the column
+    exists (a re-share must be able to RESET a previous 'view' to 'download');
+    pre-0016 the key is retried without so the deploy order can't break shares."""
+    global _SHARE_TYPE_COLUMN
+    body = {"node_id": node_id, "grantee": grantee, "tx": tx}
+    if _SHARE_TYPE_COLUMN:
+        try:
+            rows = _rest("POST", "/shares", token,
+                         prefer="return=representation,resolution=merge-duplicates",
+                         json_body={**body, "share_type": share_type or "download"})
+            return rows[0] if rows else {**body, "share_type": share_type}
+        except SupabaseError:
+            if share_type and share_type != "download":
+                raise                      # typed share genuinely needs 0016
+            _SHARE_TYPE_COLUMN = False     # legacy retry below
     rows = _rest("POST", "/shares", token,
                  prefer="return=representation,resolution=merge-duplicates",
-                 json_body={"node_id": node_id, "grantee": grantee, "tx": tx})
-    return rows[0] if rows else {"node_id": node_id, "grantee": grantee, "tx": tx}
+                 json_body=body)
+    return rows[0] if rows else {**body, "share_type": share_type}
 
 
 def shares_for_node(token: str, node_id: str) -> list[dict]:
-    return _rest("GET", "/shares", token,
-                 params={"node_id": f"eq.{node_id}", "select": "grantee,tx"})
+    return _shares_select(
+        token,
+        {"node_id": f"eq.{node_id}", "select": "grantee,tx,share_type"},
+        {"node_id": f"eq.{node_id}", "select": "grantee,tx"})
 
 
 def delete_share(token: str, node_id: str, grantee: str) -> None:
@@ -523,15 +572,28 @@ def delete_share(token: str, node_id: str, grantee: str) -> None:
 
 
 def shared_with(token: str, user_id: str) -> list[dict]:
-    """Top-level nodes shared directly with the user."""
-    rows = _rest("GET", "/shares", token,
-                 params={"grantee": f"eq.{user_id}", "select": "node_id"})
+    """Top-level nodes shared directly with the user. Each node carries the
+    viewer's `share_type` for that share (download unless 0016 says otherwise)."""
+    rows = _shares_select(
+        token,
+        {"grantee": f"eq.{user_id}", "select": "node_id,share_type"},
+        {"grantee": f"eq.{user_id}", "select": "node_id"})
     out = []
     for s in rows:
         n = get_node(token, s["node_id"])
         if n and not n.get("deleted_at"):   # a trashed item is hidden from recipients
+            n["share_type"] = s.get("share_type", "download")
             out.append(n)
     return out
+
+
+def shares_for_grantee(token: str, user_id: str) -> list[dict]:
+    """Every share row granted to the user — node id + type. Used to resolve the
+    viewer's effective access level over a folder subtree."""
+    return _shares_select(
+        token,
+        {"grantee": f"eq.{user_id}", "select": "node_id,share_type"},
+        {"grantee": f"eq.{user_id}", "select": "node_id"})
 
 
 # permission batches (Merkle aggregate batch-grant — ADR-2026-07-13) ---------
@@ -644,7 +706,16 @@ def batch_grants_for(token: str, file_id: str, grantee_id: str, limit: int = 5) 
     accepts the first that passes — the ON-CHAIN check is the authority (an
     unanchored, pending, or revoked root fails closed there), so we deliberately
     do NOT filter on the cached status and can't be fooled by a stale one."""
-    return _rest("GET", "/batch_grants", token, params={
-        "file_id": f"eq.{file_id}", "grantee_id": f"eq.{grantee_id}",
-        "select": "merkle_root,leaf,proof", "order": "created_at.desc",
-        "limit": limit}) or []
+    try:
+        rows = _rest("GET", "/batch_grants", token, params={
+            "file_id": f"eq.{file_id}", "grantee_id": f"eq.{grantee_id}",
+            "select": "merkle_root,leaf,proof,grant_type", "order": "created_at.desc",
+            "limit": limit}) or []
+    except SupabaseError:   # pre-0016
+        rows = _rest("GET", "/batch_grants", token, params={
+            "file_id": f"eq.{file_id}", "grantee_id": f"eq.{grantee_id}",
+            "select": "merkle_root,leaf,proof", "order": "created_at.desc",
+            "limit": limit}) or []
+    for r in rows:
+        r.setdefault("grant_type", "download")
+    return rows

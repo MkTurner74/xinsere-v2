@@ -33,6 +33,19 @@ def leaf(file_hash: bytes, grantee_hash: bytes) -> bytes:
     return _keccak(file_hash + grantee_hash)
 
 
+def leaf_typed(file_hash: bytes, grantee_hash: bytes, grant_type: str | None) -> bytes:
+    """Leaf for a typed grant (migration 0016). `download` (and legacy None/empty)
+    keeps the 2-part leaf, so every already-anchored root stays valid. Any other
+    type appends keccak(type) — 96 bytes total — which binds the permission LEVEL
+    into the on-chain commitment: the gate recomputes this from the claimed type,
+    so a DB-flipped type can never verify against the anchored root."""
+    if not grant_type or grant_type == "download":
+        return leaf(file_hash, grantee_hash)
+    if len(file_hash) != 32 or len(grantee_hash) != 32:
+        raise ValueError("file_hash and grantee_hash must each be 32 bytes")
+    return _keccak(file_hash + grantee_hash + _keccak(grant_type.encode("utf-8")))
+
+
 def _hash_pair(a: bytes, b: bytes) -> bytes:
     """keccak256 of the two 32-byte children in ascending byte order (commutative)."""
     return _keccak(a + b) if a <= b else _keccak(b + a)

@@ -29,13 +29,16 @@ _log = logging.getLogger("xinsere.share_grants")
 
 
 def grant_share(svc: str, files: list[dict], grantee: str, share_node: str,
-                source: str) -> batch_grant.BatchResult | None:
-    """Anchor read grants for (each file, `grantee`) as capped batches and record
-    the resulting root(s) under (`share_node`, `grantee`). Returns the BatchResult
-    (None if there were no files to grant). Raises if nothing anchored (so the
-    caller can surface a 502 and the owner can retry) -- a partial anchor keeps the
-    roots it did land and records them, so a retry is idempotent."""
-    grants = [batch_grant.Grant(f["file_id"], grantee) for f in files if f.get("file_id")]
+                source: str, share_type: str = "download") -> batch_grant.BatchResult | None:
+    """Anchor grants for (each file, `grantee`) as capped batches and record
+    the resulting root(s) under (`share_node`, `grantee`). `share_type` binds the
+    permission level into each Merkle leaf (0016): `view` grants pass only the
+    preview gate, never download. Returns the BatchResult (None if there were no
+    files to grant). Raises if nothing anchored (so the caller can surface a 502
+    and the owner can retry) -- a partial anchor keeps the roots it did land and
+    records them, so a retry is idempotent."""
+    grants = [batch_grant.Grant(f["file_id"], grantee, share_type)
+              for f in files if f.get("file_id")]
     if not grants:
         return None
     res = batch_grant.preserve(grants, supa=supa, token=svc, source=source, scope=share_node)
@@ -77,7 +80,8 @@ def revoke_share(svc: str, share_node: str, grantee: str) -> dict:
 
 
 def reanchor_share(svc: str, share_node: str, grantee: str,
-                   files: list[dict], source: str = "reanchor") -> dict:
+                   files: list[dict], source: str = "reanchor",
+                   share_type: str = "download") -> dict:
     """Revoke the current roots for (`share_node`, `grantee`) and re-anchor grants
     over `files` (the share_node subtree's CURRENT file set). Used by `move`, where
     the tree changed under a folder share: re-preserving files_under(share_node)
@@ -86,7 +90,7 @@ def reanchor_share(svc: str, share_node: str, grantee: str,
     rev = revoke_share(svc, share_node, grantee)
     res = None
     try:
-        res = grant_share(svc, files, grantee, share_node, source)
+        res = grant_share(svc, files, grantee, share_node, source, share_type)
     except Exception as exc:
         _log.warning("reanchor re-grant failed node=%s grantee=%s: %s", share_node, grantee, exc)
     return {"revoked": rev["revoked"], "revoke_errors": rev["errors"],

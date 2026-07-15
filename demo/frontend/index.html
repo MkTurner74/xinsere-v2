@@ -284,6 +284,21 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
 .usermenu .menu-item:hover{background:rgba(255,255,255,.07)}
 .usermenu .menu-item.danger{color:var(--rose,#FF8B7A)}
 .usermenu .menu-item.danger:hover{background:rgba(255,90,90,.12)}
+
+/* in-browser secure viewer */
+.viewer-bg{position:fixed;inset:0;background:rgba(4,3,10,.86);z-index:80;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
+.viewer{width:min(94vw,1180px);height:min(92vh,860px);display:flex;flex-direction:column;background:var(--menu-bg,#141026);border:1px solid var(--edge,rgba(146,119,255,.3));border-radius:14px;overflow:hidden}
+.viewer-top{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--edge,rgba(146,119,255,.16))}
+.viewer-top .vnm{font-weight:600;font-size:.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.viewer-top .vsec{display:inline-flex;align-items:center;gap:5px;font-size:.75rem;color:var(--mint,#4FE3C1);white-space:nowrap}
+.viewer-top .vsec svg{width:13px;height:13px}
+.viewer-top .vclose{background:none;border:none;color:inherit;font-size:1.05rem;opacity:.7;padding:4px 8px}
+.viewer-top .vclose:hover{opacity:1}
+.viewer-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.25)}
+.viewer-body img{max-width:100%;max-height:100%;object-fit:contain}
+.viewer-body video{max-width:100%;max-height:100%}
+.viewer-body audio{width:80%}
+.viewer-body iframe{width:100%;height:100%;border:0;background:#fff}
 </style>
 
 <!-- APP -->
@@ -596,9 +611,16 @@ function renderList(g, children, canManage){
         `<span class="col-size"><span class="secured-i" title="${n.frags} fragments · AES-256-GCM · on-chain permissioned">${svg("shield")}</span> ${fmtSize(n.size)}</span>`+
         `<span class="col-share">${facepile(n)}</span><span class="col-act"></span>`;
       if(!trash){
-        const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-        dl.onclick=()=>downloadFile(n, dl); r.querySelector(".col-act").appendChild(dl);
-        if(!mine) gateOnChain(n, dl);
+        const act0=r.querySelector(".col-act");
+        if(previewKind(n.content_type)){
+          const vw=document.createElement("button"); vw.className="mini"; vw.textContent="View";
+          vw.onclick=(e)=>{e.stopPropagation();openPreview(n);}; act0.appendChild(vw);
+        }
+        if((n.access||"download")!=="view"){
+          const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
+          dl.onclick=()=>downloadFile(n, dl); act0.appendChild(dl);
+          if(!mine) gateOnChain(n, dl);
+        }
       }
     }
     const act=r.querySelector(".col-act");
@@ -633,13 +655,19 @@ function renderCards(g, children, canManage){
       const acts=document.createElement("div"); acts.className="acts";
       if(trash){ trashActions(acts, n); }
       else {
-        const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
-        dl.onclick=()=>downloadFile(n, dl); acts.appendChild(dl);
-        if(!mine) gateOnChain(n, dl);
+        if(previewKind(n.content_type)){
+          const vw=document.createElement("button"); vw.className="mini"; vw.textContent="View";
+          vw.onclick=(e)=>{e.stopPropagation();openPreview(n);}; acts.appendChild(vw);
+        }
+        if((n.access||"download")!=="view"){
+          const dl=document.createElement("button"); dl.className="mini dl"; dl.textContent="Download";
+          dl.onclick=()=>downloadFile(n, dl); acts.appendChild(dl);
+          if(!mine) gateOnChain(n, dl);
+        }
         if(canManage && mine){ const sb=document.createElement("button"); sb.className="mini"; sb.textContent="Share"; sb.onclick=()=>openShare(n); acts.appendChild(sb); t.appendChild(kebab(n)); }
       }
       t.appendChild(acts);
-      if(!mine && !trash){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name; t.appendChild(o); }
+      if(!mine && !trash){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name+(n.access==="view"?" · view only":""); t.appendChild(o); }
       if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
     }
     g.appendChild(t);
@@ -814,22 +842,61 @@ async function eraseItem(n, fromMain){
 
 /* Disable a shared file's Download button until verify() reads the grant from
  * the contract. Retries a few times — a just-written grant can take a moment to
- * be visible on every RPC node. */
+ * be visible on every RPC node. A view-only grant never enables Download. */
 async function gateOnChain(n, btn){
   btn.disabled=true; btn.classList.add("loading"); btn.title="Confirming on-chain grant…";
   btn.innerHTML='<span class="btnspin"></span>';
   for(let a=0;a<5;a++){
     try{
       const r=await api("/api/verify/"+n.id);
-      if(r.ok && (await r.json()).allowed){
-        btn.disabled=false; btn.classList.remove("loading"); btn.textContent="Download";
-        btn.title="On-chain grant confirmed"; return;
+      if(r.ok){
+        const v=await r.json();
+        if(v.allowed && v.can_download!==false){
+          btn.disabled=false; btn.classList.remove("loading"); btn.textContent="Download";
+          btn.title="On-chain grant confirmed"; return;
+        }
+        if(v.allowed && v.can_download===false){
+          btn.classList.remove("loading"); btn.textContent="View only";
+          btn.title="Your on-chain grant is view-only — use the View button"; return;
+        }
       }
     }catch(e){}
     await new Promise(res=>setTimeout(res, 1500*(a+1)));
   }
   btn.classList.remove("loading"); btn.textContent="No grant";
   btn.title="No active on-chain grant found for you";
+}
+
+/* ---- in-browser viewer (server-mediated /api/preview — no keys, no fragment
+ * URLs reach the client; the only path a view-only grant can use) ---- */
+function previewKind(ct){
+  ct=(ct||"").split(";")[0].trim().toLowerCase();
+  if(ct.startsWith("image/"))return "img";
+  if(ct.startsWith("video/"))return "video";
+  if(ct.startsWith("audio/"))return "audio";
+  if(ct==="application/pdf")return "pdf";
+  if(["text/plain","text/csv","text/markdown","application/json","text/html","application/xml","text/xml"].includes(ct))return "text";
+  return null;
+}
+function openPreview(n){
+  const kind=previewKind(n.content_type); if(!kind){ toast("No in-browser preview for this file type"); return; }
+  const src="/api/preview/"+encodeURIComponent(n.id);
+  const bg=document.createElement("div"); bg.className="viewer-bg";
+  const body= kind==="img"   ? `<img src="${src}" alt="${esc(n.name)}">`
+            : kind==="video" ? `<video src="${src}" controls autoplay controlsList="nodownload"></video>`
+            : kind==="audio" ? `<audio src="${src}" controls autoplay controlsList="nodownload"></audio>`
+            :                  `<iframe src="${src}" title="${esc(n.name)}"></iframe>`;
+  bg.innerHTML=`<div class="viewer">
+    <div class="viewer-top"><span class="vnm" title="${esc(n.name)}">${esc(n.name)}</span>
+      <span class="vsec" title="Reassembled and decrypted server-side for viewing — keys never leave Xinsere">${svg("shield")} secure view</span>
+      <button class="vclose" aria-label="Close">✕</button></div>
+    <div class="viewer-body">${body}</div></div>`;
+  const close=()=>{ if(bg.parentNode) document.body.removeChild(bg); document.removeEventListener("keydown",onKey); };
+  const onKey=(e)=>{ if(e.key==="Escape") close(); };
+  bg.querySelector(".vclose").onclick=close;
+  bg.addEventListener("click",e=>{ if(e.target===bg) close(); });
+  document.addEventListener("keydown",onKey);
+  document.body.appendChild(bg);
 }
 
 /* ---- download (on-chain check -> fetch -> verify bit-perfect) ---- */
@@ -844,6 +911,7 @@ async function downloadFile(n, btn){
     T.set("Checking permission on-chain…",{indet:true});
     const rv=await api("/api/verify/"+n.id); const v=await rv.json();
     if(!v.allowed){ done("Blockchain: no active grant for you ✗"); return; }
+    if(v.can_download===false){ done("Your access is view-only — use View instead ✗"); return; }
 
     // Preferred path: client-side reassembly. The server only issues a plan
     // (presigned fragment URLs + data keys); the browser pulls fragments straight
@@ -992,7 +1060,14 @@ grid.addEventListener("drop",e=>{ if(VIEW!=="mine")return; const fs=[...e.dataTr
 function openShare(node){
   const bg=document.createElement("div"); bg.className="modal-bg";
   bg.innerHTML=`<div class="modal"><h3>Share “${node.name}”</h3>
-    <p class="msub">${node.type==="folder"?"Everyone you add can access every file inside.":"Grant read + download access."}</p>
+    <p class="msub">${node.type==="folder"?"Everyone you add can access every file inside.":"Choose what people you add are allowed to do."}</p>
+    <div style="display:flex;align-items:center;gap:8px;margin:0 0 10px;">
+      <span class="msub" style="margin:0;">People you add can</span>
+      <select class="share-perm" style="padding:7px 10px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:13px;">
+        <option value="download">view &amp; download</option>
+        <option value="view">view only — no download</option>
+      </select>
+    </div>
     <input class="share-q" type="text" autocomplete="off" placeholder="Search people by name or email…"
       style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
     <div class="results" style="margin:6px 0 2px;max-height:220px;overflow:auto;"></div>
@@ -1009,14 +1084,17 @@ function openShare(node){
   const close=()=>{ if(bg.parentNode) document.body.removeChild(bg); };
   const refresh=()=>{ close(); openFolder(CURRENT); };
 
+  const permSel=bg.querySelector(".share-perm");
+
   // Grant to an existing user id (from typeahead) — real on-chain grant.
   async function shareUser(uid, name, btn){
     if(btn) btn.disabled=true;
     toast("Recording grant on-chain (Amoy)… a few seconds");
     const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee",uid);
+    fd.append("share_type",permSel.value);
     const r=await api("/api/share",{method:"POST",body:fd});
     if(r.ok){ const d=await r.json();
-      toast(`Shared with ${(name||"").split(" ")[0]} · on-chain proof ${(d.tx||"").slice(0,14)}…`); refresh(); }
+      toast(`Shared with ${(name||"").split(" ")[0]}${d.share_type==="view"?" (view only)":""} · on-chain proof ${(d.tx||"").slice(0,14)}…`); refresh(); }
     else { toast((await r.json()).error); if(btn) btn.disabled=false; }
   }
 
@@ -1033,10 +1111,11 @@ function openShare(node){
 
   // Current grantees, each with a revoke button.
   function renderCurrent(){
-    current.innerHTML=(node.shared_with||[]).length?`<p class="msub" style="margin:8px 0 4px;">Shared with</p>`:``;
+    current.innerHTML=(node.shared_with||[]).length?`<p class="msub" style="margin:8px 0 4px;">Shared with <span style="opacity:.65">— re-add a person to change their permission</span></p>`:``;
     (node.shared_with||[]).forEach(u=>{
       const row=document.createElement("div"); row.className="person";
-      row.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email||u.id}</span><span class="st">shared ✓</span>`;
+      const lvl=u.share_type==="view"?"view only":"can download";
+      row.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email||u.id}</span><span class="st">${lvl} ✓</span>`;
       const rm=document.createElement("button"); rm.className="rm"; rm.textContent="Revoke";
       rm.onclick=(e)=>{ e.stopPropagation(); revokeUser(u); };
       row.appendChild(rm); current.appendChild(row);
@@ -1072,6 +1151,7 @@ function openShare(node){
     const email=inv.value.trim(); if(!email) return;
     invBtn.disabled=true;
     const fd=new FormData(); fd.append("node_id",node.id); fd.append("email",email);
+    fd.append("share_type",permSel.value);
     const r=await api("/api/share",{method:"POST",body:fd});
     if(r.ok){ const d=await r.json();
       toast(d.invited ? `Invitation created for ${d.email} — they’ll get access when they join Xinsere.`

@@ -39,12 +39,18 @@ READBACK_SAMPLE = int(os.environ.get("XINSERE_BATCH_READBACK_SAMPLE", "8"))
 
 @dataclass
 class Grant:
-    """One permission to preserve: grantee `grantee_id` may read file `file_id`."""
+    """One permission to preserve: grantee `grantee_id` may access file `file_id`
+    at `grant_type` level. `download` (the default, and every pre-0016 grant)
+    uses the legacy 2-part leaf; other types bind the level into the leaf."""
     file_id: str
     grantee_id: str
+    grant_type: str = "download"
 
     def hashes(self) -> tuple[bytes, bytes]:
         return chain.file_hash(self.file_id), chain.grantee_hash(self.grantee_id)
+
+    def leaf(self) -> bytes:
+        return merkle.leaf_typed(*self.hashes(), self.grant_type)
 
 
 @dataclass
@@ -77,14 +83,14 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
     failures are isolated so one bad chunk never aborts the rest."""
     res = BatchResult()
     # Dedupe (a folder-level share can enumerate the same (file,grantee) twice).
-    uniq = list({(g.file_id, g.grantee_id): g for g in grants}.values())
+    uniq = list({(g.file_id, g.grantee_id, g.grant_type): g for g in grants}.values())
     if not uniq:
         return res
 
     for chunk in _chunks(uniq, cap):
         # Deterministic leaf order = the commitment; store leaf_index so proofs are
         # regenerable in exactly this order at audit time.
-        leaves = [merkle.leaf(*g.hashes()) for g in chunk]
+        leaves = [g.leaf() for g in chunk]
         root = merkle.root(leaves)
         root_hex = merkle.hx(root)
         try:
@@ -105,12 +111,17 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
             rows = []
             for idx, g in enumerate(chunk):
                 pf = merkle.proof(leaves, idx)
-                rows.append({
+                row = {
                     "batch_id": batch_id,
                     "merkle_root": root_hex, "file_id": g.file_id,
                     "grantee_id": g.grantee_id, "leaf": merkle.hx(leaves[idx]),
                     "leaf_index": idx, "proof": [merkle.hx(p) for p in pf],
-                })
+                }
+                # Only send the column for typed grants, so download-level shares
+                # keep working during the deploy window before migration 0016.
+                if g.grant_type and g.grant_type != "download":
+                    row["grant_type"] = g.grant_type
+                rows.append(row)
             supa.insert_batch_grants(token, rows)
 
             # READ-BACK GATE: confirm the root is anchored on-chain AND a sample of
