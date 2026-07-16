@@ -443,6 +443,40 @@ audit-logged (who investigated what, when).
 page in the file explorer; the LLM-friendly "explain" layer also becomes an MCP
 tool so an authorized agent can answer "what happened to this file?" directly.
 
+### Planned capability: Xinsere Desktop — app-first native client (decided 2026-07-15, not scheduled)
+
+A standalone Windows/macOS app — **explicitly NOT Explorer/Finder sync
+integration**. Full decision record + estimates: `docs/desktop-app-design.md`;
+underlying research (platform APIs, vendor evidence, store policies, 40
+sources): brain repo `references/research/2026-07-15-xinsere-desktop-integration.md`.
+
+**Why app-first.** Universal watermarking forbids byte-identical sync, so local
+copies would be marked derivatives and view-only files never hydrate — viewing
+lives in our viewer regardless. Auditing every web capability against "needs OS
+level?" leaves only native-app editing, and **edit-session checkout** (Box Edit
+pattern: watched working copy → each save = new immutable version → shred on
+close; no Office/Adobe/Avid plugins) closes that too. OS integration retains
+ambience only, at the price of the two hardest components in the study (CfAPI +
+File Provider) and their permanent maintenance. Deferred, not dead — it returns
+on the same core if a customer pays for it.
+
+**Pillars:** web-parity management UI · in-app secure viewer · **encrypted
+offline vault** (AES at rest, DPAPI/Keychain keys, decrypt in-app only — nothing
+Xinsere-owned ever sits plain on disk) · entitled watermarked **Export** (adds
+**device ID** to the forensic payload) · edit-session checkout · immutable-version
+conflicted-copy model · chain checks stay server-side (no wallet surface).
+
+**Build shape:** Tauri (Rust host + system webview) reusing the existing web
+front end; the Rust host becomes the shared core for iOS/Android later (~70–85%
+non-UI logic reuse).
+
+**Estimates:** P0 Windows demo prototype (shell + vault v0 + export + Word
+edit-session) ≈ 5–7 classic engineer-weeks / **~1–2 weeks at this project's
+Claude-assisted pace**; +2–3 weeks macOS parity; production beta 2–3 eng ×
+4–6 months. Deferred OS sync integration would be 4–6 eng × 9–12 months.
+Ask patent counsel (watermark-at-hydration / vault-with-entitled-export) before
+any public demo.
+
 ### Planned capability: client-side reassembly (server-as-oracle) — demo v1 SHIPPED 2026-07-07
 
 The server never assembles plaintext. After the permission check, it issues a
