@@ -915,11 +915,18 @@ function groupResults(results){
   results.forEach(n=>{ (g[assetGroup(n)]=g[assetGroup(n)]||[]).push(n); });
   return GROUP_ORDER.filter(k=>g[k]).map(k=>[k,g[k]]);
 }
+// Jump straight to an item's folder in ONE navigation. setView("mine") first
+// would load + push the home screen (flash of My Files, a phantom Back stop,
+// and a race between the two tree fetches) — switch the nav state directly.
+function openLocation(n){
+  VIEW="mine"; markNav(); $("#tools").style.visibility="visible";
+  openFolder(n.type==="folder"?n.id:(n.parent||""));
+}
 function openResult(n){
   gsClose();
-  if(n.type==="folder"){ setView("mine"); openFolder(n.id); return; }
+  if(n.type==="folder"){ openLocation(n); return; }
   if(previewKind(n.content_type)){ openPreview(n); return; }
-  setView("mine"); openFolder(n.parent||"");   // no preview: open its location
+  openLocation(n);   // no preview: open its location
 }
 const gsQ=$("#gs-q"), gsDrop=$("#gs-drop");
 let gsTimer=null, gsSeq=0, gsLast=[];
@@ -992,7 +999,7 @@ async function showSearchResults(term){
       const acts=document.createElement("span"); acts.className="row";
       if(n.type!=="folder"&&previewKind(n.content_type))
         acts.appendChild(iconBtn("eye","View",()=>openPreview(n)));
-      acts.appendChild(iconBtn("moveto","Open location",()=>{ setView("mine"); openFolder(n.type==="folder"?n.id:(n.parent||"")); }));
+      acts.appendChild(iconBtn("moveto","Open location",()=>openLocation(n)));
       r.appendChild(acts);
       g.appendChild(r);
     });
