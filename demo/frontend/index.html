@@ -173,9 +173,24 @@
   .lrow .shared,.lhead .shared{display:flex;align-items:center;}
   .lrow .shared .avatar{width:22px;height:22px;font-size:0.6rem;margin-right:-7px;border:2px solid var(--task-bg);}
   .lrow .mini.dl{font-size:0.74rem;font-weight:600;padding:5px 13px;border-radius:8px;border:0;color:#fff;background:linear-gradient(135deg,var(--violet-br),var(--violet));}
-  @media(max-width:680px){
+  /* Column responsiveness keys off the list's ACTUAL container (.main), not the
+     viewport — whether columns fit depends on the sidebar being open or a rail.
+     Tiers: full → drop Type+Shared → drop Modified. Name never collapses. */
+  .main{container-type:inline-size;}
+  @container (max-width:920px){
+    .lhead,.lrow{grid-template-columns:22px 34px minmax(0,1fr) 148px 96px 116px;}
+    .col-type,.col-share{display:none;}
+  }
+  @container (max-width:640px){
     .lhead,.lrow{grid-template-columns:22px 34px minmax(0,1fr) 120px 116px;}
-    .col-type,.col-share,.col-mod{display:none;}
+    .col-mod{display:none;}
+  }
+  /* Fallback for browsers without container queries (pre-2023). */
+  @supports not (container-type: inline-size){
+    @media(max-width:680px){
+      .lhead,.lrow{grid-template-columns:22px 34px minmax(0,1fr) 120px 116px;}
+      .col-type,.col-share,.col-mod{display:none;}
+    }
   }
   /* GRID VIEW — tightened cards */
   #grid:not(.listview) .tile{padding:13px 12px;}
@@ -195,7 +210,9 @@
   .selinfo button:hover{color:var(--text);}
 
   /* modal */
-  .modal-bg{position:fixed;inset:0;background:var(--scrim);display:grid;place-items:center;z-index:30;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+  /* Stacking: dialogs (90) and task toasts (92) must sit ABOVE the viewer (80) —
+     the viewer's share/rename/move actions open them while it's up. ctx menus 95. */
+  .modal-bg{position:fixed;inset:0;background:var(--scrim);display:grid;place-items:center;z-index:90;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
   .modal{width:360px;background:var(--bg-2);border:1px solid var(--edge-strong);border-radius:18px;padding:22px;}
   .modal h3{margin:0 0 4px;font-size:1.02rem;}
   .modal .msub{color:var(--muted);font-size:0.82rem;margin:0 0 16px;}
@@ -212,7 +229,7 @@
 
   /* Task stack: one status line per concurrent operation (downloads, uploads,
      notices) so parallel transfers never fight over a single message. */
-  .tasks{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:50;pointer-events:none;}
+  .tasks{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:92;pointer-events:none;}
   /* container ignores pointer events so it never blocks the page; each task
      card re-enables them so its Undo button is clickable */
   .task{background:var(--task-bg);border:1px solid var(--edge-strong);color:var(--text);padding:11px 16px;border-radius:12px;font-size:0.85rem;display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:300px;max-width:min(92vw,460px);box-shadow:0 18px 50px -12px rgba(0,0,0,0.7);opacity:0;transform:translateY(14px);transition:opacity .25s,transform .25s;pointer-events:auto;}
@@ -496,22 +513,35 @@ document.querySelectorAll(".theme-toggle").forEach(b=>b.addEventListener("click"
   syncThemeButtons();
 }));
 
-/* ---- collapsible sidebar (persisted; defaults to the icon rail on small displays) ---- */
+/* ---- collapsible sidebar ----
+ * Wide screens: the «/» toggle sets a persisted preference.
+ * Narrow screens (<1100px): ALWAYS auto-collapse to the icon rail on resize —
+ * the table views need the width. Expanding while narrow is a session override
+ * that resets once the window is wide again. */
 const bodyEl=document.querySelector(".body"), sideToggle=$("#side-toggle");
 if(bodyEl&&sideToggle){
-  const saved=localStorage.getItem("xin-side");
-  if(saved==="min"||(saved===null&&window.innerWidth<1100)) bodyEl.classList.add("side-min");
-  const sync=()=>{
-    const min=bodyEl.classList.contains("side-min");
+  const NARROW=1100;
+  let sideUser=localStorage.getItem("xin-side");   // wide-screen preference
+  let narrowExpand=false;                          // user expanded while narrow
+  const isNarrow=()=>window.innerWidth<NARROW;
+  const applySide=()=>{
+    const min=isNarrow()?!narrowExpand:sideUser==="min";
+    bodyEl.classList.toggle("side-min",min);
     sideToggle.querySelector(".ico").textContent=min?"»":"«";
     sideToggle.title=min?"Expand sidebar":"Collapse sidebar";
   };
   sideToggle.addEventListener("click",()=>{
-    bodyEl.classList.toggle("side-min");
-    localStorage.setItem("xin-side",bodyEl.classList.contains("side-min")?"min":"full");
-    sync();
+    const min=bodyEl.classList.contains("side-min");
+    if(isNarrow()) narrowExpand=min;
+    else { sideUser=min?"full":"min"; localStorage.setItem("xin-side",sideUser); }
+    applySide();
   });
-  sync();
+  let rT=null;
+  window.addEventListener("resize",()=>{ clearTimeout(rT); rT=setTimeout(()=>{
+    if(!isNarrow()) narrowExpand=false;
+    applySide();
+  },120); });
+  applySide();
 }
 syncThemeButtons();
 
@@ -1116,10 +1146,10 @@ function renderCards(g, children, canManage){
 }
 
 /* ---- file management: kebab menu, rename, move, delete ---- */
-function kebab(n){
+function kebab(n, opts){
   const b=document.createElement("button"); b.className="kebab"; b.innerHTML=svg("dots","dots"); b.title="More actions";
   // With a multi-selection that includes this item, ••• acts on the whole selection.
-  b.onclick=(e)=>{ e.stopPropagation(); if(SEL.size>1&&SEL.has(n.id)) openMultiCtx(e); else openCtx(e, n); };
+  b.onclick=(e)=>{ e.stopPropagation(); if(SEL.size>1&&SEL.has(n.id)) openMultiCtx(e); else openCtx(e, n, opts); };
   return b;
 }
 
@@ -1172,17 +1202,20 @@ function openMultiCtx(e){
 document.addEventListener("keydown",(e)=>{
   if(e.key==="Escape" && SEL.size){ selClear(); refreshSelUI(); }
 });
-function openCtx(e, n){
+function openCtx(e, n, opts){
   // Full action menu for ONE item — opened from the ••• kebab or a right-click.
   // Permission-aware: view/download for anyone with access, share for owner or
   // co-owner, manage (rename/move/delete/proof) for the owner only.
+  // opts.inViewer: opened from the preview overlay — drop the redundant View
+  // entry and close the viewer before destructive actions (the file is going away).
+  opts=opts||{};
   document.querySelectorAll(".ctx").forEach(el=>el.remove());
   const m=document.createElement("div"); m.className="ctx";
   const add=(icon, label, fn, danger)=>{ const x=document.createElement("button");
     x.innerHTML=svg(icon)+`<span>${label}</span>`; if(danger) x.className="danger";
     x.onclick=()=>{ m.remove(); fn(); }; m.appendChild(x); };
   const mine=ME&&n.owner===ME.id;
-  if(n.type!=="folder"&&previewKind(n.content_type)) add("eye","View",()=>openPreview(n));
+  if(!opts.inViewer&&n.type!=="folder"&&previewKind(n.content_type)) add("eye","View",()=>openPreview(n));
   if(n.type==="folder") add("download","Download as ZIP",()=>downloadFolder(n,null));
   else if((n.access||"download")!=="view") add("download","Download",()=>downloadFile(n,null));
   if(mine||n.access==="co-owner") add("share", n.type==="folder"?"Share folder":"Share", ()=>openShare(n));
@@ -1193,7 +1226,7 @@ function openCtx(e, n){
     const tx=n.shared_with&&n.shared_with[0]&&n.shared_with[0].tx;
     if(tx){ const full=tx.startsWith("0x")?tx:"0x"+tx;
       add("link", "View on-chain proof ↗", ()=>window.open("https://amoy.polygonscan.com/tx/"+full,"_blank","noopener")); }
-    add("trash", "Delete", ()=>deleteItem(n), true);
+    add("trash", "Delete", ()=>{ if(opts.onDestroy) opts.onDestroy(); deleteItem(n); }, true);
   }
   document.body.appendChild(m);
   const r=m.getBoundingClientRect();
@@ -1430,7 +1463,9 @@ function openPreview(n){
       </aside>
     </div></div>`;
   const close=()=>{ if(bg.parentNode) document.body.removeChild(bg); document.removeEventListener("keydown",onKey); };
-  const onKey=(e)=>{ if(e.key==="Escape") close(); };
+  // Esc: if a dialog (share/rename/move) is open ABOVE the viewer, let it take
+  // the keypress — closing both at once feels like the app ate the viewer.
+  const onKey=(e)=>{ if(e.key==="Escape"&&!document.querySelector(".modal-bg")) close(); };
   bg.querySelector(".vclose").onclick=close;
   bg.querySelector(".vinfo").onclick=()=>{
     const p=bg.querySelector(".viewer-info"); p.classList.toggle("hidden");
@@ -1448,7 +1483,7 @@ function openPreview(n){
     if(!mine) gateOnChain(n, dl);
   }
   if(mine||n.access==="co-owner") va.appendChild(iconBtn("share","Share",()=>openShare(n)));
-  if(mine){ const kb=kebab(n); kb.classList.add("iconbtn"); va.appendChild(kb); }
+  if(mine){ const kb=kebab(n,{inViewer:true,onDestroy:close}); kb.classList.add("iconbtn"); va.appendChild(kb); }
 
   // Provenance: live on-chain verification for THIS viewer + the contract address.
   (async()=>{
