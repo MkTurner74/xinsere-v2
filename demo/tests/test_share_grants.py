@@ -39,8 +39,10 @@ def _wire(monkeypatch, roots=("0xroot1",)):
     monkeypatch.setattr(supa, "set_batch_status",
                         lambda tok, r, s, **kw: rec["status"].append((r, s)))
     monkeypatch.setattr(CHAIN, "root_anchored", lambda root: 1)   # anchored
-    monkeypatch.setattr(CHAIN, "revoke_batch_root",
-                        lambda root: rec["revoked_roots"].append(root) or "0xrevtx")
+    # One nonce-sequenced pass over all roots; per-root result = tx hash or Exception.
+    monkeypatch.setattr(CHAIN, "revoke_batch_roots",
+                        lambda roots: [rec["revoked_roots"].append(r) or "0xrevtx"
+                                       for r in roots])
     return rec
 
 
@@ -96,10 +98,8 @@ def test_revoke_share_revokes_recorded_roots(monkeypatch):
 def test_revoke_share_fail_closed_keeps_mapping(monkeypatch):
     rec = _wire(monkeypatch, roots=("0xa1",))
     share_grants.grant_share("svc", FILES, "g", "fld_x", "share")
-
-    def _boom(root):
-        raise RuntimeError("amoy down")
-    monkeypatch.setattr(CHAIN, "revoke_batch_root", _boom)
+    monkeypatch.setattr(CHAIN, "revoke_batch_roots",
+                        lambda roots: [RuntimeError("amoy down") for _ in roots])
     out = share_grants.revoke_share("svc", "fld_x", "g")
     assert out["errors"] == 1 and out["revoked"] == 0
     assert rec["deleted"] == []          # mapping kept for retry (fail-closed)
@@ -149,6 +149,24 @@ def test_revoke_share_fails_closed_when_no_root_source_readable(monkeypatch):
     monkeypatch.setattr(supa, "derived_share_roots", _raise(RuntimeError("db down")))
     out = share_grants.revoke_share("svc", "fld_x", "g")
     assert out["errors"] == 1 and out["revoked"] == 0
+
+
+def test_revoke_share_sends_all_roots_in_one_pass(monkeypatch):
+    """Many roots (grant-on-add piles one per file added while shared) must go to
+    the chain as ONE nonce-sequenced pass — sequential per-root confirmation waits
+    blew the 300s serverless budget (2026-07-15 hang) — and a partial failure must
+    keep exactly the failed root's mapping for retry."""
+    rec = _wire(monkeypatch, roots=("0xa1", "0xb2", "0xc3"))
+    share_grants.grant_share("svc", FILES, "g", "fld_x", "share")
+    passes = []
+    monkeypatch.setattr(CHAIN, "revoke_batch_roots",
+                        lambda roots: passes.append(list(roots)) or
+                        ["0xtx1", RuntimeError("underpriced"), "0xtx3"])
+    out = share_grants.revoke_share("svc", "fld_x", "g")
+    assert len(passes) == 1 and len(passes[0]) == 3       # one pass, all roots
+    assert out["revoked"] == 2 and out["errors"] == 1
+    deleted = {r for (_, _, r) in rec["deleted"]}
+    assert deleted == {"0xa1", "0xc3"}                    # failed 0xb2 kept for retry
 
 
 def test_reanchor_share_revokes_then_regrants(monkeypatch):

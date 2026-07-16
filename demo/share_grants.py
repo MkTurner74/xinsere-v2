@@ -20,6 +20,7 @@ authorized the owner action before invoking these.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import batch_grant
 import supa
@@ -86,25 +87,52 @@ def revoke_share(svc: str, share_node: str, grantee: str) -> dict:
     if not mapped_ok and not derived_ok:
         return {"revoked": 0, "errors": 1, "roots": 0}
     revoked, errors = 0, 0
-    for root_hex in sorted(roots):
-        try:
-            root = bytes.fromhex(root_hex[2:] if root_hex.startswith("0x") else root_hex)
-            if CHAIN.root_anchored(root):          # 0 == already revoked/never anchored
-                CHAIN.revoke_batch_root(root)
+    # Classify roots with parallel view calls, then revoke the anchored ones in ONE
+    # nonce-sequenced send pass — a share can hold many grant-on-add roots (one per
+    # file added while shared), and sequential per-root confirmation waits blew the
+    # serverless request budget (2026-07-15 hang).
+    anchored: list[tuple[str, bytes]] = []      # need an on-chain revoke tx
+    cleanup: list[str] = []                     # already revoked/never anchored
+    def _classify(root_hex: str):
+        root = bytes.fromhex(root_hex[2:] if root_hex.startswith("0x") else root_hex)
+        return root, CHAIN.root_anchored(root)   # 0 == already revoked/never anchored
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = [(rh, ex.submit(_classify, rh)) for rh in sorted(roots)]
+        for root_hex, fut in futures:
             try:
-                supa.set_batch_status(svc, root_hex, "revoked")
-            except Exception:
-                pass                                # cosmetic status; on-chain revoke is truth
-            try:
-                supa.delete_share_batch(svc, share_node, grantee, root_hex)
-            except Exception:
-                pass    # mapping row may not exist (derived root); on-chain state is truth
-            revoked += 1
-        except Exception as exc:
+                root, anchored_ts = fut.result()
+                (anchored.append((root_hex, root)) if anchored_ts
+                 else cleanup.append(root_hex))
+            except Exception as exc:
+                errors += 1
+                _log.warning("root check failed node=%s grantee=%s root=%s: %s",
+                             share_node, grantee, root_hex[:12], exc)
+    results = CHAIN.revoke_batch_roots([r for _, r in anchored]) if anchored else []
+    for (root_hex, _), res in zip(anchored, results):
+        if isinstance(res, Exception):
             errors += 1
             _log.warning("revoke_batch_root failed node=%s grantee=%s root=%s: %s",
-                         share_node, grantee, root_hex[:12], exc)
+                         share_node, grantee, root_hex[:12], res)
+            continue                            # mapping kept — owner retries (fail closed)
+        _cleanup_mapping(svc, share_node, grantee, root_hex)
+        revoked += 1
+    for root_hex in cleanup:
+        _cleanup_mapping(svc, share_node, grantee, root_hex)
+        revoked += 1
     return {"revoked": revoked, "errors": errors, "roots": len(roots)}
+
+
+def _cleanup_mapping(svc: str, share_node: str, grantee: str, root_hex: str) -> None:
+    """Best-effort bookkeeping after an on-chain revoke — the chain is truth, so a
+    failed status write or a missing mapping row (derived root) is never an error."""
+    try:
+        supa.set_batch_status(svc, root_hex, "revoked")
+    except Exception:
+        pass
+    try:
+        supa.delete_share_batch(svc, share_node, grantee, root_hex)
+    except Exception:
+        pass
 
 
 def reanchor_share(svc: str, share_node: str, grantee: str,

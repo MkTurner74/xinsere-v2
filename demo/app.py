@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -855,8 +856,20 @@ async def unshare(request: Request, node_id: str = Form(...), grantee: str = For
         revoked += br["revoked"]
         errors += br["errors"]
     # Legacy per-file grants (pre-batch shares / v1 API grants) — verify-first revoke,
-    # a no-op for files that carry only a batch grant.
-    for f in files:
+    # a no-op for files that carry only a batch grant. The verify() reads run in
+    # parallel (one RPC per file; a big folder done sequentially eats the request
+    # budget); the rare active grants then revoke sequentially (nonce safety).
+    def _has_legacy(f):
+        return CHAIN.verify(f["file_id"], grantee)[0]
+    needs: list[dict] = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for f, fut in [(f, ex.submit(_has_legacy, f)) for f in files]:
+            try:
+                if fut.result():
+                    needs.append(f)
+            except Exception:
+                errors += 1
+    for f in needs:
         try:
             tx = CHAIN.revoke(f["file_id"], grantee)  # None = already inactive (retry-safe skip)
             if tx:

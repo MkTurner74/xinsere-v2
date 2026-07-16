@@ -256,5 +256,59 @@ class Chain:
         return self._send(self._contract.functions.revokeBatchRoot(root),
                           gas=BATCH_GAS_LIMIT)
 
+    def _send_many(self, fns: list, gas: int = GAS_LIMIT,
+                   receipt_timeout: int = 90) -> list:
+        """Send N contract writes in ONE nonce-sequenced pass, then await all the
+        receipts. The txs enter the mempool together and mine within a block or
+        two of each other, so N writes cost roughly one confirmation wait instead
+        of N sequential 'send, wait, send, wait' cycles — a share with many
+        grant-on-add roots must revoke inside the serverless request budget
+        (2026-07-15: sequential waits blew Vercel's 300s cap and the client saw a
+        dead connection). Returns a list aligned with `fns`: tx-hash str on
+        success, the Exception on failure. A failed SEND aborts the rest of the
+        pass (a nonce gap would strand every later tx in the mempool); a failed
+        or reverted RECEIPT affects only its own entry."""
+        self._ensure()
+        w3, acct = self._w3, self._acct
+        nonce = w3.eth.get_transaction_count(acct.address, "pending")
+        out: list = [None] * len(fns)
+        sent: list[tuple[int, object]] = []
+        for i, fn in enumerate(fns):
+            try:
+                tx = fn.build_transaction({
+                    "from": acct.address,
+                    "nonce": nonce + len(sent),
+                    "chainId": CHAIN_ID,
+                    "maxPriorityFeePerGas": w3.to_wei(PRIORITY_GWEI, "gwei"),
+                    "maxFeePerGas": w3.to_wei(MAXFEE_GWEI, "gwei"),
+                    "gas": gas,
+                })
+                signed = w3.eth.account.sign_transaction(tx, acct.key)
+                raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+                sent.append((i, w3.eth.send_raw_transaction(raw)))
+            except Exception as exc:
+                out[i] = exc
+                for j in range(i + 1, len(fns)):
+                    out[j] = RuntimeError("not sent — an earlier tx in the pass failed")
+                break
+        for i, tx_hash in sent:
+            try:
+                receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=receipt_timeout)
+                h = tx_hash.hex()
+                h = h if h.startswith("0x") else "0x" + h
+                out[i] = (h if getattr(receipt, "status", 1) == 1
+                          else RuntimeError(f"transaction reverted on-chain: {h}"))
+            except Exception as exc:
+                out[i] = exc
+        return out
+
+    def revoke_batch_roots(self, roots: list[bytes]) -> list:
+        """Revoke many anchored batch roots in one nonce-sequenced pass (see
+        _send_many). Returns tx-hash-or-Exception per root, aligned with input."""
+        self._ensure()
+        return self._send_many(
+            [self._contract.functions.revokeBatchRoot(r) for r in roots],
+            gas=BATCH_GAS_LIMIT)
+
 
 CHAIN = Chain()
