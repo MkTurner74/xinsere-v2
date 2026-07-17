@@ -740,6 +740,14 @@ AI agents increasingly handle sensitive documents: legal discovery, patient reco
 
 For large files in MediaShippers/enterprise context: the existing Chrome extension model remains valid. The API/MCP product targets ≤500MB.
 
+**Note (2026-07-15): the 500 MB cap is arbitrary, for testing only.** It is a
+stability guardrail during the build phase (`MAX_STAGED_BYTES` default), not an
+architectural limit — the staged-upload path (presigned S3 PUT + finalize) and
+client-side reassembly don't require the file to fit in function memory. Once
+the system is stable, remove/raise the cap (S3 multipart resume on the client
+is the main prerequisite for very large files). Don't let the cap appear in
+competitive positioning as a product limit.
+
 ---
 
 ## Blockchain layer (decision pending research)
