@@ -407,6 +407,79 @@ unchanged — the fragments are still randomized, just within a chosen geography
 Ties directly to **Market B — data sovereignty** (below) and Deployment Mode 3
 (BYOB), but works even in pure SaaS mode.
 
+### Planned capability: per-file replication policy — copies, regions, clouds (from the original patent; captured 2026-07-15)
+
+The original patent filing included the notion of **multiple copies requested as
+part of the API** — replicating copies as we write them to the cloud. We keep that
+capability in v2 as a **per-file, API-driven replication policy**. This is also the
+answer to the durability critique of N-of-N fragmentation: today a lost fragment
+store means a lost file (we inherit S3's durability and add none of our own). With
+replication policy, resilience becomes a **product feature the customer dials up
+per file**, not a fixed property of the platform.
+
+- **Per-file policy on write.** `POST /v1/files` takes an optional replication
+  policy alongside `region`: number of copies, regions to spread them across, and
+  cloud providers to spread them across. Example: *"this file is critically
+  important — five copies, across five regions, on three cloud providers."* Each
+  copy is a full independent fragment set (same security model per copy:
+  per-fragment keys, opaque names, randomized scatter), written at ingest time.
+- **Policy is mutable over the file's life.** A `PATCH` on the file's replication
+  policy raises or lowers it at any time; a backend job reconciles reality to the
+  policy. The motivating example: a **financial disclosure** is super-confidential
+  and mission-critical while being drafted — maximum copies, regions, and clouds —
+  but once released it's a matter of public record, and the owner dials the policy
+  down. Fewer copies requested → the reconciler cryptographically erases the
+  surplus copies. More copies requested → the reconciler replicates from an
+  existing copy and scatters the new fragment sets to the newly requested
+  regions/clouds. All policy changes and reconciliation completions land in the
+  access log (and its hourly Merkle anchor), so the replication history of a file
+  is itself tamper-evident.
+- **Seamless cloud migration falls out for free.** A customer on AWS who decides
+  to move to Azure changes the account-level (or bulk per-file) policy to include
+  an Azure copy; the reconciler replicates everything into Azure buckets —
+  bit-for-bit, SHA-256-verified against the stored whole-file hash — and once
+  verified, the customer removes AWS from the policy and the AWS copies are
+  erased. Zero-downtime, provably complete migration between clouds, with the
+  file remaining retrievable throughout. (Works equally for region migrations
+  within one cloud.)
+- **Automatic resilience.** With ≥2 copies, retrieve gains failover: if a
+  fragment of copy 1 is unavailable, the read path falls back to copy 2's
+  fragment set. Losing an entire bucket, region, or provider no longer loses the
+  file — it triggers a re-replication to restore the policy's copy count
+  (self-healing at the copy level).
+
+**What it needs (not yet built — capturing intent):**
+- **Policy schema** on the file index record: `{copies, regions[], clouds[]}` +
+  per-copy fragment-set records (the index already maps file → fragments; it
+  becomes file → copy → fragments).
+- **Multi-cloud backends.** Azure Blob / GCS equivalents of the S3 backend
+  (`StorageBackend` is already an abstraction; GCS was previously flagged as a
+  research task — this feature is the business case that justifies building it).
+- **Reconciler cron** (same pattern as `purge-expired` / `anchor-access-log`): a
+  scheduled job that diffs actual copies against policy and replicates or erases
+  to converge, with verification before any erase (never drop below policy;
+  never delete the last copy that passes hash verification).
+- **Read-path failover** across copies in `retrieve()` and in the client-side
+  reassembly plan (the plan can carry alternate fragment URLs per sequence).
+- **API surface:** policy field on `POST /v1/files`, a `PATCH
+  /v1/files/{id}/replication` endpoint, policy visibility in `GET
+  /v1/files/{id}`, and account-level default policy for the migration use case.
+- **Quota/billing hooks:** copies multiply storage and egress; per-org quota
+  accounting must count all copies.
+
+**TODO — pricing model (flagged 2026-07-15, do before building):** run the
+pricing calculations for what extra copies are worth. Each copy is roughly a
+linear multiple of raw storage cost, but the *value* is automatic resilience +
+policy-driven migration — priced as a premium tier, not as passthrough storage.
+Compare against S3 Cross-Region Replication, multi-cloud backup products, and
+migration-tooling pricing to anchor the premium. Candidate model: per-GB-month
+multiplier per additional copy, with an uplift for cross-cloud copies.
+
+Patent lineage: this restores a capability from the original filing — keep it in
+scope for the v2 patent/continuation work. Ties to **Market A/B** (resilience +
+sovereignty buyers) and complements region-scoped write above (a policy names
+regions; region-scoped write pins fragments within each).
+
 ### Planned capability: forensic file-history tool ("what happened to this file")
 
 An admin-only tool that takes any candidate file and produces a plain-English,
