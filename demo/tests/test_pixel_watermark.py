@@ -82,17 +82,59 @@ def test_wrong_key_reads_nothing():
     assert wm_pixel.detect(blob) is None
 
 
+def _flower_on_black(w=1300, h=1300, seed=3):
+    """The case that caught v1: a detailed bright subject on a FLAT black
+    background — any energy dumped into the background is instantly visible."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:h, 0:w]
+    cx, cy, r = w / 2, h / 2, min(w, h) * 0.34
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    petals = (np.sin(np.arctan2(yy - cy, xx - cx) * 9) * 0.2 + 1.0) * r
+    inside = dist < petals
+    lum = np.zeros((h, w))
+    lum[inside] = 150 + 60 * np.sin(dist[inside] / 9) + rng.normal(0, 14, int(inside.sum()))
+    rgb = np.stack([np.clip(lum * 1.15, 0, 255), np.clip(lum * 0.55, 0, 255),
+                    np.clip(lum * 0.55, 0, 255)], axis=-1).astype("uint8")
+    return Image.fromarray(rgb, "RGB"), inside
+
+
 def test_imperceptibility_bounds():
     src = _photo()
     marked = wm_pixel.embed(src, MARK16)
     a = np.asarray(src.convert("L"), dtype=np.float64)
     b = np.asarray(marked.convert("L"), dtype=np.float64)
     diff = np.abs(a - b)
-    assert diff.mean() < 3.0          # invisible on average
-    assert diff.max() <= 40           # no visible local artifacts
+    assert diff.mean() < 1.8          # invisible on average
+    assert diff.max() <= wm_pixel.D_TEX + 2   # ceiling honored (+resize interp)
     mse = ((a - b) ** 2).mean()
     psnr = 10 * np.log10(255 ** 2 / max(mse, 1e-9))
-    assert psnr > 36                  # comfortably transparent
+    assert psnr > 41                  # transparent, not merely tolerable
+
+
+def test_flat_background_stays_clean():
+    """v1 regression (Mark's flower screenshot): flat black must stay black.
+    The FAR background (outside a dilated edge band) is the visibility-critical
+    region — a thin ring hugging the high-contrast petal edge is perceptually
+    edge-masked and allowed a little more."""
+    src, inside = _flower_on_black()
+    marked = wm_pixel.embed(src, MARK16)
+    a = np.asarray(src.convert("L"), dtype=np.float64)
+    b = np.asarray(marked.convert("L"), dtype=np.float64)
+    diff = np.abs(a - b)
+    near_edge = wm_pixel._box_mean(inside.astype(float), 14) > 0.001
+    far_bg = ~near_edge
+    assert diff[far_bg].max() <= 2.0     # imperceptible on flat black
+    assert diff[far_bg].mean() < 0.6
+    assert diff[~inside].mean() < 1.0    # whole background incl. edge ring
+
+
+def test_flower_on_black_still_traces_after_screenshot():
+    src, _ = _flower_on_black()
+    marked = wm_pixel.embed(src, MARK16)
+    grabbed = Image.open(io.BytesIO(_jpeg(marked, 88)))
+    small = grabbed.resize((int(grabbed.width * 0.66), int(grabbed.height * 0.66)),
+                           Image.BILINEAR)
+    assert wm_pixel.detect(_jpeg(small, 82)) == MARK16
 
 
 def test_tiny_image_skips_pixel_mark_keeps_metadata():

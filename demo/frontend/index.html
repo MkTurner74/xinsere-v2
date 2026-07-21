@@ -1742,12 +1742,17 @@ function openPreview(n){
     const el=bg.querySelector(".vprov"); if(!el) return;
     try{
       const r=await api("/api/verify/"+n.id); const v=await r.json();
-      const how={"amoy-contract":"per-file grant","amoy-batch":"Merkle batch proof",
-                 "owner-fallback":"owner (grant not yet anchored)"}[v.source]||v.source;
-      const lvl=v.level==="view"?"view only":"view & download";
+      // The owner's rights are inherent — showing them grantee-style ("view &
+      // download", "grant not yet anchored") read as a downgrade (Mark, 2026-07-21).
+      const how=mine?"owner of record — no grant needed"
+        :{"amoy-contract":"per-file grant","amoy-batch":"Merkle batch proof",
+          "owner-fallback":"owner (grant not yet anchored)"}[v.source]||v.source;
+      const lvl=mine?"owner — view, download & share"
+        :v.level==="co-owner"?"view, download & share (co-owner)"
+        :v.level==="view"?"view only":"view & download";
       el.innerHTML=
         `<div class="vkv"><span>Access</span><b>${v.allowed?lvl:"none"}</b></div>`+
-        `<div class="vkv"><span>Verified</span><b>${v.allowed?`on-chain · ${esc(how)}`:"no active grant"}</b></div>`+
+        `<div class="vkv"><span>Verified</span><b>${v.allowed?esc(mine?how:("on-chain · "+how)):"no active grant"}</b></div>`+
         `<div class="vkv"><span>Network</span><b>Polygon Amoy</b></div>`+
         (v.contract?`<div class="vkv"><span>Contract</span><b><a class="link mono" target="_blank" rel="noopener"
            href="https://amoy.polygonscan.com/address/${esc(v.contract)}">${esc(v.contract.slice(0,10))}…${esc(v.contract.slice(-6))}</a></b></div>`:"");
