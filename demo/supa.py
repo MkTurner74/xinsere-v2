@@ -474,10 +474,27 @@ def insert_file(token: str, name: str, parent_id: str, owner: str, *, file_id: s
     return _node(rows[0])
 
 
+# A folder upload's relative path is client-supplied; a pathological or hostile one
+# (thousands of segments) would fan out into thousands of folder rows + round-trips.
+# 64 levels is deeper than any real drive tree and well under Python's recursion
+# limit for the later files_under/ancestors walks over the result.
+MAX_PATH_DEPTH = int(os.environ.get("XINSERE_MAX_PATH_DEPTH", "64"))
+
+
+class PathTooDeepError(RuntimeError):
+    """A folder-upload relative path exceeds MAX_PATH_DEPTH segments."""
+
+
 def ensure_path(token: str, rel_path: str, root: str, owner: str) -> str:
-    """Create nested folders for a relative dir path; return the leaf folder id."""
+    """Create nested folders for a relative dir path; return the leaf folder id.
+    Existing folders at each level are REUSED (idempotent), so re-uploading into the
+    same tree adds no duplicates. Rejects an absurdly deep path (PathTooDeepError)."""
+    parts = [p for p in rel_path.split("/") if p and p not in (".", "..")]
+    if len(parts) > MAX_PATH_DEPTH:
+        raise PathTooDeepError(
+            f"folder path is {len(parts)} levels deep; the limit is {MAX_PATH_DEPTH}")
     parent = root
-    for part in [p for p in rel_path.split("/") if p]:
+    for part in parts:
         kids = children(token, parent)
         existing = next((n for n in kids if n["type"] == "folder" and n["name"] == part), None)
         parent = existing["id"] if existing else insert_folder(token, part, parent, owner)["id"]
@@ -558,6 +575,9 @@ def search_nodes(token: str, q: str, limit: int = 60) -> list[dict]:
 # been applied yet, so the deploy is safe in either order. The flag avoids
 # re-paying the failed request on every call once we know the column is absent.
 _SHARE_TYPE_COLUMN = True
+# shares.not_before/not_after (0020) — flipped off once seen absent, so a pre-0020
+# deploy pays the failed request only once, then inserts perpetual shares.
+_SHARE_WINDOW_COLUMNS = True
 
 
 def _shares_select(token: str, params_with: dict, params_without: dict) -> list[dict]:
@@ -574,12 +594,31 @@ def _shares_select(token: str, params_with: dict, params_without: dict) -> list[
 
 
 def insert_share(token: str, node_id: str, grantee: str, tx: str | None,
-                 share_type: str = "download") -> dict:
+                 share_type: str = "download",
+                 not_before: int = 0, not_after: int = 0) -> dict:
     """Upsert on (node_id, grantee). share_type is always sent when the column
     exists (a re-share must be able to RESET a previous 'view' to 'download');
-    pre-0016 the key is retried without so the deploy order can't break shares."""
-    global _SHARE_TYPE_COLUMN
+    pre-0016 the key is retried without so the deploy order can't break shares.
+    `not_before`/`not_after` (unix seconds, 0 = unbounded) mirror the on-chain
+    validity window for the owner UI; dropped-and-retried if 0020 isn't applied."""
+    global _SHARE_TYPE_COLUMN, _SHARE_WINDOW_COLUMNS
     body = {"node_id": node_id, "grantee": grantee, "tx": tx}
+    # Window columns (0020) are only sent when a bound is set, and stripped-and-retried
+    # if the columns aren't there yet — so a windowless (perpetual) share is unaffected
+    # by deploy order, and a windowed one degrades to perpetual rather than 500ing.
+    if _SHARE_WINDOW_COLUMNS and (not_before or not_after):
+        try:
+            return _insert_share_row(token, {**body, "not_before": not_before,
+                                             "not_after": not_after}, share_type)
+        except SupabaseError:
+            _SHARE_WINDOW_COLUMNS = False   # pre-0020 — perpetual fallback below
+    return _insert_share_row(token, body, share_type)
+
+
+def _insert_share_row(token: str, body: dict, share_type: str) -> dict:
+    """POST a shares upsert, degrading past the share_type column if 0016 is unapplied
+    (a download-typed share can still land; a genuinely typed one re-raises)."""
+    global _SHARE_TYPE_COLUMN
     if _SHARE_TYPE_COLUMN:
         try:
             rows = _rest("POST", "/shares", token,
@@ -646,14 +685,32 @@ def shares_for_grantee(token: str, user_id: str) -> list[dict]:
 # All service-role only (RLS deny-by-default, migration 0007). The proof cache is
 # rebuildable from the manifest; the on-chain root is the source of truth.
 
+# permission_batches.not_before/not_after (0016-expiry, migration 0020) are sent
+# only when non-zero, and dropped-and-retried if the columns aren't there yet, so
+# the deploy is safe in either order (code before migration = perpetual grants).
+_BATCH_WINDOW_COLUMNS = True
+
+
 def insert_permission_batch(token: str, merkle_root: str, leaf_count: int,
-                            source: str, scope: str | None) -> dict:
+                            source: str, scope: str | None,
+                            not_before: int = 0, not_after: int = 0) -> dict:
     """Create the batch header (status='pending'). Idempotent on merkle_root so a
-    re-run of the same tree resumes rather than duplicating."""
+    re-run of the same tree resumes rather than duplicating. `not_before`/`not_after`
+    (unix seconds, 0 = unbounded) record the on-chain validity window for audit/UI."""
+    global _BATCH_WINDOW_COLUMNS
+    body = {"merkle_root": merkle_root, "leaf_count": leaf_count,
+            "source": source, "scope": scope, "status": "pending"}
+    if _BATCH_WINDOW_COLUMNS and (not_before or not_after):
+        try:
+            rows = _rest("POST", "/permission_batches", token,
+                         prefer="return=representation,resolution=merge-duplicates",
+                         json_body={**body, "not_before": not_before, "not_after": not_after})
+            return rows[0] if rows else {"merkle_root": merkle_root}
+        except SupabaseError:
+            _BATCH_WINDOW_COLUMNS = False   # pre-0020 — fall through to windowless insert
     rows = _rest("POST", "/permission_batches", token,
                  prefer="return=representation,resolution=merge-duplicates",
-                 json_body={"merkle_root": merkle_root, "leaf_count": leaf_count,
-                            "source": source, "scope": scope, "status": "pending"})
+                 json_body=body)
     return rows[0] if rows else {"merkle_root": merkle_root}
 
 

@@ -58,11 +58,19 @@ ABI = [
     # --- Merkle aggregate batch-grant path (ADR-2026-07-13) ---
     {"inputs": [{"type": "bytes32"}, {"type": "uint256"}], "name": "grantBatch",
      "outputs": [{"type": "bytes32"}], "stateMutability": "nonpayable", "type": "function"},
+    # Windowed anchor (0016-expiry): start/expiry per root, enforced in verifyBatch.
+    {"inputs": [{"type": "bytes32"}, {"type": "uint256"}, {"type": "uint256"}, {"type": "uint256"}],
+     "name": "grantBatchWindowed", "outputs": [{"type": "bytes32"}],
+     "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [{"type": "bytes32"}], "name": "revokeBatchRoot",
      "outputs": [], "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [{"type": "bytes32"}, {"type": "bytes32"}, {"type": "bytes32[]"}], "name": "verifyBatch",
      "outputs": [{"type": "bool"}], "stateMutability": "view", "type": "function"},
     {"inputs": [{"type": "bytes32"}], "name": "batchRoots",
+     "outputs": [{"type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"type": "bytes32"}], "name": "rootNotBefore",
+     "outputs": [{"type": "uint256"}], "stateMutability": "view", "type": "function"},
+    {"inputs": [{"type": "bytes32"}], "name": "rootNotAfter",
      "outputs": [{"type": "uint256"}], "stateMutability": "view", "type": "function"},
 ]
 
@@ -236,9 +244,31 @@ class Chain:
         return self._send(self._contract.functions.grantBatch(root, int(size)),
                           gas=BATCH_GAS_LIMIT)
 
+    def grant_batch_windowed(self, root: bytes, size: int,
+                             not_before: int = 0, not_after: int = 0) -> str:
+        """Anchor a batch Merkle root WITH a validity window (0016-expiry) in ONE
+        transaction — same flat gas as grant_batch, plus a start (`not_before`) and
+        expiry (`not_after`) recorded with the root. verifyBatch fails closed outside
+        [not_before, not_after], so a time-boxed share ends with no revoke tx. Unix
+        seconds; 0 = unbounded on that end. Returns the real tx hash."""
+        self._ensure()
+        if len(root) != 32:
+            raise ValueError("root must be 32 bytes")
+        return self._send(self._contract.functions.grantBatchWindowed(
+            root, int(size), int(not_before), int(not_after)), gas=BATCH_GAS_LIMIT)
+
+    def root_window(self, root: bytes) -> tuple[int, int]:
+        """(not_before, not_after) recorded for `root` — 0 means unbounded on that
+        end. Read-only, no gas. Used to display/verify a share's window off-chain."""
+        self._ensure()
+        nb = int(self._contract.functions.rootNotBefore(root).call())
+        na = int(self._contract.functions.rootNotAfter(root).call())
+        return nb, na
+
     def verify_batch(self, leaf: bytes, root: bytes, proof: list[bytes]) -> bool:
-        """Read the contract: is `leaf` proven under an anchored `root`? View call,
-        no gas. Fails closed — an unanchored/revoked root or a bad proof returns
+        """Read the contract: is `leaf` proven under an anchored `root` AND currently
+        within its validity window? View call, no gas. Fails closed — an unanchored/
+        revoked root, a not-yet-valid or expired window, or a bad proof all return
         False, so a corrupted off-chain proof cache can only block, never expose."""
         self._ensure()
         return bool(self._contract.functions.verifyBatch(leaf, root, proof).call())

@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
@@ -503,13 +504,17 @@ async def shared_by_me(request: Request):
 
 
 @app.post("/api/folder")
-async def make_folder(request: Request, name: str = Form(...), parent: str = Form(...)):
+async def make_folder(request: Request, name: str = Form(...), parent: str = Form(...),
+                      on_conflict: str = Form(None)):
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
     parent_node = supa.get_node(token, parent)
     if not parent_node or parent_node["owner"] != uid:
         raise HTTPException(status_code=403, detail="You can only add folders to your own files")
-    node = supa.insert_folder(token, name.strip() or "New folder", parent, uid)
+    clean = name.strip() or "New folder"
+    clean = _resolve_name(token, parent, clean, is_file=False,
+                          exclude_id=None, on_conflict=on_conflict)
+    node = supa.insert_folder(token, clean, parent, uid)
     return node_view(node, uid, token, _profiles_map(token))
 
 
@@ -599,10 +604,50 @@ async def finalize_upload(request: Request, key: str = Form(...), name: str = Fo
 
 # --- file management (rename / move / delete) --------------------------------
 
+def _suffix_name(name: str, is_file: bool, taken: set[str]) -> str:
+    """First ' (n)' variant of `name` not in `taken` (lowercased). For a file the
+    counter goes BEFORE the extension ('report.pdf' -> 'report (2).pdf'); a folder
+    suffixes at the end ('Docs' -> 'Docs (2)'). Mirrors Drive/OneDrive 'Keep both'."""
+    import re as _r
+    m = _r.search(r"\.([A-Za-z0-9]{1,6})$", name) if is_file else None
+    base = name[: m.start()] if m else name
+    ext = m.group(0) if m else ""
+    n = 2
+    while f"{base} ({n}){ext}".lower() in taken:
+        n += 1
+    return f"{base} ({n}){ext}"
+
+
+def _sibling_names(token: str, parent_id: str, exclude_id: str | None = None) -> set[str]:
+    """Lowercased names of the live children of `parent_id` (excluding `exclude_id`).
+    Case-insensitive so 'Report.PDF' and 'report.pdf' collide, matching how the
+    desktop file managers users know behave."""
+    return {(c["name"] or "").lower() for c in supa.children(token, parent_id)
+            if c["id"] != exclude_id}
+
+
+def _resolve_name(token: str, parent_id: str, name: str, *, is_file: bool,
+                  exclude_id: str | None, on_conflict: str | None) -> str:
+    """Return the name to actually use in `parent_id`, or raise 409 on a collision the
+    caller didn't ask to resolve. `on_conflict='keep-both'` auto-suffixes; otherwise a
+    409 carries a `suggestion` the UI offers as 'Keep both'. Cancel is the client
+    simply not retrying — there's no destructive 'replace' path (Mark 2026-07-20)."""
+    taken = _sibling_names(token, parent_id, exclude_id)
+    if name.lower() not in taken:
+        return name
+    if on_conflict == "keep-both":
+        return _suffix_name(name, is_file, taken)
+    raise HTTPException(status_code=409, detail={
+        "conflict": True, "item": name, "message": f"“{name}” already exists here",
+        "suggestion": _suffix_name(name, is_file, taken)})
+
+
 @app.post("/api/rename")
-async def rename(request: Request, node_id: str = Form(...), name: str = Form(...)):
+async def rename(request: Request, node_id: str = Form(...), name: str = Form(...),
+                 on_conflict: str = Form(None)):
     """Display-name only — fragment names carry no filename linkage, so this
-    never touches storage or the chain."""
+    never touches storage or the chain. A name already used by a sibling returns
+    409 (with a 'Keep both' suggestion) unless on_conflict='keep-both'."""
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
     node = supa.get_node(token, node_id)
@@ -611,12 +656,16 @@ async def rename(request: Request, node_id: str = Form(...), name: str = Form(..
     clean = name.strip()
     if not clean:
         raise HTTPException(status_code=400, detail="Name cannot be empty")
+    if node.get("parent"):
+        clean = _resolve_name(token, node["parent"], clean, is_file=node["type"] == "file",
+                              exclude_id=node_id, on_conflict=on_conflict)
     updated = supa.rename_node(token, node_id, clean)
     return node_view(updated, uid, token, _profiles_map(token))
 
 
 @app.post("/api/move")
-async def move(request: Request, node_id: str = Form(...), new_parent: str = Form(...)):
+async def move(request: Request, node_id: str = Form(...), new_parent: str = Form(...),
+               on_conflict: str = Form(None)):
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
     node = supa.get_node(token, node_id)
@@ -631,6 +680,14 @@ async def move(request: Request, node_id: str = Form(...), new_parent: str = For
     if node["type"] == "folder":
         if new_parent == node_id or any(a["id"] == node_id for a in supa.ancestors(token, new_parent)):
             raise HTTPException(status_code=400, detail="Cannot move a folder into itself")
+    # No-op guard: already in the destination — nothing to move (and the name check
+    # below would false-positive against the item's own current row).
+    if node.get("parent") == new_parent:
+        raise HTTPException(status_code=400, detail="Item is already in that folder")
+    # Name collision in the destination (move keeps the item's name): 409 unless the
+    # client opted into 'keep-both', in which case we move then suffix to a free name.
+    final_name = _resolve_name(token, new_parent, node["name"], is_file=node["type"] == "file",
+                               exclude_id=node_id, on_conflict=on_conflict)
 
     # Inherited-share reconciliation: moving between differently-shared folders
     # changes which ancestor folder-shares cover this subtree. Batched (Finding 2):
@@ -642,6 +699,8 @@ async def move(request: Request, node_id: str = Form(...), new_parent: str = For
     before_rows = supa.shares_covering(token, node_id)
     before = {(sh["node_id"], sh["grantee"]) for sh in before_rows}
     updated = supa.move_node(token, node_id, new_parent)
+    if final_name != node["name"]:      # 'keep both' — de-collide after the re-parent
+        updated = supa.rename_node(token, node_id, final_name)
     after_rows = supa.shares_covering(token, node_id)
     after = {(sh["node_id"], sh["grantee"]) for sh in after_rows}
     # Re-anchor at each share's own level (0016) — a view-only share stays view-only.
@@ -888,10 +947,35 @@ async def unshare(request: Request, node_id: str = Form(...), grantee: str = For
 
 # --- share / download -------------------------------------------------------
 
+def _parse_window(starts_at: str | None, expires_at: str | None) -> tuple[int, int]:
+    """Parse the share dialog's start/expiry (unix-second strings; blank = unbounded)
+    into (not_before, not_after) for the on-chain window. Rejects a non-positive or
+    ill-ordered window, and an expiry already in the past (which would anchor a grant
+    that can never verify). The frontend sends epoch seconds computed from the local
+    datetime-local value, so no server-side timezone guessing."""
+    def _one(v: str | None) -> int:
+        if v is None or str(v).strip() == "":
+            return 0
+        try:
+            n = int(float(v))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid start/expiry time")
+        if n < 0:
+            raise HTTPException(status_code=400, detail="Start/expiry time cannot be negative")
+        return n
+    nb, na = _one(starts_at), _one(expires_at)
+    if nb and na and nb >= na:
+        raise HTTPException(status_code=400, detail="The start time must be before the expiry")
+    if na and na <= int(time.time()):
+        raise HTTPException(status_code=400, detail="The expiry time is already in the past")
+    return nb, na
+
+
 @app.post("/api/share")
 async def share(request: Request, node_id: str = Form(...),
                 grantee: str = Form(None), email: str = Form(None),
-                share_type: str = Form("download")):
+                share_type: str = Form("download"),
+                starts_at: str = Form(None), expires_at: str = Form(None)):
     """Share an item. Provide either `grantee` (a user id picked from typeahead) or
     `email`. An email that already has a Xinsere account resolves to an internal
     share (granted now); an email with no account yet becomes a pending invite that
@@ -899,11 +983,17 @@ async def share(request: Request, node_id: str = Form(...),
 
     `share_type` (0016): `download` = view + download (default, today's behavior);
     `view` = browser preview only — the download endpoints refuse, and the typed
-    Merkle leaf binds the level on-chain. `co-owner` is reserved, not yet accepted."""
+    Merkle leaf binds the level on-chain. `co-owner` is reserved, not yet accepted.
+
+    `starts_at`/`expires_at` (0020, unix seconds; blank = unbounded) anchor a validity
+    WINDOW on-chain (grantBatchWindowed). Start defaults to immediate, expiry to
+    perpetual; the contract's verifyBatch fails closed outside the window, so an
+    end-dated share ends with no revoke tx."""
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
     if share_type not in ("view", "download", "co-owner"):
         raise HTTPException(status_code=400, detail="share_type must be view, download or co-owner")
+    not_before, not_after = _parse_window(starts_at, expires_at)
     node = supa.get_node(token, node_id)
     if not node:
         raise HTTPException(status_code=403, detail="You can only share items you can access")
@@ -978,9 +1068,11 @@ async def share(request: Request, node_id: str = Form(...),
                         errors += 1
                 if errors:
                     raise RuntimeError("previous level revoke failed")
-            res = share_grants.grant_share(svc, files, t, node_id, "share", share_type)
+            res = share_grants.grant_share(svc, files, t, node_id, "share", share_type,
+                                           not_before=not_before, not_after=not_after)
             last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
-            supa.insert_share(svc, node_id, t, last_tx, share_type)
+            supa.insert_share(svc, node_id, t, last_tx, share_type,
+                              not_before=not_before, not_after=not_after)
             granted_ok += 1
             results.append({"ok": True, "grantee": _public(pmap.get(t, {"id": t})), "tx": last_tx})
         except Exception as exc:
@@ -995,6 +1087,7 @@ async def share(request: Request, node_id: str = Form(...),
     return {"ok": True, "grantee": first["grantee"], "tx": first["tx"],
             "results": results, "granted": granted_ok, "failed": len(results) - granted_ok,
             "files_granted": len(files), "share_type": share_type,
+            "not_before": not_before, "not_after": not_after,
             "cascade": node["type"] == "folder"}
 
 
@@ -1430,6 +1523,11 @@ async def supabase_exc(request: Request, exc: supa.SupabaseError):
     return JSONResponse(status_code=502, content={
         "error": "A database step failed, so the action was not completed — "
                  "nothing was changed. Retry in a moment. [db_error]"})
+
+
+@app.exception_handler(supa.PathTooDeepError)
+async def path_too_deep(_request: Request, exc: supa.PathTooDeepError):
+    return JSONResponse(status_code=400, content={"error": str(exc)})
 
 
 @app.exception_handler(Exception)

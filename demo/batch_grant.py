@@ -77,10 +77,17 @@ def _now_iso() -> str:
 
 def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str | None,
              cap: int = DEFAULT_CAP, chain_client=chain.CHAIN,
-             readback_sample: int = READBACK_SAMPLE) -> BatchResult:
+             readback_sample: int = READBACK_SAMPLE,
+             not_before: int = 0, not_after: int = 0) -> BatchResult:
     """Anchor `grants` as capped Merkle batches. `supa`/`token` are the (service-role)
     Supabase client + key for the proof cache. Returns a BatchResult; per-batch
-    failures are isolated so one bad chunk never aborts the rest."""
+    failures are isolated so one bad chunk never aborts the rest.
+
+    `not_before`/`not_after` (0016-expiry, unix seconds; 0 = unbounded on that end)
+    anchor every batch with a validity window enforced on-chain by verifyBatch. A
+    future `not_before` means the grant is anchored but not yet active — the read-back
+    gate accounts for that (see below) so a legitimately not-yet-valid batch still
+    goes 'live' in the cache and starts verifying when its window opens."""
     res = BatchResult()
     # Dedupe (a folder-level share can enumerate the same (file,grantee) twice).
     uniq = list({(g.file_id, g.grantee_id, g.grant_type): g for g in grants}.values())
@@ -94,7 +101,8 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
         root = merkle.root(leaves)
         root_hex = merkle.hx(root)
         try:
-            batch = supa.insert_permission_batch(token, root_hex, len(chunk), source, scope)
+            batch = supa.insert_permission_batch(token, root_hex, len(chunk), source, scope,
+                                                 not_before=not_before, not_after=not_after)
             batch_id = batch.get("id")
 
             # 1 tx, flat gas — anchor the root. If a prior partial run already anchored
@@ -102,7 +110,9 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
             # the contract reverts on a duplicate root. Resume by (re)caching proofs +
             # read-back instead — makes the whole pass idempotent/resumable.
             if chain_client.root_anchored(root) == 0:
-                tx = chain_client.grant_batch(root, len(chunk))
+                tx = (chain_client.grant_batch_windowed(root, len(chunk), not_before, not_after)
+                      if (not_before or not_after)
+                      else chain_client.grant_batch(root, len(chunk)))
                 supa.set_batch_status(token, root_hex, "pending", tx_hash=tx)
             else:
                 tx = batch.get("tx_hash") or "already-anchored"
@@ -126,12 +136,27 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
 
             # READ-BACK GATE: confirm the root is anchored on-chain AND a sample of
             # proofs actually verify against it before we trust this batch.
-            if chain_client.root_anchored(root) == 0:
+            anchored_ts = chain_client.root_anchored(root)
+            if anchored_ts == 0:
                 raise RuntimeError("root not anchored on read-back")
+            # Window-aware read-back (0016-expiry): if this batch is anchored with a
+            # start in the FUTURE, the on-chain verifyBatch correctly returns False
+            # (not valid yet) — so we can't assert True. We instead confirm the proofs
+            # are self-consistent against the root off-chain (the exact walk the
+            # contract runs, sans the time gate) so a builder bug is still caught; the
+            # on-chain gate then activates automatically at not_before. If the window
+            # is already open, we do the full on-chain verify_batch==True read-back.
+            window_open = ((not not_before or anchored_ts >= not_before)
+                           and (not not_after or anchored_ts <= not_after))
             sample = range(len(chunk)) if not readback_sample else \
                 _sample_indices(len(chunk), readback_sample)
             for idx in sample:
-                if not chain_client.verify_batch(leaves[idx], root, merkle.proof(leaves, idx)):
+                pf = merkle.proof(leaves, idx)
+                if window_open:
+                    ok = chain_client.verify_batch(leaves[idx], root, pf)
+                else:
+                    ok = merkle.verify_like_contract(leaves[idx], root, pf)
+                if not ok:
                     raise RuntimeError(f"read-back proof failed at leaf {idx}")
 
             supa.set_batch_status(token, root_hex, "live", anchored_at=_now_iso())

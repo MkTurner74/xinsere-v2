@@ -66,7 +66,8 @@ class FakeSupa:
     def __init__(self):
         self.batches, self.grants = {}, []
 
-    def insert_permission_batch(self, token, merkle_root, leaf_count, source, scope):
+    def insert_permission_batch(self, token, merkle_root, leaf_count, source, scope,
+                                not_before=0, not_after=0):
         self.batches[merkle_root] = {"leaf_count": leaf_count, "status": "pending"}
         return self.batches[merkle_root]
 

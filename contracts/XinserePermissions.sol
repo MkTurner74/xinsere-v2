@@ -62,6 +62,25 @@ contract XinserePermissions {
         uint256 timestamp
     );
 
+    /**
+     * @dev Emitted when a batch is anchored with a validity WINDOW (start/expiry).
+     * A perpetual, immediate batch (grantBatch) emits the plain event above with an
+     * all-zero window; a time-boxed batch (grantBatchWindowed) emits this one so the
+     * immutable audit trail records the intended lifetime, not just the anchor time.
+     * @param merkleRoot Merkle root of the batch
+     * @param batchSize Number of leaves in the batch
+     * @param timestamp Anchor timestamp
+     * @param notBefore Unix time the grant becomes valid (0 = immediately)
+     * @param notAfter  Unix time the grant expires (0 = never)
+     */
+    event BatchPermissionWindowed(
+        bytes32 indexed merkleRoot,
+        uint256 batchSize,
+        uint256 timestamp,
+        uint256 notBefore,
+        uint256 notAfter
+    );
+
     // ============================================================================
     // STATE
     // ============================================================================
@@ -76,6 +95,15 @@ contract XinserePermissions {
     // The tree is built off-chain; only the root lives here. A grant is proven at
     // verify time with a Merkle proof against an anchored root (see verifyBatch).
     mapping(bytes32 => uint256) public batchRoots;
+
+    // Per-root validity window (0016-expiry). Both default to 0 for every root
+    // anchored via grantBatch (perpetual, immediate) — so existing behavior and
+    // every already-anchored root are unchanged. grantBatchWindowed sets them, and
+    // verifyBatch fails closed outside [notBefore, notAfter]. Storing the window
+    // per-root (not per-leaf) keeps grants flat-gas AND lets one share be time-boxed
+    // without re-anchoring: expiry needs no revoke tx, the chain just stops verifying.
+    mapping(bytes32 => uint256) public rootNotBefore;  // valid from (0 = immediately)
+    mapping(bytes32 => uint256) public rootNotAfter;   // expires at (0 = never)
 
     // Owner/admin addresses (who can call grant/revoke)
     // For now, only the contract deployer. In production, this would be a Lambda role.
@@ -214,6 +242,41 @@ contract XinserePermissions {
     }
 
     /**
+     * @dev Anchor a batch with a validity WINDOW [notBefore, notAfter] (0016-expiry).
+     *
+     * Identical flat-gas anchoring as grantBatch, plus two timestamps recorded with
+     * the root so verifyBatch fails closed before the start and after the expiry. A
+     * time-boxed share therefore needs NO revoke tx to end — the chain simply stops
+     * verifying at notAfter ("end-dated grants, no revoke needed").
+     *
+     * @param merkleRoot Root of the off-chain Merkle tree over the batch's leaves.
+     * @param batchSize  Number of leaves (informational, for the event).
+     * @param notBefore  Unix time the grant becomes valid. 0 = valid immediately.
+     * @param notAfter   Unix time the grant expires. 0 = never expires.
+     */
+    function grantBatchWindowed(
+        bytes32 merkleRoot,
+        uint256 batchSize,
+        uint256 notBefore,
+        uint256 notAfter
+    ) external onlyAdmin returns (bytes32) {
+        require(merkleRoot != bytes32(0), "Merkle root cannot be zero");
+        require(batchRoots[merkleRoot] == 0, "Batch root already anchored");
+        // A non-zero window must be well-ordered, else the root could never verify —
+        // reject the mistake at anchor time rather than silently anchoring a dead grant.
+        require(notBefore == 0 || notAfter == 0 || notBefore < notAfter,
+                "notBefore must precede notAfter");
+
+        batchRoots[merkleRoot] = block.timestamp;
+        rootNotBefore[merkleRoot] = notBefore;
+        rootNotAfter[merkleRoot] = notAfter;
+
+        emit BatchPermissionWindowed(merkleRoot, batchSize, block.timestamp,
+                                     notBefore, notAfter);
+        return merkleRoot;
+    }
+
+    /**
      * @dev Emergency kill of a suspect/corrupt anchored root. Every grant proven
      * against it immediately fails closed (verifyBatch returns false), so a bad
      * root is a contained, recoverable incident: revoke it and re-anchor a correct
@@ -222,6 +285,10 @@ contract XinserePermissions {
     function revokeBatchRoot(bytes32 merkleRoot) external onlyAdmin {
         require(batchRoots[merkleRoot] != 0, "Root not anchored");
         batchRoots[merkleRoot] = 0;
+        // Clear the window too so the slots are reusable and a re-anchor of the same
+        // root starts from a clean (perpetual) window unless re-specified.
+        rootNotBefore[merkleRoot] = 0;
+        rootNotAfter[merkleRoot] = 0;
         emit FilePermissionRevoked(merkleRoot, bytes32(0), block.timestamp);
     }
 
@@ -241,6 +308,16 @@ contract XinserePermissions {
     {
         if (batchRoots[root] == 0) {
             return false; // root not anchored (or revoked) -> fail closed
+        }
+        // Validity window (0016-expiry): outside [notBefore, notAfter] the grant is
+        // not yet active or already expired -> fail closed, no revoke tx required.
+        uint256 nb = rootNotBefore[root];
+        if (nb != 0 && block.timestamp < nb) {
+            return false; // not valid yet
+        }
+        uint256 na = rootNotAfter[root];
+        if (na != 0 && block.timestamp > na) {
+            return false; // expired
         }
         bytes32 computed = leaf;
         for (uint256 i = 0; i < proof.length; i++) {

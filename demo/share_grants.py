@@ -30,19 +30,23 @@ _log = logging.getLogger("xinsere.share_grants")
 
 
 def grant_share(svc: str, files: list[dict], grantee: str, share_node: str,
-                source: str, share_type: str = "download") -> batch_grant.BatchResult | None:
+                source: str, share_type: str = "download",
+                not_before: int = 0, not_after: int = 0) -> batch_grant.BatchResult | None:
     """Anchor grants for (each file, `grantee`) as capped batches and record
     the resulting root(s) under (`share_node`, `grantee`). `share_type` binds the
     permission level into each Merkle leaf (0016): `view` grants pass only the
-    preview gate, never download. Returns the BatchResult (None if there were no
-    files to grant). Raises if nothing anchored (so the caller can surface a 502
+    preview gate, never download. `not_before`/`not_after` (unix seconds, 0 =
+    unbounded) anchor a validity WINDOW enforced on-chain by verifyBatch — an
+    end-dated share needs no revoke tx. Returns the BatchResult (None if there were
+    no files to grant). Raises if nothing anchored (so the caller can surface a 502
     and the owner can retry) -- a partial anchor keeps the roots it did land and
     records them, so a retry is idempotent."""
     grants = [batch_grant.Grant(f["file_id"], grantee, share_type)
               for f in files if f.get("file_id")]
     if not grants:
         return None
-    res = batch_grant.preserve(grants, supa=supa, token=svc, source=source, scope=share_node)
+    res = batch_grant.preserve(grants, supa=supa, token=svc, source=source, scope=share_node,
+                               not_before=not_before, not_after=not_after)
     for root_hex in res.roots:
         try:
             supa.insert_share_batch(svc, share_node, grantee, root_hex)

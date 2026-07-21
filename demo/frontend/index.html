@@ -104,6 +104,14 @@
      while dragging files over it */
   .drop{border:1px solid var(--edge);border-radius:14px;transition:border-color .15s,background .15s;}
   .drop.over{border:1.5px dashed var(--mint);background:rgba(79,227,193,0.06);}
+  /* drag-to-move: dim the item being dragged; ring the folder it's over */
+  .tile.dragging,.lrow.dragging{opacity:.45;}
+  .tile.drop-target{border-color:var(--mint);box-shadow:0 0 0 2px var(--mint) inset;background:rgba(79,227,193,0.08);}
+  .lrow.drop-target{background:rgba(79,227,193,0.12);box-shadow:0 0 0 1.5px var(--mint) inset;border-radius:8px;}
+  .crumbs button.drop-target{background:rgba(79,227,193,0.16);color:var(--text);box-shadow:0 0 0 1.5px var(--mint) inset;}
+  /* inline rename input sits exactly where the name text was */
+  .rn-input{font:inherit;color:inherit;background:var(--panel-2,rgba(255,255,255,.06));
+    border:1px solid var(--mint);border-radius:6px;padding:1px 6px;margin:-2px 0;width:100%;max-width:100%;min-width:80px;box-sizing:border-box;outline:none;}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:14px;padding:16px;min-height:120px;}
   .tile{position:relative;background:var(--panel);border:1px solid var(--edge);border-radius:13px;padding:16px 14px;transition:border-color .15s,transform .1s;cursor:default;}
   .tile:hover{border-color:var(--edge-strong);}
@@ -880,7 +888,9 @@ function renderCrumbs(crumbs){
     const last=i===crumbs.length-1;
     const b=document.createElement(last?"span":"button");
     b.textContent = i===0 ? "My Files" : cr.name; if(last) b.className="cur";
-    if(!last){ b.onclick=()=>openFolder(cr.id); }
+    if(!last){ b.onclick=()=>openFolder(cr.id);
+      makeDropTarget(b, cr.id);   // drag-to-move UP a level onto an ancestor crumb
+      b.dataset.id=cr.id; }
     c.appendChild(b);
     if(!last){ const s=document.createElement("span"); s.className="sep"; s.textContent="›"; c.appendChild(s); }
   });
@@ -1098,6 +1108,7 @@ function renderList(g, children, canManage){
     if(trash){ trashActions(act, n); }
     else if(canManage && mine){ act.appendChild(iconBtn("share","Share",()=>openShare(n))); act.appendChild(kebab(n)); }
     if(!trash) wireSelect(r, r.querySelector(".selbox"), n, idx);
+    decorateItem(r, n, mine);
     g.appendChild(r);
   });
 }
@@ -1148,6 +1159,7 @@ function renderCards(g, children, canManage){
       t.prepend(box);
       wireSelect(t, box, n, idx);
     }
+    decorateItem(t, n, mine);
     g.appendChild(t);
   });
 }
@@ -1208,6 +1220,13 @@ function openMultiCtx(e){
 }
 document.addEventListener("keydown",(e)=>{
   if(e.key==="Escape" && SEL.size){ selClear(); refreshSelUI(); }
+  // F2 renames the single selected item in place (Drive/Explorer convention). Ignore
+  // while typing in a field or when a modal/preview is up, and only for your own items.
+  if(e.key==="F2" && SEL.size===1 && !/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName||""))
+     && !document.querySelector(".modal-bg, .viewer-bg")){
+    const n=nodeById([...SEL][0]);
+    if(n && ME && n.owner===ME.id){ e.preventDefault(); renameItem(n); }
+  }
 });
 function openCtx(e, n, opts){
   // Full action menu for ONE item — opened from the ••• kebab or a right-click.
@@ -1242,30 +1261,166 @@ function openCtx(e, n, opts){
   setTimeout(()=>addEventListener("click", ()=>m.remove(), {once:true}));
 }
 
-async function doRename(id, to){
-  const fd=new FormData(); fd.append("node_id",id); fd.append("name",to);
-  return api("/api/rename",{method:"POST",body:fd});
+/* ---- duplicate-name conflict (Keep both / Cancel — Mark 2026-07-20) ---- */
+// A small modal offered when the server 409s on a sibling name collision. There is
+// deliberately NO destructive "Replace" — Keep both auto-suffixes " (n)", or Cancel.
+function conflictDialog(message, suggestion){
+  return new Promise(resolve=>{
+    const bg=document.createElement("div"); bg.className="modal-bg";
+    bg.innerHTML=`<div class="modal" style="width:min(420px,92vw);max-width:none;">
+      <h3>Name already in use</h3>
+      <p class="msub">${esc(message||"An item with that name already exists here.")}</p>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px;">
+        <button class="btn full keep" type="button">Keep both — “${esc(suggestion||"")}”</button>
+        <button class="btn-ghost btn full cancel" type="button">Cancel</button>
+      </div></div>`;
+    const done=v=>{ document.removeEventListener("keydown",onKey); if(bg.parentNode) bg.remove(); resolve(v); };
+    const onKey=e=>{ if(e.key==="Escape"){ e.preventDefault(); done(false); } };
+    bg.querySelector(".keep").onclick=()=>done(true);
+    bg.querySelector(".cancel").onclick=()=>done(false);
+    bg.addEventListener("click",e=>{ if(e.target===bg) done(false); });
+    document.addEventListener("keydown",onKey);
+    document.body.appendChild(bg); bg.querySelector(".keep").focus();
+  });
 }
-async function renameItem(n){
-  const old=n.name;
-  // The extension is LOCKED to the true content type — a file can't fake or lose
-  // its real type, so you rename only the base name. Folders rename freely.
-  const ext = n.type==="file"
+// POST a management action; on a 409 name collision, offer Keep both / Cancel and
+// retry with on_conflict=keep-both. Returns the final Response, or null if cancelled.
+async function apiWithConflict(url, fields){
+  const build=extra=>{ const fd=new FormData();
+    Object.entries(Object.assign({}, fields, extra)).forEach(([k,v])=>fd.append(k,v)); return fd; };
+  let r=await api(url,{method:"POST",body:build()});
+  if(r.status===409){
+    let c={}; try{ c=(await r.json()).error||{}; }catch(_e){}
+    const keep=await conflictDialog(c.message, c.suggestion);
+    if(!keep) return null;
+    r=await api(url,{method:"POST",body:build({on_conflict:"keep-both"})});
+  }
+  return r;
+}
+
+/* ---- rename: inline edit-in-place (F2 / kebab), prompt fallback ---- */
+function renameExt(n){
+  // The extension is LOCKED to the true content type — you rename only the base.
+  return n.type==="file"
     ? (trueExt(n.content_type) || (n.name.match(/\.([A-Za-z0-9]{1,6})$/)||[])[1] || "")
     : "";
-  const base = ext ? n.name.replace(/\.[A-Za-z0-9]{1,6}$/,"") : n.name;
-  const input = prompt(ext?`Rename (the .${ext} extension is fixed):`:"Rename to:", base);
+}
+function renameItem(n){
+  // Locate this node's live tile/row and edit its name in place; fall back to a
+  // prompt if it isn't on screen (e.g. the search results renderer).
+  const el=document.querySelector('.tile[data-id="'+cssId(n.id)+'"], .lrow[data-id="'+cssId(n.id)+'"]');
+  if(el) inlineRename(el, n); else renameItemPrompt(n);
+}
+function cssId(id){ return String(id).replace(/["\\]/g,"\\$&"); }
+function inlineRename(el, n){
+  const nm=el.querySelector(".nm"); if(!nm || nm.querySelector(".rn-input")) return;
+  const ext=renameExt(n);
+  const base=ext ? n.name.replace(/\.[A-Za-z0-9]{1,6}$/,"") : n.name;
+  const old=n.name, prev=nm.innerHTML, wasDraggable=el.draggable;
+  const inp=document.createElement("input"); inp.type="text"; inp.className="rn-input";
+  inp.value=base; inp.setAttribute("aria-label","Rename "+old);
+  nm.innerHTML=""; nm.appendChild(inp); el.draggable=false;
+  inp.focus(); inp.select();
+  let settled=false;
+  const restore=()=>{ nm.innerHTML=prev; el.draggable=wasDraggable; };
+  const cancel=()=>{ if(settled)return; settled=true; restore(); };
+  const commit=async ()=>{
+    if(settled) return;
+    const b=inp.value.trim();
+    let name = ext ? (new RegExp("\\."+ext+"$","i").test(b) ? b : b+"."+ext) : b;
+    if(!name || name===old){ cancel(); return; }
+    settled=true;
+    const r=await apiWithConflict("/api/rename",{node_id:n.id, name});
+    if(r===null){ restore(); return; }                       // conflict cancelled
+    if(!r.ok){ toast("✗ "+(((await r.json().catch(()=>({}))).error)||"Rename failed")); restore(); return; }
+    const finalName=((await r.json().catch(()=>({}))).name)||name;
+    openFolder(CURRENT);
+    undoToast(`Renamed to “${finalName}”`, async ()=>{ await apiWithConflict("/api/rename",{node_id:n.id, name:old}); openFolder(CURRENT); });
+  };
+  inp.onmousedown=e=>e.stopPropagation();
+  inp.onclick=e=>e.stopPropagation();
+  inp.onkeydown=e=>{ e.stopPropagation();
+    if(e.key==="Enter"){ e.preventDefault(); commit(); }
+    else if(e.key==="Escape"){ e.preventDefault(); cancel(); } };
+  inp.onblur=commit;
+}
+async function renameItemPrompt(n){
+  const old=n.name, ext=renameExt(n);
+  const base=ext ? n.name.replace(/\.[A-Za-z0-9]{1,6}$/,"") : n.name;
+  const input=prompt(ext?`Rename (the .${ext} extension is fixed):`:"Rename to:", base);
   if(input===null) return;
-  let name;
-  if(ext){ const b=input.trim(); name = new RegExp("\\."+ext+"$","i").test(b) ? b : b+"."+ext; }
-  else name = input.trim();
+  const b=input.trim();
+  const name = ext ? (new RegExp("\\."+ext+"$","i").test(b)?b:b+"."+ext) : b;
   if(!name || name===old) return;
-  const r=await doRename(n.id, name);
-  if(!r.ok){ toast("✗ "+((await r.json()).error||"Rename failed")); return; }
+  const r=await apiWithConflict("/api/rename",{node_id:n.id, name});
+  if(r===null) return;
+  if(!r.ok){ toast("✗ "+(((await r.json().catch(()=>({}))).error)||"Rename failed")); return; }
+  const finalName=((await r.json().catch(()=>({}))).name)||name;
   openFolder(CURRENT);
-  // Rename is metadata-only and instantly reversible — offer undo instead of a
-  // confirm dialog (the pattern the UX research recommends for reversible ops).
-  undoToast(`Renamed to “${name}”`, async ()=>{ await doRename(n.id, old); openFolder(CURRENT); });
+  undoToast(`Renamed to “${finalName}”`, async ()=>{ await apiWithConflict("/api/rename",{node_id:n.id, name:old}); openFolder(CURRENT); });
+}
+
+/* ---- drag-to-move + inline-rename decoration for a rendered tile/row ---- */
+let DRAG_IDS=null;
+function nodeById(id){ return (LAST||[]).find(x=>x&&x.id===id); }
+function isNodeDrag(e){
+  return !!DRAG_IDS || (e.dataTransfer && [...e.dataTransfer.types].includes("application/x-xinsere-node"));
+}
+function decorateItem(el, n, mine){
+  el.dataset.id=n.id;
+  if(TRASH_MODE || !mine) return;   // only your own live items drag/drop
+  el.draggable=true;
+  el.addEventListener("dragstart",e=>{
+    // Dragging one of a multi-selection carries the whole selection.
+    const ids=(SEL.size>1 && SEL.has(n.id)) ? [...SEL] : [n.id];
+    DRAG_IDS=ids;
+    e.dataTransfer.effectAllowed="move";
+    try{ e.dataTransfer.setData("application/x-xinsere-node", ids.join(",")); }catch(_e){}
+    el.classList.add("dragging");
+    e.stopPropagation();
+  });
+  el.addEventListener("dragend",()=>{ DRAG_IDS=null; el.classList.remove("dragging");
+    document.querySelectorAll(".drop-target").forEach(x=>x.classList.remove("drop-target")); });
+  if(n.type==="folder") makeDropTarget(el, n.id);
+}
+function makeDropTarget(el, folderId){
+  el.addEventListener("dragover",e=>{
+    if(!isNodeDrag(e)) return;                       // let OS-file drops fall through to upload
+    if(DRAG_IDS && DRAG_IDS.includes(folderId)) return;   // can't drop onto a dragged item
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect="move"; el.classList.add("drop-target");
+  });
+  el.addEventListener("dragleave",()=>el.classList.remove("drop-target"));
+  el.addEventListener("drop",async e=>{
+    if(!isNodeDrag(e)) return;
+    e.preventDefault(); e.stopPropagation(); el.classList.remove("drop-target");
+    const ids=DRAG_IDS || (e.dataTransfer.getData("application/x-xinsere-node")||"").split(",").filter(Boolean);
+    const name=(nodeById(folderId)||{}).name;
+    await moveNodesTo(ids, folderId, name);
+  });
+}
+// Move a set of node ids into a target folder, with per-item conflict resolution
+// (Keep both / Cancel) and on-chain share reconciliation. Shared by the Move dialog
+// and drag-to-move. Silently skips items already in the destination.
+async function moveNodesTo(ids, targetId, targetName){
+  ids=(ids||[]).filter(id=>id && id!==targetId && (nodeById(id)||{}).parent!==targetId);
+  if(!ids.length) return;
+  const T=newTask(ids.length>1?`${ids.length} items`:((nodeById(ids[0])||{}).name||"item"));
+  T.set("Moving & reconciling on-chain shares…",{indet:true});
+  let ok=0, recErrors=0, failed=0, cancelled=0;
+  for(const id of ids){
+    const r=await apiWithConflict("/api/move",{node_id:id, new_parent:targetId});
+    if(r===null){ cancelled++; continue; }
+    if(r.ok){ ok++; recErrors+=(((await r.json().catch(()=>({}))).reconciliation)||{}).errors||0; }
+    else failed++;
+  }
+  const dest=targetName?` to ${targetName}`:"";
+  const probs=[failed?`${failed} failed`:"", cancelled?`${cancelled} skipped`:"",
+    recErrors?`⚠ ${recErrors} on-chain share update${recErrors>1?"s":""} failed (retry via re-share)`:""].filter(Boolean).join(" · ");
+  T.done(probs?`Moved ${ok}/${ids.length}${dest} — ${probs}`
+              :(ids.length>1?`Moved ${ok} items${dest}`:`Moved${dest}`));
+  selClear();
+  openFolder(CURRENT);
 }
 
 async function listFolders(excludeIds){
@@ -1315,20 +1470,8 @@ async function openMove(n){
     if(f.id===CURRENT) b.disabled=true;   // already here
     b.onclick=async ()=>{
       bg.remove();
-      const T=newTask(nodes.length>1?`${nodes.length} items`:nodes[0].name);
-      T.set("Moving & reconciling on-chain shares…",{indet:true});
-      let ok=0, recErrors=0, failed=0;
-      for(const x of nodes){
-        const fd=new FormData(); fd.append("node_id",x.id); fd.append("new_parent",f.id);
-        const r=await api("/api/move",{method:"POST",body:fd});
-        if(r.ok){ ok++; recErrors+=((await r.json()).reconciliation||{}).errors||0; }
-        else failed++;
-      }
-      const probs=[failed?`${failed} failed`:"", recErrors?`⚠ ${recErrors} on-chain share update${recErrors>1?"s":""} failed (retry via re-share)`:""].filter(Boolean).join(" · ");
-      T.done(probs?`Moved ${ok}/${nodes.length} to ${f.name} — ${probs}`
-                  :(nodes.length>1?`Moved ${ok} items to ${f.name}`:"Moved to "+f.name));
-      selClear();
-      openFolder(CURRENT);
+      // Shared with drag-to-move: per-item Keep both / Cancel + on-chain reconcile.
+      await moveNodesTo(nodes.map(x=>x.id), f.id, f.name);
     };
     holder.appendChild(b);
   });
@@ -1606,8 +1749,8 @@ async function downloadFile(n, btn){
 function sortNodes(a,b){ return (a.type!=="folder")-(b.type!=="folder") || (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase()); }
 $("#new-folder").addEventListener("click", async ()=>{
   const name=prompt("Folder name:"); if(!name) return;
-  const fd=new FormData(); fd.append("name",name); fd.append("parent",CURRENT);
-  const r=await api("/api/folder",{method:"POST",body:fd});
+  const r=await apiWithConflict("/api/folder",{name, parent:CURRENT});
+  if(r===null) return;   // name conflict, user cancelled
   if(!r.ok){ toast("✗ "+((await r.json()).error||"Could not create folder")); return; }
   // Optimistic: drop the returned node straight into the current view instead of
   // re-fetching the whole tree (that second round-trip made it feel slow).
@@ -1679,11 +1822,12 @@ async function uploadFiles(files, withPaths=false){
   $("#file-input").value=""; $("#folder-input").value="";
 }
 
-/* drag & drop */
+/* drag & drop — OS files here upload; an INTERNAL node drag is handled by the
+   per-item drop targets (drag-to-move), so the grid ignores it (no upload glow). */
 const grid=$("#grid");
-["dragenter","dragover"].forEach(ev=>grid.addEventListener(ev,e=>{e.preventDefault();if(VIEW==="mine")grid.classList.add("over");}));
+["dragenter","dragover"].forEach(ev=>grid.addEventListener(ev,e=>{ if(isNodeDrag(e))return; e.preventDefault(); if(VIEW==="mine")grid.classList.add("over");}));
 ["dragleave","drop"].forEach(ev=>grid.addEventListener(ev,e=>{e.preventDefault();grid.classList.remove("over");}));
-grid.addEventListener("drop",e=>{ if(VIEW!=="mine")return; const fs=[...e.dataTransfer.files]; if(fs.length) uploadFiles(fs); });
+grid.addEventListener("drop",e=>{ if(VIEW!=="mine"||isNodeDrag(e))return; const fs=[...e.dataTransfer.files]; if(fs.length) uploadFiles(fs); });
 
 /* ---- share modal ---- */
 function openShare(node){
@@ -1699,6 +1843,18 @@ function openShare(node){
       <label class="perm-opt"><input type="radio" name="share-perm" value="co-owner">
         <span><b>Co-Owner</b><i>Full access — can re-share with others</i></span></label>
     </div>
+    <details class="share-window" style="margin:2px 0 8px;">
+      <summary style="cursor:pointer;font-size:13px;color:var(--faint);user-select:none;">Access window (optional) — start &amp; expiry</summary>
+      <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
+        <label style="flex:1;min-width:180px;font-size:12px;color:var(--faint);">Starts
+          <input class="win-start" type="datetime-local"
+            style="width:100%;margin-top:3px;padding:8px 10px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:13px;color-scheme:dark;"></label>
+        <label style="flex:1;min-width:180px;font-size:12px;color:var(--faint);">Expires
+          <input class="win-expiry" type="datetime-local"
+            style="width:100%;margin-top:3px;padding:8px 10px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:13px;color-scheme:dark;"></label>
+      </div>
+      <p class="msub" style="margin:6px 0 0;font-size:11.5px;">Leave blank for immediate start / no expiry. Enforced on-chain — an expired grant simply stops verifying, no revoke needed.</p>
+    </details>
     <input class="share-q" type="text" autocomplete="off" placeholder="Search people by name or email…"
       style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
     <div class="results" style="margin:6px 0 2px;max-height:220px;overflow:auto;"></div>
@@ -1723,6 +1879,21 @@ function openShare(node){
   const permVal=()=>bg.querySelector('input[name="share-perm"]:checked').value;
   const permSel={get value(){return permVal();}};
 
+  // Access window (0020): datetime-local carries LOCAL wall time; Date.parse gives
+  // the correct epoch for the browser's tz, so we post unix seconds and the server
+  // does no tz guessing. Blank = unbounded (immediate start / never expires).
+  function appendWindow(fd){
+    const s=bg.querySelector(".win-start").value, e=bg.querySelector(".win-expiry").value;
+    if(s){ const t=Date.parse(s); if(!isNaN(t)) fd.append("starts_at", Math.floor(t/1000)); }
+    if(e){ const t=Date.parse(e); if(!isNaN(t)) fd.append("expires_at", Math.floor(t/1000)); }
+  }
+  function windowError(){
+    const s=bg.querySelector(".win-start").value, e=bg.querySelector(".win-expiry").value;
+    if(s&&e&&Date.parse(s)>=Date.parse(e)) return "The start time must be before the expiry.";
+    if(e&&Date.parse(e)<=Date.now()) return "The expiry time is already in the past.";
+    return null;
+  }
+
   // Build a recipient list first; ONE Share click then processes everyone in a
   // single request (per-person on-chain roots, but you only wait once).
   const PENDING=new Map();   // uid -> display name
@@ -1740,12 +1911,15 @@ function openShare(node){
   }
   function queueUser(uid, name){ PENDING.set(uid, (name||"").split(" ")[0]||name); renderChips(); q.value=""; results.innerHTML=""; }
   goBtn.onclick=async()=>{
+    const werr=windowError(); if(werr){ toast("✗ "+werr); return; }
     goBtn.disabled=true; goBtn.textContent="Recording grants on-chain…";
     const fd=new FormData(); fd.append("node_id",node.id);
     fd.append("grantee",[...PENDING.keys()].join(",")); fd.append("share_type",permSel.value);
+    appendWindow(fd);
     const r=await api("/api/share",{method:"POST",body:fd});
     if(r.ok){ const d=await r.json();
-      toast(`Shared with ${d.granted} ${d.granted===1?"person":"people"}${d.failed?` · ${d.failed} failed — retry`:""} · on-chain`);
+      const win=d.not_after?` · expires ${new Date(d.not_after*1000).toLocaleDateString()}`:"";
+      toast(`Shared with ${d.granted} ${d.granted===1?"person":"people"}${d.failed?` · ${d.failed} failed — retry`:""} · on-chain${win}`);
       refresh();
     } else { toast((await r.json()).error||"Share failed"); goBtn.disabled=false; renderChips(); }
   };
@@ -1809,9 +1983,11 @@ function openShare(node){
   const inv=bg.querySelector(".invite-email"); const invBtn=bg.querySelector(".invite-btn");
   async function invite(){
     const email=inv.value.trim(); if(!email) return;
+    const werr=windowError(); if(werr){ toast("✗ "+werr); return; }
     invBtn.disabled=true;
     const fd=new FormData(); fd.append("node_id",node.id); fd.append("email",email);
     fd.append("share_type",permSel.value);
+    appendWindow(fd);
     const r=await api("/api/share",{method:"POST",body:fd});
     if(r.ok){ const d=await r.json();
       toast(d.invited ? `Invitation created for ${d.email} — they’ll get access when they join Xinsere.`
