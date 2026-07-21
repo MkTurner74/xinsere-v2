@@ -23,8 +23,34 @@ import supa
 @pytest.fixture(autouse=True)
 def _reset_pending_flag():
     supa._PENDING_WINDOW_COLUMNS = True
+    supa._SHARE_WINDOW_COLUMNS = True
     yield
     supa._PENDING_WINDOW_COLUMNS = True
+    supa._SHARE_WINDOW_COLUMNS = True
+
+
+# --- supa.shares_for_node (owner UI reads per-person windows) ----------------
+
+def test_shares_for_node_selects_window(monkeypatch):
+    def fake_rest(method, path, token, params=None, json_body=None, prefer=None):
+        assert "not_before" in params["select"]
+        return [{"grantee": "u1", "tx": "0x1", "share_type": "view",
+                 "not_before": 5, "not_after": 9}]
+
+    monkeypatch.setattr(supa, "_rest", fake_rest)
+    rows = supa.shares_for_node("t", "n1")
+    assert rows[0]["not_before"] == 5 and rows[0]["not_after"] == 9
+
+
+def test_shares_for_node_pre_0020_falls_back(monkeypatch):
+    def fake_rest(method, path, token, params=None, json_body=None, prefer=None):
+        if "not_before" in params["select"]:
+            raise supa.SupabaseError(400, "column does not exist")
+        return [{"grantee": "u1", "tx": "0x1", "share_type": "download"}]
+
+    monkeypatch.setattr(supa, "_rest", fake_rest)
+    rows = supa.shares_for_node("t", "n1")
+    assert rows[0]["grantee"] == "u1" and "not_before" not in rows[0]
 
 
 # --- supa.insert_pending_share ----------------------------------------------

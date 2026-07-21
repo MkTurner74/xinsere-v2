@@ -1040,6 +1040,13 @@ async function showSearchResults(term){
 
 function facepile(n){ return (n.shared_with&&n.shared_with.length)
   ? `<span class="shared">`+n.shared_with.map(u=>avatarHtml(u)).join("")+`</span>` : ""; }
+// The avatar stack is a natural "who has this?" affordance — clicking it opens
+// the share dialog (which lists each person's level + validity window).
+function wireFacepile(el, n){
+  if(!el || !el.innerHTML.trim()) return;
+  el.style.cursor="pointer"; el.title="See who has access";
+  el.onclick=(e)=>{ e.stopPropagation(); openShare(n); };
+}
 
 /* Compact list rows (default) — the app-like layout. */
 // Column sorting: persists across navigation until changed; folders always stay
@@ -1128,7 +1135,8 @@ function renderList(g, children, canManage){
     }
     const act=r.querySelector(".col-act");
     if(trash){ trashActions(act, n); }
-    else if(canManage && mine){ act.appendChild(iconBtn("share","Share",()=>openShare(n))); act.appendChild(kebab(n)); }
+    else if(canManage && mine){ act.appendChild(iconBtn("share","Share",()=>openShare(n))); act.appendChild(kebab(n));
+      wireFacepile(r.querySelector(".col-share"), n); }
     if(!trash) wireSelect(r, r.querySelector(".selbox"), n, idx);
     decorateItem(r, n, mine);
     g.appendChild(r);
@@ -1152,7 +1160,7 @@ function renderCards(g, children, canManage){
         if(canManage && mine){ acts.appendChild(iconBtn("share","Share",()=>openShare(n))); t.appendChild(kebab(n)); }
         t.appendChild(acts);
       }
-      if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
+      if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); if(!trash&&canManage&&mine) wireFacepile(s, n); }
     } else {
       t.innerHTML=`<span class="sec-badge" title="Secured — fragmented · AES-256-GCM · on-chain permissioned · SHA-256 verified">${svg("shield")}</span>`+
         `<div class="ic">${fileIconHtml(n.name)}</div><div class="nm" title="${esc(n.name)}">${esc(n.name)}</div>`+
@@ -1174,7 +1182,7 @@ function renderCards(g, children, canManage){
       }
       t.appendChild(acts);
       if(!mine && !trash){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name+(n.access==="view"?" · view only":""); t.appendChild(o); }
-      if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); }
+      if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); if(!trash&&canManage&&mine) wireFacepile(s, n); }
     }
     if(selectable){
       const box=document.createElement("input"); box.type="checkbox"; box.className="selbox";
@@ -1990,6 +1998,13 @@ function openShare(node){
     if(granted) bits.push(`shared with ${granted} ${granted===1?"person":"people"} — recorded on-chain`);
     if(invited) bits.push(`${invited} ${invited===1?"invitation":"invitations"} sent — they'll get access when they join`);
     if(winE.value&&(granted||invited)) bits.push(`expires ${fmt(winE.value)}`);
+    // Closing the dialog doesn't cancel anything — the requests are already at the
+    // server. If it's gone by the time we finish, report through a toast instead.
+    if(!bg.parentNode){
+      toast(errors.length?`✗ ${errors.join(" · ")}`:`✓ Share finished — ${bits.join(" · ")||"nothing to do"}`);
+      if(!errors.length) openFolder(CURRENT);
+      return;
+    }
     if(errors.length){
       status(`✗ ${errors.join(" · ")}${bits.length?` — otherwise: ${bits.join(" · ")}`:""} Press Share to retry.`, true);
       goBtn.disabled=false; renderChips(); restartBtn.classList.remove("hidden");
@@ -2021,13 +2036,23 @@ function openShare(node){
     }catch(_e){ T.done("✗ Revoke didn't complete — connection lost or timed out. Retry; already-revoked files are skipped."); }
   }
 
-  // Current grantees, each with a revoke button.
+  // Current grantees, each with a revoke button and their own validity window —
+  // shares accumulate per person, so start/expiry can differ row to row.
+  function personWindow(u){
+    const now=Date.now()/1000, nb=u.not_before||0, na=u.not_after||0;
+    const f=ts=>new Date(ts*1000).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+    if(na&&na<=now)  return `<span style="color:var(--coral)">expired ${f(na)}</span>`;
+    if(nb&&nb>now)   return `<span style="color:var(--faint)">starts ${f(nb)}${na?` · until ${f(na)}`:""}</span>`;
+    if(na)           return `<span style="color:var(--faint)">until ${f(na)}</span>`;
+    return "";
+  }
   function renderCurrent(){
     current.innerHTML=(node.shared_with||[]).length?`<p class="msub" style="margin:8px 0 4px;">Shared with <span style="opacity:.65">— re-add a person to change their permission</span></p>`:``;
     (node.shared_with||[]).forEach(u=>{
       const row=document.createElement("div"); row.className="person";
       const lvl=u.share_type==="view"?"read only":u.share_type==="co-owner"?"co-owner":"download / edit";
-      row.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email||u.id}</span><span class="st">${lvl} ✓</span>`;
+      const win=personWindow(u);
+      row.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email||u.id}</span><span class="st">${lvl} ✓${win?` · ${win}`:""}</span>`;
       const rm=document.createElement("button"); rm.className="rm"; rm.textContent="Revoke";
       rm.onclick=(e)=>{ e.stopPropagation(); revokeUser(u); };
       row.appendChild(rm); current.appendChild(row);

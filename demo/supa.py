@@ -669,6 +669,20 @@ def _insert_share_row(token: str, body: dict, share_type: str) -> dict:
 
 
 def shares_for_node(token: str, node_id: str) -> list[dict]:
+    """Grantee rows for a node, with the validity window (0020) when the columns
+    exist — the owner UI shows per-person start/expiry. Falls through the same
+    degrade ladder as everything else: windowed -> typed -> legacy."""
+    global _SHARE_WINDOW_COLUMNS
+    if _SHARE_WINDOW_COLUMNS:
+        try:
+            rows = _rest("GET", "/shares", token,
+                         params={"node_id": f"eq.{node_id}",
+                                 "select": "grantee,tx,share_type,not_before,not_after"}) or []
+            for r in rows:
+                r.setdefault("share_type", "download")
+            return rows
+        except SupabaseError:
+            _SHARE_WINDOW_COLUMNS = False   # pre-0020
     return _shares_select(
         token,
         {"node_id": f"eq.{node_id}", "select": "grantee,tx,share_type"},

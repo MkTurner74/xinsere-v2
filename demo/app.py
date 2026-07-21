@@ -91,7 +91,9 @@ def node_view(node: dict, viewer: str, token: str, pmap: dict) -> dict:
         shares = supa.shares_for_node(token, node["id"])
         v["shared_with"] = [
             {**_public(pmap[s["grantee"]]), "tx": s["tx"],
-             "share_type": s.get("share_type", "download")}
+             "share_type": s.get("share_type", "download"),
+             "not_before": int(s.get("not_before") or 0),
+             "not_after": int(s.get("not_after") or 0)}
             for s in shares if s["grantee"] in pmap
         ]
     return v
