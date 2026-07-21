@@ -14,7 +14,7 @@ export const config = {
   rpcUrl: process.env.XINSERE_RPC_URL ?? 'https://rpc-amoy.polygon.technology',
   chainId: num('XINSERE_CHAIN_ID', 80002),
   contractAddress:
-    process.env.XINSERE_CONTRACT_ADDRESS ?? '0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD',
+    process.env.XINSERE_CONTRACT_ADDRESS ?? '0xF4a2f8d676a22dFd350F03159a97544c3b0fCAEf',
 
   // Separate RPC for event/log queries. The default write RPC
   // (rpc-amoy.polygon.technology) rejects eth_getLogs for any range; drpc.org

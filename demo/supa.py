@@ -341,14 +341,34 @@ def platform_admins_empty() -> bool:
 
 
 # pending share invitations (external-email sharing) ----------------------
+# pending_shares.not_before/not_after (0021) — same once-only degrade as the
+# shares/permission_batches window flags: a pre-0021 deploy pays one failed
+# request, then stores invites windowless (perpetual) until the migration lands.
+_PENDING_WINDOW_COLUMNS = True
+
 
 def insert_pending_share(token: str, node_id: str, email: str, invited_by: str,
-                         share_type: str = "download") -> dict:
+                         share_type: str = "download",
+                         not_before: int = 0, not_after: int = 0) -> dict:
     """Create (or keep) a pending invite for an email with no account yet. Idempotent
-    on (node_id, email) via merge-duplicates so re-inviting doesn't error."""
+    on (node_id, email) via merge-duplicates so re-inviting doesn't error (and a
+    re-invite REFRESHES the stored window/type — last invite wins, like a re-share).
+    `not_before`/`not_after` (unix seconds, 0 = unbounded) carry the share dialog's
+    validity window to first-login materialization; stripped-and-retried if 0021
+    isn't applied yet, so the invite degrades to perpetual rather than 500ing."""
+    global _PENDING_WINDOW_COLUMNS
     body = {"node_id": node_id, "email": email.strip().lower(), "invited_by": invited_by}
     if share_type and share_type != "download":   # pre-0016 tolerance
         body["share_type"] = share_type
+    if _PENDING_WINDOW_COLUMNS and (not_before or not_after):
+        try:
+            rows = _rest("POST", "/pending_shares", token,
+                         prefer="return=representation,resolution=merge-duplicates",
+                         json_body={**body, "not_before": not_before,
+                                    "not_after": not_after})
+            return rows[0] if rows else {"node_id": node_id, "email": email}
+        except SupabaseError:
+            _PENDING_WINDOW_COLUMNS = False   # pre-0021 — windowless fallback below
     rows = _rest("POST", "/pending_shares", token,
                  prefer="return=representation,resolution=merge-duplicates",
                  json_body=body)
@@ -356,16 +376,23 @@ def insert_pending_share(token: str, node_id: str, email: str, invited_by: str,
 
 
 def pending_shares_for_email(token: str, email: str) -> list[dict]:
-    try:
-        rows = _rest("GET", "/pending_shares", token,
-                     params={"email": f"eq.{email.strip().lower()}",
-                             "select": "id,node_id,invited_by,share_type"}) or []
-    except SupabaseError:   # pre-0016
-        rows = _rest("GET", "/pending_shares", token,
-                     params={"email": f"eq.{email.strip().lower()}",
-                             "select": "id,node_id,invited_by"}) or []
+    params = {"email": f"eq.{email.strip().lower()}"}
+    selects = ["id,node_id,invited_by,share_type,not_before,not_after",  # 0021
+               "id,node_id,invited_by,share_type",                       # 0016
+               "id,node_id,invited_by"]                                  # legacy
+    rows = []
+    for i, sel in enumerate(selects):
+        try:
+            rows = _rest("GET", "/pending_shares", token,
+                         params={**params, "select": sel}) or []
+            break
+        except SupabaseError:
+            if i == len(selects) - 1:
+                raise
     for r in rows:
         r.setdefault("share_type", "download")
+        r.setdefault("not_before", 0)
+        r.setdefault("not_after", 0)
     return rows
 
 

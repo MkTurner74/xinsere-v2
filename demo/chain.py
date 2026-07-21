@@ -27,7 +27,7 @@ CHAIN_ID = int(os.environ.get("XINSERE_CHAIN_ID", "80002"))
 # Cutover 2026-07-13: the batch-grant contract (grantBatch/verifyBatch). Replaces the
 # pre-batch contract 0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD (owner-only grants,
 # no external grants to migrate). Env override wins for staged rollout.
-CONTRACT = os.environ.get("XINSERE_CONTRACT_ADDRESS", "0xec2aFB351e45568D0B0A7af606e69Bab4db8ee85")
+CONTRACT = os.environ.get("XINSERE_CONTRACT_ADDRESS", "0xF4a2f8d676a22dFd350F03159a97544c3b0fCAEf")
 # The signer key secret. NB: the secret is (legacy-)named "polygon-mumbai" even
 # though the chain is Amoy — matches lambdas/blockchain/config.ts and the actual
 # Secrets Manager entry. The prior "polygon-amoy" default didn't exist and 500'd

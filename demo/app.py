@@ -306,11 +306,17 @@ def _reconcile_pending(user_id: str, email: str) -> dict:
     share to this email, grant the invitee on-chain (per file) and insert the real
     share row, then drop the stub. Best-effort — a chain hiccup must not block
     login (RLS lets them SEE shared items; the grant governs download and a re-share
-    repairs it). Runs with the service-role key."""
+    repairs it). Runs with the service-role key.
+
+    The stub's validity window (0021) is carried into the grant: the batch anchors
+    via grantBatchWindowed so verifyBatch enforces the same start/expiry the owner
+    set in the share dialog. An invite whose window already CLOSED before the
+    invitee joined is dropped without spending gas — there is nothing to grant that
+    could ever verify."""
     if not email:
         return {"materialized": 0}
     svc = supa.SERVICE_ROLE_KEY
-    done = 0
+    done = expired = 0
     try:
         pending = supa.pending_shares_for_email(svc, email)
     except Exception:
@@ -318,23 +324,30 @@ def _reconcile_pending(user_id: str, email: str) -> dict:
     for p in pending:
         node_id = p["node_id"]
         stype = p.get("share_type", "download")
+        nb, na = int(p.get("not_before") or 0), int(p.get("not_after") or 0)
         try:
+            if na and na <= int(time.time()):
+                supa.delete_pending_share(svc, p["id"])
+                expired += 1
+                continue
             files = supa.files_under(svc, node_id)
             last_tx = None
             try:
                 res = share_grants.grant_share(svc, files, user_id, node_id,
-                                               "reconcile-invite", stype)
+                                               "reconcile-invite", stype,
+                                               not_before=nb, not_after=na)
                 last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
             except Exception as exc:
                 logging.getLogger("xinsere.app").warning(
                     "pending-share grant failed node=%s grantee=%s: %s", node_id, user_id, exc)
-            supa.insert_share(svc, node_id, user_id, last_tx, stype)
+            supa.insert_share(svc, node_id, user_id, last_tx, stype,
+                              not_before=nb, not_after=na)
             supa.delete_pending_share(svc, p["id"])
             done += 1
         except Exception as exc:
             logging.getLogger("xinsere.app").warning(
                 "pending-share reconcile failed node=%s email=%s: %s", node_id, email, exc)
-    return {"materialized": done}
+    return {"materialized": done, "expired": expired}
 
 
 @app.get("/api/search")
@@ -1020,8 +1033,10 @@ async def share(request: Request, node_id: str = Form(...),
             if not supa.SERVICE_ROLE_KEY:
                 raise HTTPException(status_code=500, detail="Service role key not configured")
             supa.insert_pending_share(supa.SERVICE_ROLE_KEY, node_id, addr, uid,
-                                      share_type)  # no gas
+                                      share_type, not_before=not_before,
+                                      not_after=not_after)  # no gas
             return {"ok": True, "invited": True, "email": addr, "share_type": share_type,
+                    "not_before": not_before, "not_after": not_after,
                     "message": "Invitation created — they'll get access as soon as they join Xinsere."}
 
     if not grantee:
