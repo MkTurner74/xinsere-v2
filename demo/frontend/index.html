@@ -902,7 +902,13 @@ function renderFolderActs(folder, crumbs){
   box.innerHTML="";
   const root=!crumbs || crumbs.length<2;                 // no actions on My Files root
   const mine=ME && folder.owner===ME.id;
-  if(root || (!mine && folder.access!=="co-owner")){ box.style.display="none"; return; }
+  // A co-owner arrives via "Shared with me", where the whole toolbar is hidden —
+  // show it for the folder actions but keep the create/upload buttons owner-view-only.
+  const creating=VIEW==="mine";
+  ["new-folder","up-folder","up-file"].forEach(id=>{ const b=$("#"+id); if(b) b.style.display=creating?"":"none"; });
+  const show=!root && (mine || folder.access==="co-owner");
+  $("#tools").style.visibility=(creating||show)?"visible":"hidden";
+  if(!show){ box.style.display="none"; return; }
   const mk=(label,fn,primary)=>{ const b=document.createElement("button");
     b.className=(primary?"btn":"btn-ghost btn"); b.textContent=label; b.onclick=fn; return b; };
   box.appendChild(mk("Share folder", ()=>openShare(folder)));
@@ -1163,9 +1169,14 @@ function renderList(g, children, canManage){
       }
     }
     const act=r.querySelector(".col-act");
+    // Co-owners can re-share (0016), so they get the Share icon too — previously
+    // owner-only, so Jeremy saw no Share anywhere on a co-owned tree (2026-07-21).
+    const canShare=!trash && (mine ? canManage : n.access==="co-owner");
     if(trash){ trashActions(act, n); }
-    else if(canManage && mine){ act.appendChild(iconBtn("share","Share",()=>openShare(n))); act.appendChild(kebab(n));
-      wireFacepile(r.querySelector(".col-share"), n); }
+    else {
+      if(canShare) act.appendChild(iconBtn("share","Share",()=>openShare(n)));
+      if(canManage && mine){ act.appendChild(kebab(n)); wireFacepile(r.querySelector(".col-share"), n); }
+    }
     if(!trash) wireSelect(r, r.querySelector(".selbox"), n, idx);
     decorateItem(r, n, mine);
     g.appendChild(r);
@@ -1186,7 +1197,8 @@ function renderCards(g, children, canManage){
       else {
         const acts=document.createElement("div"); acts.className="acts";
         acts.appendChild(iconBtn("download","Download folder as ZIP",(e,b)=>{ if(SEL.size>1&&SEL.has(n.id)) bulkDownload(selNodes()); else downloadFolder(n,b); },"dl"));
-        if(canManage && mine){ acts.appendChild(iconBtn("share","Share",()=>openShare(n))); t.appendChild(kebab(n)); }
+        if(mine ? canManage : n.access==="co-owner") acts.appendChild(iconBtn("share","Share",()=>openShare(n)));
+        if(canManage && mine) t.appendChild(kebab(n));
         t.appendChild(acts);
       }
       if(n.shared_with&&n.shared_with.length){ const s=document.createElement("div"); s.className="shared"; s.innerHTML=facepile(n).replace(/^<span class="shared">|<\/span>$/g,""); t.appendChild(s); if(!trash&&canManage&&mine) wireFacepile(s, n); }
@@ -1207,7 +1219,8 @@ function renderCards(g, children, canManage){
           acts.appendChild(dl);
           if(!mine) gateOnChain(n, dl);
         }
-        if(canManage && mine){ acts.appendChild(iconBtn("share","Share",()=>openShare(n))); t.appendChild(kebab(n)); }
+        if(mine ? canManage : n.access==="co-owner") acts.appendChild(iconBtn("share","Share",()=>openShare(n)));
+        if(canManage && mine) t.appendChild(kebab(n));
       }
       t.appendChild(acts);
       if(!mine && !trash){ const o=document.createElement("div"); o.className="owner"; o.textContent="from "+n.owner_name+(n.access==="view"?" · view only":""); t.appendChild(o); }
