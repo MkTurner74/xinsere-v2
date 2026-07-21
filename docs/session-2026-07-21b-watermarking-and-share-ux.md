@@ -42,6 +42,36 @@ windowed contract `0xF4a2f8d6…`, pending-invite windows (0021), share dialog r
 - Screen grab / re-photograph → nothing reliably traces yet. The audit log
   (who previewed, when) is the backstop.
 
+### Office (docx/xlsx/pptx) trace — verified scope (2026-07-21)
+The mark is an OOXML **custom document property** (a first-class Office feature,
+File > Info > Properties > Advanced), chosen because editors preserve it where a
+foreign zip entry would be dropped.
+
+IN scope — trace survives (verified via a real python-docx edit+save that
+rebuilds the package the way Word does; the property + XIN-FWM mark round-trip):
+- Forwarding / copying the file unchanged.
+- **Editing and re-saving in the NATIVE format** in Word / Excel / PowerPoint.
+
+OUT of scope / not guaranteed:
+- **Save-As to a different format** (.doc, .odt, .pdf, Pages) — property can be
+  dropped/transformed. NOT verified against real MS Word in this env
+  (reasonable-confidence claim, not proven).
+- **Editing in a different app** (LibreOffice, Google Docs, Pages) — round-trip
+  varies by app.
+- **Explicit deletion** of the custom property by the user.
+- **Screenshot / print-to-image** of the document — the mark is in the file
+  structure, not the rendered pixels (same screenshot limit as everything else).
+
+Headline for the team: "survives normal editing and re-saving; NOT format
+conversion or screen capture."
+
+### Known follow-up (fold into the policy-matrix session)
+- **Duplicate-property on re-serve:** each serve appends another `XinsereFWM`
+  custom property, so a file downloaded twice carries two marks. `extract()`
+  handles it (returns both IDs), but de-dupe on embed (update-in-place if a
+  Xinsere property already exists) for cleanliness. Also aligns the pid used by
+  the new-file path (pid=2) vs the append-to-existing path (pid=99).
+
 ## NEXT SESSION — definitive scope (Mark, 2026-07-21)
 1. **Marking-policy matrix** (admin): previews vs downloads × per-format defaults
    (production formats — ProRes/DNxHD/EXR/uncompressed, and pre-res stills —
