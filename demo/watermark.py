@@ -79,6 +79,17 @@ def text(content: bytes, mark: str) -> bytes:
 def image(content: bytes, mark: str, base_type: str) -> tuple[bytes, str]:
     from PIL import Image, PngImagePlugin
     img = Image.open(io.BytesIO(content))
+    # Phase 2 (2026-07-21): invisible keyed pixel-domain mark — survives
+    # screenshots/rescale, which the metadata channels below never could.
+    # Fail-open: embed() returns None on tiny/odd images and we keep serving
+    # with metadata-only marks.
+    try:
+        import wm_pixel
+        marked = wm_pixel.embed(img, mark[len(_MARK_PREFIX):])
+        if marked is not None:
+            img = marked
+    except Exception:   # noqa: BLE001 — marking must never break the serve
+        pass
     out = io.BytesIO()
     if base_type == "image/png" or img.mode in ("RGBA", "LA", "P"):
         info = PngImagePlugin.PngInfo()
@@ -183,6 +194,14 @@ def extract(content: bytes) -> list[str]:
             m = raw.decode("ascii", "ignore")
             if m.startswith(_MARK_PREFIX):
                 found.add(m)
+    except Exception:   # noqa: BLE001
+        pass
+    # Phase-2 pixel-domain channel (screenshots/rescans of images).
+    try:
+        import wm_pixel
+        hex16 = wm_pixel.detect(content)
+        if hex16:
+            found.add(_MARK_PREFIX + hex16)
     except Exception:   # noqa: BLE001
         pass
     return sorted(found)
