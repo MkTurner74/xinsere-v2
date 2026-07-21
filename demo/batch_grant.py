@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -29,6 +30,26 @@ import chain
 import merkle
 
 _log = logging.getLogger("xinsere.batch_grant")
+
+# Read-after-write retry for the read-back gate. Load-balanced public RPCs
+# (publicnode et al.) can serve an eth_call from a node a block behind the one
+# that just mined our anchor tx — the tx receipt is confirmed, yet an immediate
+# rootAnchored read returns 0 and the batch wrongly failed (2026-07-21). Poll a
+# few times before declaring failure; fail-closed semantics are unchanged.
+READBACK_ATTEMPTS = int(os.environ.get("XINSERE_READBACK_ATTEMPTS", "5"))
+READBACK_DELAY_S = float(os.environ.get("XINSERE_READBACK_DELAY_S", "1.5"))
+
+
+def _anchored_with_retry(chain_client, root: bytes) -> int:
+    """rootAnchored(root), retried across READBACK_ATTEMPTS to ride out RPC lag.
+    Returns the anchored timestamp, or 0 if it never appears."""
+    for i in range(READBACK_ATTEMPTS):
+        ts = chain_client.root_anchored(root)
+        if ts:
+            return ts
+        if i < READBACK_ATTEMPTS - 1:
+            time.sleep(READBACK_DELAY_S)
+    return 0
 
 DEFAULT_CAP = int(os.environ.get("XINSERE_BATCH_MAX", "1000"))
 # How many proofs to re-verify on-chain after anchoring before trusting a batch.
@@ -110,10 +131,19 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
             # the contract reverts on a duplicate root. Resume by (re)caching proofs +
             # read-back instead — makes the whole pass idempotent/resumable.
             if chain_client.root_anchored(root) == 0:
-                tx = (chain_client.grant_batch_windowed(root, len(chunk), not_before, not_after)
-                      if (not_before or not_after)
-                      else chain_client.grant_batch(root, len(chunk)))
-                supa.set_batch_status(token, root_hex, "pending", tx_hash=tx)
+                try:
+                    tx = (chain_client.grant_batch_windowed(root, len(chunk), not_before, not_after)
+                          if (not_before or not_after)
+                          else chain_client.grant_batch(root, len(chunk)))
+                    supa.set_batch_status(token, root_hex, "pending", tx_hash=tx)
+                except Exception as exc:
+                    # A revert here is almost certainly "Batch root already anchored":
+                    # the pre-check above read a lagging RPC node. Confirm with the
+                    # retrying read; anything else is a genuine failure.
+                    if "revert" not in str(exc).lower() \
+                       or not _anchored_with_retry(chain_client, root):
+                        raise
+                    tx = batch.get("tx_hash") or "already-anchored"
             else:
                 tx = batch.get("tx_hash") or "already-anchored"
 
@@ -136,7 +166,8 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
 
             # READ-BACK GATE: confirm the root is anchored on-chain AND a sample of
             # proofs actually verify against it before we trust this batch.
-            anchored_ts = chain_client.root_anchored(root)
+            # (Retried — see _anchored_with_retry for the RPC-lag rationale.)
+            anchored_ts = _anchored_with_retry(chain_client, root)
             if anchored_ts == 0:
                 raise RuntimeError("root not anchored on read-back")
             # Window-aware read-back (0016-expiry): if this batch is anchored with a
@@ -154,6 +185,9 @@ def preserve(grants: list[Grant], *, supa, token: str, source: str, scope: str |
                 pf = merkle.proof(leaves, idx)
                 if window_open:
                     ok = chain_client.verify_batch(leaves[idx], root, pf)
+                    if not ok:   # one lag retry — same balancer caveat as the anchor read
+                        time.sleep(READBACK_DELAY_S)
+                        ok = chain_client.verify_batch(leaves[idx], root, pf)
                 else:
                     ok = merkle.verify_like_contract(leaves[idx], root, pf)
                 if not ok:

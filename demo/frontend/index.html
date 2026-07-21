@@ -1337,9 +1337,12 @@ function renameExt(n){
 }
 function renameItem(n){
   // Locate this node's live tile/row and edit its name in place; fall back to a
-  // prompt if it isn't on screen (e.g. the search results renderer).
+  // prompt if it isn't on screen (e.g. the search results renderer) — or if the
+  // preview overlay is up: the tile is in the DOM but COVERED, so the inline
+  // input was invisible and the overlay stole focus straight back, committing an
+  // unchanged name — rename "did nothing" (Mark, 2026-07-21).
   const el=document.querySelector('.tile[data-id="'+cssId(n.id)+'"], .lrow[data-id="'+cssId(n.id)+'"]');
-  if(el) inlineRename(el, n); else renameItemPrompt(n);
+  if(el && !document.querySelector(".viewer-bg")) inlineRename(el, n); else renameItemPrompt(n);
 }
 function cssId(id){ return String(id).replace(/["\\]/g,"\\$&"); }
 function inlineRename(el, n){
@@ -1386,6 +1389,10 @@ async function renameItemPrompt(n){
   if(r===null) return;
   if(!r.ok){ toast("✗ "+(((await r.json().catch(()=>({}))).error)||"Rename failed")); return; }
   const finalName=((await r.json().catch(()=>({}))).name)||name;
+  n.name=finalName;
+  // If the preview overlay is showing this file, update its title in place.
+  const vnm=document.querySelector(".viewer-top .vnm");
+  if(vnm && vnm.textContent===old) vnm.textContent=finalName;
   openFolder(CURRENT);
   undoToast(`Renamed to “${finalName}”`, async ()=>{ await apiWithConflict("/api/rename",{node_id:n.id, name:old}); openFolder(CURRENT); });
 }
@@ -2052,10 +2059,14 @@ function openShare(node){
       const row=document.createElement("div"); row.className="person";
       const lvl=u.share_type==="view"?"read only":u.share_type==="co-owner"?"co-owner":"download / edit";
       const win=personWindow(u);
-      row.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email||u.id}</span><span class="st">${lvl} ✓${win?` · ${win}`:""}</span>`;
-      const rm=document.createElement("button"); rm.className="rm"; rm.textContent="Revoke";
-      rm.onclick=(e)=>{ e.stopPropagation(); revokeUser(u); };
-      row.appendChild(rm); current.appendChild(row);
+      const via=u.inherited?` · <span style="color:var(--faint)" title="Shared on the folder — manage it there">via “${esc(u.via||"parent folder")}”</span>`:"";
+      row.innerHTML=`${avatarHtml(u)}<span class="nm">${u.name||u.email||u.id}</span><span class="st">${lvl} ✓${win?` · ${win}`:""}${via}</span>`;
+      if(!u.inherited){
+        const rm=document.createElement("button"); rm.className="rm"; rm.textContent="Revoke";
+        rm.onclick=(e)=>{ e.stopPropagation(); revokeUser(u); };
+        row.appendChild(rm);
+      }
+      current.appendChild(row);
     });
   }
   renderCurrent();
@@ -2064,7 +2075,9 @@ function openShare(node){
   // email address ALSO offers an invite row (unless it matches a network profile),
   // so new people queue as chips exactly like people already on Xinsere.
   const q=bg.querySelector(".share-q"); let timer=null, seq=0;
-  const sharedIds=new Set((node.shared_with||[]).map(s=>s.id));
+  // Inherited entries don't block a direct re-add — sharing directly on this node
+  // can RAISE the person's level above what the folder share gave them.
+  const sharedIds=new Set((node.shared_with||[]).filter(s=>!s.inherited).map(s=>s.id));
   const EMAIL_RE=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   function inviteRow(term){
     const b=document.createElement("button"); b.className="person"; b.type="button";

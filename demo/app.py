@@ -75,7 +75,13 @@ def _profiles_map(token: str) -> dict:
     return {p["id"]: p for p in supa.list_profiles(token)}
 
 
-def node_view(node: dict, viewer: str, token: str, pmap: dict) -> dict:
+def node_view(node: dict, viewer: str, token: str, pmap: dict,
+              inherited: list[dict] | None = None) -> dict:
+    """`inherited` (optional): share rows from the node's ancestor chain, each with a
+    `via` folder name. A folder share is ONE row on the folder, so without these the
+    files inside showed no sign of being shared (Jeremy, 2026-07-21). A direct share
+    on this node wins over an inherited one for the same grantee (it can raise the
+    level); inherited entries are marked so the UI shows "via folder" and no Revoke."""
     owner = pmap.get(node["owner"])
     v = {
         "id": node["id"], "type": node["type"], "name": node["name"],
@@ -88,14 +94,21 @@ def node_view(node: dict, viewer: str, token: str, pmap: dict) -> dict:
                  content_type=node.get("content_type", "application/octet-stream"),
                  sha256=node.get("sha", ""))
     if node["owner"] == viewer:
+        def entry(s: dict) -> dict:
+            return {**_public(pmap[s["grantee"]]), "tx": s["tx"],
+                    "share_type": s.get("share_type", "download"),
+                    "not_before": int(s.get("not_before") or 0),
+                    "not_after": int(s.get("not_after") or 0)}
         shares = supa.shares_for_node(token, node["id"])
-        v["shared_with"] = [
-            {**_public(pmap[s["grantee"]]), "tx": s["tx"],
-             "share_type": s.get("share_type", "download"),
-             "not_before": int(s.get("not_before") or 0),
-             "not_after": int(s.get("not_after") or 0)}
-            for s in shares if s["grantee"] in pmap
-        ]
+        seen = {s["grantee"] for s in shares}
+        v["shared_with"] = [entry(s) for s in shares if s["grantee"] in pmap]
+        for s in inherited or []:
+            if s.get("node_id") == node["id"] or s["grantee"] in seen \
+               or s["grantee"] not in pmap:
+                continue
+            seen.add(s["grantee"])
+            v["shared_with"].append({**entry(s), "inherited": True,
+                                     "via": s.get("via", "")})
     return v
 
 
@@ -460,8 +473,18 @@ async def _tree_impl(token: str, uid: str, folder_id: str):
         cur = supa.get_node(token, cur["parent"]) if cur.get("parent") else None
     crumbs.reverse()
 
-    kids = [node_view(c, uid, token, pmap) for c in supa.children(token, folder_id)]
-    fv = node_view(node, uid, token, pmap)
+    # Owner's inherited-share context: every share on the folder or its ancestors
+    # covers every child, so fetch the chain's rows ONCE (crumbs already walked it)
+    # and let node_view merge them in per child.
+    covering: list[dict] = []
+    if node["owner"] == uid:
+        names = {c["id"]: c["name"] for c in crumbs}
+        covering = [{**s, "via": names.get(s["node_id"], "a parent folder")}
+                    for s in supa.shares_for_nodes(token, [c["id"] for c in crumbs])]
+
+    kids = [node_view(c, uid, token, pmap, inherited=covering)
+            for c in supa.children(token, folder_id)]
+    fv = node_view(node, uid, token, pmap, inherited=covering)
 
     # Viewer's effective access level (0016) so the UI can offer the right verbs.
     # Owner => owner. Otherwise the best share on the folder or any ancestor

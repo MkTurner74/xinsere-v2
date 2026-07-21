@@ -576,6 +576,30 @@ def shares_covering(token: str, node_id: str) -> list[dict]:
         {"node_id": f"in.({','.join(ids)})", "select": "node_id,grantee,tx"})
 
 
+def shares_for_nodes(token: str, node_ids: list[str]) -> list[dict]:
+    """Share rows (with windows when 0020 is applied) across a set of nodes in one
+    request — feeds inherited-share display: a folder listing passes its breadcrumb
+    chain so children can show who has access via an ancestor share."""
+    global _SHARE_WINDOW_COLUMNS
+    if not node_ids:
+        return []
+    filt = f"in.({','.join(node_ids)})"
+    if _SHARE_WINDOW_COLUMNS:
+        try:
+            rows = _rest("GET", "/shares", token,
+                         params={"node_id": filt,
+                                 "select": "node_id,grantee,tx,share_type,not_before,not_after"}) or []
+            for r in rows:
+                r.setdefault("share_type", "download")
+            return rows
+        except SupabaseError:
+            _SHARE_WINDOW_COLUMNS = False   # pre-0020
+    return _shares_select(
+        token,
+        {"node_id": filt, "select": "node_id,grantee,tx,share_type"},
+        {"node_id": filt, "select": "node_id,grantee,tx"})
+
+
 def files_under(token: str, node_id: str) -> list[dict]:
     """All file nodes at or below node_id (app-side recursion; RLS already scopes)."""
     node = get_node(token, node_id)
@@ -747,15 +771,23 @@ def insert_permission_batch(token: str, merkle_root: str, leaf_count: int,
     global _BATCH_WINDOW_COLUMNS
     body = {"merkle_root": merkle_root, "leaf_count": leaf_count,
             "source": source, "scope": scope, "status": "pending"}
+    # on_conflict must name the real unique key: merge-duplicates alone only merges
+    # on the PK, so re-anchoring a root that already had a row — e.g. re-sharing the
+    # same (file, grantee) after a CONTRACT CUTOVER — 409'd on merkle_root and the
+    # share failed (Jeremy/Mark, 2026-07-21). The upsert resets the row to 'pending'
+    # and preserve() re-anchors on the current contract if the chain says unanchored.
+    conflict = {"on_conflict": "merkle_root"}
     if _BATCH_WINDOW_COLUMNS and (not_before or not_after):
         try:
-            rows = _rest("POST", "/permission_batches", token,
+            rows = _rest("POST", "/permission_batches", token, params=conflict,
                          prefer="return=representation,resolution=merge-duplicates",
                          json_body={**body, "not_before": not_before, "not_after": not_after})
             return rows[0] if rows else {"merkle_root": merkle_root}
-        except SupabaseError:
+        except SupabaseError as exc:
+            if getattr(exc, "status", None) == 409:
+                raise                       # real conflict, not a missing column
             _BATCH_WINDOW_COLUMNS = False   # pre-0020 — fall through to windowless insert
-    rows = _rest("POST", "/permission_batches", token,
+    rows = _rest("POST", "/permission_batches", token, params=conflict,
                  prefer="return=representation,resolution=merge-duplicates",
                  json_body=body)
     return rows[0] if rows else {"merkle_root": merkle_root}
@@ -777,7 +809,9 @@ def insert_batch_grants(token: str, rows: list[dict]) -> None:
     (file_id, grantee_id, merkle_root)."""
     if not rows:
         return
-    _rest("POST", "/batch_grants", token, prefer="return=minimal,resolution=merge-duplicates",
+    _rest("POST", "/batch_grants", token,
+          params={"on_conflict": "file_id,grantee_id,merkle_root"},
+          prefer="return=minimal,resolution=merge-duplicates",
           json_body=rows)
 
 
