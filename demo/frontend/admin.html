@@ -340,6 +340,10 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
         <span class="note"><strong>Forensic watermarking</strong> — every download or preview by a non-owner embeds an invisible, on-chain-logged mark tracing the copy to its recipient. Recommended on.</span>
         <button class="btn ghost sm" id="od-wm" type="button">…</button>
       </div>
+      <div class="dz-row">
+        <span class="note"><strong>Visible image watermark</strong> — additionally weaves a faint pixel-domain mark into raster images so a <em>screen grab</em> can be traced. It very slightly perturbs the picture; leave OFF for pre-res / professional imaging where any change is unacceptable. Invisible marking above is unaffected.</span>
+        <button class="btn ghost sm" id="od-wmpix" type="button">…</button>
+      </div>
     </div>
 
     <div class="danger-zone">
@@ -834,6 +838,15 @@ async function openOrg(id){
   wmBtn.onclick=async()=>{
     if(wmOn&&!confirm(`Disable forensic watermarking for ${d.org.name}? Downloads by non-owners will no longer carry traceable marks.`))return;
     try{await api(`/api/admin/orgs/${id}/watermark`,{method:"POST",body:form({enabled:wmOn?"false":"true"})});openOrg(id);}
+    catch(e){alert(e.message);}
+  };
+  const pixBtn=$("#od-wmpix"), pixOn=d.org.watermark_pixel_images===true;
+  pixBtn.textContent=pixOn?"On — click to disable":"Off — click to enable";
+  pixBtn.className="btn sm "+(pixOn?"ghost":"danger");
+  pixBtn.disabled=!wmOn;   // pixel layer is meaningless if all marking is off
+  pixBtn.onclick=async()=>{
+    if(!pixOn&&!confirm(`Enable the VISIBLE image watermark for ${d.org.name}? Raster images served to non-owners will carry a faint pixel-domain mark — do not use for pre-res professional imagery.`))return;
+    try{await api(`/api/admin/orgs/${id}/watermark-pixel`,{method:"POST",body:form({enabled:pixOn?"false":"true"})});openOrg(id);}
     catch(e){alert(e.message);}
   };
   $("#dz-suspend-row").classList.toggle("hidden",d.org.status!=="active");

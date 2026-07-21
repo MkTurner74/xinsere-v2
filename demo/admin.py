@@ -103,6 +103,20 @@ def org_watermark(org_id: str, s: dict = Depends(authn.require_admin),
     return {"ok": True, "watermark_downloads": val}
 
 
+@router.post("/orgs/{org_id}/watermark-pixel")
+def org_watermark_pixel(org_id: str, s: dict = Depends(authn.require_admin),
+                        enabled: str = Form(...)):
+    """VISIBLE pixel-domain image watermark override (0022). Default OFF —
+    opt-in per org; the invisible marks are governed separately by /watermark."""
+    if not orgs.get_org(org_id):
+        raise HTTPException(status_code=404, detail="Organization not found")
+    val = enabled.lower() in ("1", "true", "on", "yes")
+    supa._rest("PATCH", "/organizations", supa.SERVICE_ROLE_KEY,
+               params={"id": f"eq.{org_id}"}, prefer="return=minimal",
+               json_body={"watermark_pixel_images": val})
+    return {"ok": True, "watermark_pixel_images": val}
+
+
 @router.post("/orgs/{org_id}/status")
 def org_status(org_id: str, s: dict = Depends(authn.require_admin), status: str = Form(...)):
     if status not in ("active", "suspended"):

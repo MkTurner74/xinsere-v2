@@ -1250,6 +1250,28 @@ def _wm_enabled(owner_uid: str) -> bool:
         return True
 
 
+def _wm_pixel_enabled(owner_uid: str) -> bool:
+    """Org opt-in for the VISIBLE pixel-domain image mark (0022). Default OFF and
+    fail toward OFF — the visible layer only turns on when an org explicitly asks
+    (pro imaging orgs reject any perturbation), unlike _wm_enabled which fails
+    toward marking. Requires marking to be on at all (_wm_enabled) upstream."""
+    svc = supa.SERVICE_ROLE_KEY
+    if not svc:
+        return False
+    try:
+        mems = supa._rest("GET", "/org_members", svc,
+                          params={"user_id": f"eq.{owner_uid}", "select": "org_id"}) or []
+        ids = [m["org_id"] for m in mems]
+        if not ids:
+            return False
+        orgs_rows = supa._rest("GET", "/organizations", svc,
+                               params={"id": f"in.({','.join(ids)})",
+                                       "select": "watermark_pixel_images"}) or []
+        return any(o.get("watermark_pixel_images", False) for o in orgs_rows)
+    except Exception:
+        return False
+
+
 def _record_access(node: dict, uid: str, action: str) -> dict | None:
     """Interactive-plane access telemetry into the tamper-evident access_log
     (0005/0014) — same ground truth the machine API writes. Fail-open by design.
@@ -1339,7 +1361,8 @@ async def preview(request: Request, node_id: str):
     if entry and _wm_enabled(node["owner"]):
         import watermark
         content, serve_type, watermarked = watermark.apply(
-            content, serve_type, entry.get("entry_hash", ""))
+            content, serve_type, entry.get("entry_hash", ""),
+            pixel_images=_wm_pixel_enabled(node["owner"]))
 
     headers = {
         "Content-Disposition": f'inline; filename="{node["name"]}"',
@@ -1460,7 +1483,8 @@ async def download(request: Request, node_id: str):
         import watermark
         content, _, marked = watermark.apply(
             content, r.content_type or "application/octet-stream",
-            entry.get("entry_hash", ""))
+            entry.get("entry_hash", ""),
+            pixel_images=_wm_pixel_enabled(node["owner"]))
     import hashlib as _hashlib
     delivered_sha = _hashlib.sha256(content).hexdigest() if marked else node.get("sha", "")
 
@@ -1533,7 +1557,8 @@ async def download_folder(request: Request, node_id: str):
                 import watermark
                 content, _, _ = watermark.apply(
                     content, f.get("content_type") or "application/octet-stream",
-                    entry.get("entry_hash", ""))
+                    entry.get("entry_hash", ""),
+                    pixel_images=_wm_pixel_enabled(f["owner"]))
             z.writestr(relpath, content)
             added += 1
     if not added:

@@ -76,20 +76,22 @@ def text(content: bytes, mark: str) -> bytes:
 
 # --- channel: image metadata (Phase 1) ------------------------------------------
 
-def image(content: bytes, mark: str, base_type: str) -> tuple[bytes, str]:
+def image(content: bytes, mark: str, base_type: str,
+          pixel: bool = False) -> tuple[bytes, str]:
     from PIL import Image, PngImagePlugin
     img = Image.open(io.BytesIO(content))
-    # Phase 2 (2026-07-21): invisible keyed pixel-domain mark — survives
-    # screenshots/rescale, which the metadata channels below never could.
-    # Fail-open: embed() returns None on tiny/odd images and we keep serving
-    # with metadata-only marks.
-    try:
-        import wm_pixel
-        marked = wm_pixel.embed(img, mark[len(_MARK_PREFIX):])
-        if marked is not None:
-            img = marked
-    except Exception:   # noqa: BLE001 — marking must never break the serve
-        pass
+    # Phase-2 pixel-domain mark — perturbs the picture, so it is OPT-IN per org
+    # (`pixel`, default off): pro imaging orgs reject any visible change, and it
+    # does not yet survive a cropped screen grab. The invisible metadata marks
+    # below always apply. Fail-open: embed() returns None on tiny/odd images.
+    if pixel:
+        try:
+            import wm_pixel
+            marked = wm_pixel.embed(img, mark[len(_MARK_PREFIX):])
+            if marked is not None:
+                img = marked
+        except Exception:   # noqa: BLE001 — marking must never break the serve
+            pass
     out = io.BytesIO()
     if base_type == "image/png" or img.mode in ("RGBA", "LA", "P"):
         info = PngImagePlugin.PngInfo()
@@ -150,9 +152,12 @@ def office(content: bytes, mark: str) -> bytes:
 
 # --- apply / extract -------------------------------------------------------------
 
-def apply(content: bytes, serve_type: str, entry_hash: str) -> tuple[bytes, str, bool]:
+def apply(content: bytes, serve_type: str, entry_hash: str,
+          pixel_images: bool = False) -> tuple[bytes, str, bool]:
     """Embed the forensic mark for one access. Returns (bytes, type, marked).
-    Unchanged input on failure — deterrence layer, never blocks the view."""
+    Unchanged input on failure — deterrence layer, never blocks the view.
+    `pixel_images` (org opt-in) additionally applies the VISIBLE pixel-domain
+    mark to raster images; invisible marks apply regardless."""
     mark = forensic_mark(entry_hash)
     if len(mark) <= len(_MARK_PREFIX):
         return content, serve_type, False
@@ -163,7 +168,7 @@ def apply(content: bytes, serve_type: str, entry_hash: str) -> tuple[bytes, str,
         if base.startswith("text/"):
             return text(content, mark), serve_type, True
         if base.startswith("image/") and base not in ("image/svg+xml", "image/gif"):
-            data, new_type = image(content, mark, base)
+            data, new_type = image(content, mark, base, pixel=pixel_images)
             return data, new_type, True
         if base in _OFFICE_TYPES:
             return office(content, mark), serve_type, True

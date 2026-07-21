@@ -154,9 +154,23 @@ def test_alpha_channel_preserved():
     assert np.asarray(marked.getchannel("A")).min() == 180
 
 
+def test_pixel_layer_is_opt_in():
+    """Default apply() path (pixel off) leaves pixels untouched — only metadata."""
+    src = io.BytesIO(); _photo().save(src, "PNG")
+    off, _ = watermark.image(src.getvalue(), "XIN-FWM-" + MARK16, "image/png")
+    on, _ = watermark.image(src.getvalue(), "XIN-FWM-" + MARK16, "image/png", pixel=True)
+    a = np.asarray(Image.open(io.BytesIO(off)).convert("L"), np.float64)
+    base = np.asarray(_photo().convert("L"), np.float64)
+    assert np.array_equal(a, base)                       # pixels untouched when off
+    b = np.asarray(Image.open(io.BytesIO(on)).convert("L"), np.float64)
+    assert not np.array_equal(b, base)                   # marked when opted in
+    assert ("XIN-FWM-" + MARK16).encode() in off         # metadata mark either way
+
+
 def test_auditor_extract_end_to_end():
     src = io.BytesIO(); _photo().save(src, "PNG")
-    served, ctype = watermark.image(src.getvalue(), "XIN-FWM-" + MARK16, "image/jpeg")
+    served, ctype = watermark.image(src.getvalue(), "XIN-FWM-" + MARK16, "image/jpeg",
+                                    pixel=True)
     # Strip metadata the way a screenshot would: pixels only, new file.
     img = Image.open(io.BytesIO(served))
     pixels_only = Image.new("RGB", img.size)
