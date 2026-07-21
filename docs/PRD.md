@@ -80,8 +80,18 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    058264449111) deactivated 2026-07-05. The other two (`AKIARX7FHY4OVVELQM4Z`,
    `AKIARX7FHY4OQKZ2FLDY`) belong to **Max's account 120202970909** (0 events in
    Mark's acct) — **Max must** deactivate/delete + scrub the POC repo/history.
-   *Optional demo add:* wire on-chain permission **expiry** (contract already
-   supports `expiryTime`; demo hardcodes 0) — end-dated grants, no revoke needed.
+   *Optional demo add:* ~~wire on-chain permission **expiry**~~ **DONE 2026-07-20**
+   — a share now carries an on-chain validity **window**: a **start** (defaults
+   immediate) AND an **expiry** (defaults perpetual), Mark's extension of the
+   original expiry-only ask. Enforced on-chain in the Merkle-batch path: the
+   pre-batch `verifyBatch` had no expiry concept, so the contract gained a per-root
+   window (`rootNotBefore`/`rootNotAfter` + `grantBatchWindowed`), and `verifyBatch`
+   fails closed outside it — a time-boxed share ends with **no revoke tx**. Start/
+   expiry inputs live under "Access window" in the Share dialog. **Deploys a NEW Amoy
+   contract address (re-share existing testnet grants after cutover)** + migration
+   0020. Run steps: `docs/session-2026-07-20-grant-windows-and-file-mgmt.md`.
+   *Not-yet:* a pending email invite (no account yet) still materializes perpetual —
+   `pending_shares` has no window column.
 2. ~~Deploy the hosted demo (v2)~~ **DONE 2026-07-06/07** — live at
    xinsere-v2.vercel.app on real AWS backends, invite-only auth.
 3. ~~Revoke + delete (paired)~~ **DONE 2026-07-07** — on-chain revoke (unshare,
@@ -92,18 +102,23 @@ path is now **client-side reassembly** — plaintext never exists on the server.
 4. **File-manager basics** — move/rename/grant-on-add **DONE 2026-07-07**
    (move reconciles inherited shares on-chain both directions; rename is
    display-only by design; late-added files in shared folders now get grants).
-   Remaining: **download-folder-as-zip** (client-side reassemble + zip),
-   deep-nesting verification on upload, and more UX upgrades from the research
+   Remaining: ~~**download-folder-as-zip**~~ **DONE** (client-side reassemble + zip),
+   ~~deep-nesting verification on upload~~ **DONE 2026-07-20** (`ensure_path` reuses
+   existing folders idempotently + `MAX_PATH_DEPTH` cap + `.`/`..` strip; tests in
+   `test_name_conflict.py`), and more UX upgrades from the research
    doc (`projects/Xinsere/research/2026-07-07-file-explorer-ux-best-practices.md`
    in the Docs repo). **Shipped 2026-07-07 from that doc:** list/grid toggle
    (list default), SVG icon system + shield "Secured" badge, kebab context menu
    with Drive-ordered actions + on-chain proof, undo-toast for rename, content-
    type honesty. **Still to adopt (now-tier):** ~~trash/soft-delete + undo~~
-   DONE 2026-07-07; **multi-select + selection action bar** (Mark 2026-07-07:
-   select several files → batch delete/move/download — endpoints already take a
-   single node_id, so this is a frontend selection store + a batch loop), inline
-   F2 rename, duplicate-name conflict dialog, keyboard set + aria-live,
-   drag-to-move.
+   DONE 2026-07-07; **multi-select + selection action bar** (select several files →
+   batch delete/move/download) — **coded, not yet tested** (Mark 2026-07-20);
+   ~~inline F2 rename~~ **DONE 2026-07-20** (edit-in-place, kebab + F2, extension
+   lock kept); ~~duplicate-name conflict dialog~~ **DONE 2026-07-20** (Keep both /
+   Cancel — no destructive Replace; backend `_resolve_name` + 409 on rename/move/
+   folder, incl. move-into-a-name-clash); ~~drag-to-move~~ **DONE 2026-07-20**
+   (owned items → folder tiles/rows + breadcrumb ancestors; multi-select drags
+   together; OS-file upload drop preserved); keyboard set + aria-live (remaining).
    **Ideas parked 2026-07-07:** (a) replace the (always-7) fragment count in the
    row Security column with a **cloud/region distribution indicator** — badges
    for which providers/regions a file's fragments live in (real debug value once
