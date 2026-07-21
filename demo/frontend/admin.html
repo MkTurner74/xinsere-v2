@@ -12,7 +12,7 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
     --bg:#0A0713;--bg-2:#0F0B1E;--panel:rgba(255,255,255,0.035);--panel-2:rgba(146,119,255,0.06);
     --edge:rgba(146,119,255,0.16);--edge-strong:rgba(146,119,255,0.34);
     --violet-br:#8A6BFF;--violet:#5B3DF5;--word:#9277FF;
-    --mint:#4FE3C1;--coral:#FF8B7A;--text:#ECE9F8;--muted:#9A93B8;--faint:#6E6688;
+    --mint:#4FE3C1;--coral:#FF8B7A;--cyan:#38CBE8;--text:#ECE9F8;--muted:#9A93B8;--faint:#6E6688;
     --glow-a:rgba(124,91,255,0.18);--glow-b:rgba(46,33,112,0.4);
     --input-bg:rgba(0,0,0,0.28);--task-bg:#17122b;--scrim:rgba(6,4,14,0.66);
     --radius:16px;--font:"Poppins","Outfit","Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -23,7 +23,7 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
     --bg:#F4F2FB;--bg-2:#FFFFFF;--panel:rgba(91,61,245,0.05);--panel-2:rgba(91,61,245,0.09);
     --edge:rgba(91,61,245,0.18);--edge-strong:rgba(91,61,245,0.38);
     --violet-br:#8A6BFF;--violet:#5B3DF5;--word:#5B3DF5;
-    --mint:#0E8E74;--coral:#C7452F;--text:#1B1533;--muted:#5E5A78;--faint:#8B86A3;
+    --mint:#0E8E74;--coral:#C7452F;--cyan:#067A94;--text:#1B1533;--muted:#5E5A78;--faint:#8B86A3;
     --glow-a:rgba(124,91,255,0.10);--glow-b:rgba(91,61,245,0.08);
     --input-bg:rgba(91,61,245,0.06);--task-bg:#FFFFFF;--scrim:rgba(24,18,48,0.35);
     color-scheme:light;
@@ -144,10 +144,12 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
   .run .top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
   .run .metrics{display:flex;flex-wrap:wrap;gap:16px;font-size:0.82rem;color:var(--muted);margin-top:8px;}
   .run .metrics b{color:var(--text);font-weight:600;}
-  .pill.complete{background:rgba(74,222,128,0.16);color:#4ade80;}
-  .pill.running{background:rgba(0,212,255,0.16);color:#00b8dd;}
-  .pill.failed{background:rgba(255,111,97,0.16);color:#ff6f61;}
-  .pill.live{background:rgba(74,222,128,0.16);color:#4ade80;}
+  /* Theme tokens, not hardcoded dark-theme hues — #4ade80 on the light theme's
+     pale panel was unreadable (Mark, 2026-07-21). --mint/--coral flip per theme. */
+  .pill.complete{background:rgba(79,227,193,0.14);color:var(--mint);}
+  .pill.running{background:rgba(0,184,221,0.14);color:var(--cyan);}
+  .pill.failed{background:rgba(255,111,97,0.14);color:var(--coral);}
+  .pill.live{background:rgba(79,227,193,0.14);color:var(--mint);}
   .pill.pending{background:var(--panel-2);color:var(--muted);}
 
   /* needs-attention list */
