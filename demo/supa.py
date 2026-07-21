@@ -360,16 +360,22 @@ def insert_pending_share(token: str, node_id: str, email: str, invited_by: str,
     body = {"node_id": node_id, "email": email.strip().lower(), "invited_by": invited_by}
     if share_type and share_type != "download":   # pre-0016 tolerance
         body["share_type"] = share_type
+    # merge-duplicates alone upserts only on the PRIMARY KEY; without on_conflict
+    # naming the real unique constraint, a re-invite 409'd on
+    # pending_shares_node_id_email_key instead of refreshing the stub (2026-07-21).
+    conflict = {"on_conflict": "node_id,email"}
     if _PENDING_WINDOW_COLUMNS and (not_before or not_after):
         try:
-            rows = _rest("POST", "/pending_shares", token,
+            rows = _rest("POST", "/pending_shares", token, params=conflict,
                          prefer="return=representation,resolution=merge-duplicates",
                          json_body={**body, "not_before": not_before,
                                     "not_after": not_after})
             return rows[0] if rows else {"node_id": node_id, "email": email}
-        except SupabaseError:
+        except SupabaseError as exc:
+            if getattr(exc, "status", None) == 409:
+                raise                             # real conflict, not a missing column
             _PENDING_WINDOW_COLUMNS = False   # pre-0021 — windowless fallback below
-    rows = _rest("POST", "/pending_shares", token,
+    rows = _rest("POST", "/pending_shares", token, params=conflict,
                  prefer="return=representation,resolution=merge-duplicates",
                  json_body=body)
     return rows[0] if rows else {"node_id": node_id, "email": email}

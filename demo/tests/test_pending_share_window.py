@@ -33,7 +33,7 @@ def test_insert_pending_share_sends_window(monkeypatch):
     seen = {}
 
     def fake_rest(method, path, token, params=None, json_body=None, prefer=None):
-        seen.update(method=method, path=path, body=json_body)
+        seen.update(method=method, path=path, body=json_body, params=params)
         return [json_body]
 
     monkeypatch.setattr(supa, "_rest", fake_rest)
@@ -42,6 +42,9 @@ def test_insert_pending_share_sends_window(monkeypatch):
     assert seen["path"] == "/pending_shares"
     assert seen["body"]["email"] == "new@ex.com"
     assert seen["body"]["not_before"] == 100 and seen["body"]["not_after"] == 200
+    # Without on_conflict the merge-duplicates upsert only merges on the PK, so a
+    # re-invite 409'd on the (node_id, email) unique constraint (2026-07-21).
+    assert seen["params"] == {"on_conflict": "node_id,email"}
 
 
 def test_insert_pending_share_windowless_omits_columns(monkeypatch):
@@ -72,6 +75,17 @@ def test_insert_pending_share_pre_0021_strips_and_retries(monkeypatch):
     supa.insert_pending_share("svc", "node-2", "a@b.c", "owner-1",
                               "download", not_after=999)
     assert len(calls) == 1 and "not_after" not in calls[0]
+
+
+def test_insert_pending_share_409_is_not_treated_as_missing_column(monkeypatch):
+    def fake_rest(method, path, token, params=None, json_body=None, prefer=None):
+        raise supa.SupabaseError(409, "duplicate key")
+
+    monkeypatch.setattr(supa, "_rest", fake_rest)
+    with pytest.raises(supa.SupabaseError):
+        supa.insert_pending_share("svc", "node-1", "a@b.c", "owner-1",
+                                  "download", not_after=999)
+    assert supa._PENDING_WINDOW_COLUMNS is True   # flag must not flip on a real conflict
 
 
 # --- supa.pending_shares_for_email ------------------------------------------

@@ -22,7 +22,10 @@ import threading
 # imported lazily inside the functions that need them so endpoints that never touch
 # the chain (login, tree, upload) don't pay for them on a cold serverless boot.
 
-RPC_URL = os.environ.get("XINSERE_RPC_URL", "https://rpc-amoy.polygon.technology")
+# Default RPC switched 2026-07-21: rpc-amoy.polygon.technology stopped resolving
+# (NXDOMAIN from Vercel AND local ISPs — grants/wallet checks all failed), publicnode
+# serves the same chain (0x13882) keylessly. Env override wins as before.
+RPC_URL = os.environ.get("XINSERE_RPC_URL", "https://polygon-amoy-bor-rpc.publicnode.com")
 CHAIN_ID = int(os.environ.get("XINSERE_CHAIN_ID", "80002"))
 # Cutover 2026-07-13: the batch-grant contract (grantBatch/verifyBatch). Replaces the
 # pre-batch contract 0xf2978c58Ec46103FC2110575DFd62cf3ba997FCD (owner-only grants,

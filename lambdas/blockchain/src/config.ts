@@ -11,7 +11,8 @@ function num(name: string, fallback: number): number {
 }
 
 export const config = {
-  rpcUrl: process.env.XINSERE_RPC_URL ?? 'https://rpc-amoy.polygon.technology',
+  // rpc-amoy.polygon.technology stopped resolving 2026-07-21; publicnode is keyless.
+  rpcUrl: process.env.XINSERE_RPC_URL ?? 'https://polygon-amoy-bor-rpc.publicnode.com',
   chainId: num('XINSERE_CHAIN_ID', 80002),
   contractAddress:
     process.env.XINSERE_CONTRACT_ADDRESS ?? '0xF4a2f8d676a22dFd350F03159a97544c3b0fCAEf',

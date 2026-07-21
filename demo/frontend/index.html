@@ -246,6 +246,7 @@
   .task .tname{color:var(--faint);font-size:0.74rem;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:none;}
   .task .tick{display:none;color:var(--mint);font-weight:700;}
   .task.done .tick{display:inline;}
+  .task.err .tick{color:var(--coral);}
   .task .spin{width:14px;height:14px;border:2px solid var(--track);border-top-color:var(--mint);border-radius:50%;animation:spin .7s linear infinite;flex:none;}
   .task.done .spin{display:none;}
   @keyframes spin{to{transform:rotate(360deg);}}
@@ -370,6 +371,22 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
   border-radius:999px;padding:4px 6px 4px 12px;font-size:.84rem;}
 .chip button{background:none;border:0;color:var(--muted);cursor:pointer;font-size:.75rem;padding:2px 4px;}
 .chip button:hover{color:var(--coral,#FF8B7A);}
+.chip.email{border-style:dashed;}
+/* share dialog: access-window expander + close button */
+.share-window summary{list-style:none;display:flex;align-items:center;gap:8px;padding:9px 12px;
+  border:1px solid var(--edge-strong);border-radius:9px;background:var(--panel-2);cursor:pointer;
+  font-size:13px;user-select:none;}
+.share-window summary::-webkit-details-marker{display:none;}
+.share-window summary .chev{margin-left:auto;color:var(--muted);transition:transform .15s;}
+.share-window[open] summary .chev{transform:rotate(180deg);}
+.share-window summary .win-sum{color:var(--faint);}
+.share-window summary .win-sum.on{color:var(--mint);font-weight:600;}
+.share-window input::-webkit-calendar-picker-indicator{opacity:.75;cursor:pointer;}
+.modal .x-close{position:absolute;top:10px;right:12px;background:none;border:0;color:var(--muted);
+  font-size:17px;line-height:1;cursor:pointer;padding:6px 9px;border-radius:8px;}
+.modal .x-close:hover{color:var(--text);background:var(--panel-2);}
+.share-status{font-size:13px;}
+.share-status.err{color:var(--coral);}
 
 .perm-opts{display:flex;flex-direction:column;gap:8px;margin:6px 0 14px;}
 .perm-opt{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--edge);
@@ -714,6 +731,11 @@ function newTask(name){
   requestAnimationFrame(()=>el.classList.add("show"));
   const msgEl=el.querySelector(".tmsg"), fill=el.querySelector(".fill");
   function finish(msg){ msgEl.textContent=msg; el.classList.add("done"); el.classList.remove("progress","indet");
+    // Error lines get a coral ✗, not the success tick — "On-chain grant failed ✓"
+    // read as success (2026-07-21). Callers can also just prefix ✗ themselves.
+    if(/✗|\bfail(ed|ure)?\b|\berror\b|\bdenied\b|\bnot completed\b|\binvalid\b/i.test(msg)){
+      el.classList.add("err"); const t=el.querySelector(".tick"); if(t) t.textContent="✗";
+    }
     setTimeout(()=>{ el.classList.remove("show"); setTimeout(()=>el.remove(),300); },3200); }
   return {
     set(msg,o){ o=o||{}; msgEl.textContent=msg;
@@ -1832,7 +1854,9 @@ grid.addEventListener("drop",e=>{ if(VIEW!=="mine"||isNodeDrag(e))return; const 
 /* ---- share modal ---- */
 function openShare(node){
   const bg=document.createElement("div"); bg.className="modal-bg";
-  bg.innerHTML=`<div class="modal" style="width:min(560px,94vw);max-width:none;">
+  const TZ=(Intl.DateTimeFormat().resolvedOptions().timeZone||"local time");
+  bg.innerHTML=`<div class="modal" style="width:min(560px,94vw);max-width:none;position:relative;">
+    <button class="x-close" type="button" aria-label="Close" title="Close">✕</button>
     <h3>Share “${node.name}”</h3>
     <p class="msub">${node.type==="folder"?"Everyone you add can access every file inside.":"Choose what people you add are allowed to do."}</p>
     <div class="perm-opts" role="radiogroup" aria-label="Permission level">
@@ -1843,32 +1867,27 @@ function openShare(node){
       <label class="perm-opt"><input type="radio" name="share-perm" value="co-owner">
         <span><b>Co-Owner</b><i>Full access — can re-share with others</i></span></label>
     </div>
-    <details class="share-window" style="margin:2px 0 8px;">
-      <summary style="cursor:pointer;font-size:13px;color:var(--faint);user-select:none;">Access window (optional) — start &amp; expiry</summary>
+    <details class="share-window" style="margin:2px 0 10px;">
+      <summary>🕒 <b>Access window</b> <span class="win-sum">optional — set a start &amp; expiry</span><span class="chev">▾</span></summary>
       <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
         <label style="flex:1;min-width:180px;font-size:12px;color:var(--faint);">Starts
           <input class="win-start" type="datetime-local"
-            style="width:100%;margin-top:3px;padding:8px 10px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:13px;color-scheme:dark;"></label>
+            style="width:100%;margin-top:3px;padding:8px 10px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:13px;"></label>
         <label style="flex:1;min-width:180px;font-size:12px;color:var(--faint);">Expires
           <input class="win-expiry" type="datetime-local"
-            style="width:100%;margin-top:3px;padding:8px 10px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:13px;color-scheme:dark;"></label>
+            style="width:100%;margin-top:3px;padding:8px 10px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:13px;"></label>
       </div>
-      <p class="msub" style="margin:6px 0 0;font-size:11.5px;">Leave blank for immediate start / no expiry. Enforced on-chain — an expired grant simply stops verifying, no revoke needed.</p>
+      <p class="msub" style="margin:6px 0 0;font-size:11.5px;">Times are in your local timezone (${TZ}). Leave blank for immediate start / no expiry. Enforced on-chain — an expired grant simply stops verifying, no revoke needed.</p>
     </details>
-    <input class="share-q" type="text" autocomplete="off" placeholder="Search people by name or email…"
+    <input class="share-q" type="text" autocomplete="off" placeholder="Add people — search your network, or type an email to invite…"
       style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
     <div class="results" style="margin:6px 0 2px;max-height:220px;overflow:auto;"></div>
     <div class="chips"></div>
-    <button class="btn share-go hidden" type="button" style="margin:6px 0 2px;"></button>
-    <div class="invite-row" style="display:flex;gap:8px;margin:10px 0 4px;">
-      <input class="invite-email" type="email" autocomplete="off" placeholder="Or invite by email…"
-        style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
-      <button class="btn invite-btn" type="button">Invite</button>
-    </div>
     <div class="current"></div>
-    <div style="display:flex;gap:8px;margin-top:8px;">
-      <button class="btn-ghost btn full x-cancel" type="button">Cancel</button>
-      <button class="btn-ghost btn full x" type="button">Done</button>
+    <div class="share-status" style="display:none;margin-top:8px;"></div>
+    <div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end;align-items:center;">
+      <button class="btn-ghost btn share-restart hidden" type="button">Start Over</button>
+      <button class="btn share-go" type="button" disabled>Share</button>
     </div></div>`;
 
   const results=bg.querySelector(".results");
@@ -1882,47 +1901,106 @@ function openShare(node){
   // Access window (0020): datetime-local carries LOCAL wall time; Date.parse gives
   // the correct epoch for the browser's tz, so we post unix seconds and the server
   // does no tz guessing. Blank = unbounded (immediate start / never expires).
+  const winS=bg.querySelector(".win-start"), winE=bg.querySelector(".win-expiry");
   function appendWindow(fd){
-    const s=bg.querySelector(".win-start").value, e=bg.querySelector(".win-expiry").value;
-    if(s){ const t=Date.parse(s); if(!isNaN(t)) fd.append("starts_at", Math.floor(t/1000)); }
-    if(e){ const t=Date.parse(e); if(!isNaN(t)) fd.append("expires_at", Math.floor(t/1000)); }
+    if(winS.value){ const t=Date.parse(winS.value); if(!isNaN(t)) fd.append("starts_at", Math.floor(t/1000)); }
+    if(winE.value){ const t=Date.parse(winE.value); if(!isNaN(t)) fd.append("expires_at", Math.floor(t/1000)); }
   }
   function windowError(){
-    const s=bg.querySelector(".win-start").value, e=bg.querySelector(".win-expiry").value;
-    if(s&&e&&Date.parse(s)>=Date.parse(e)) return "The start time must be before the expiry.";
-    if(e&&Date.parse(e)<=Date.now()) return "The expiry time is already in the past.";
+    if(winS.value&&winE.value&&Date.parse(winS.value)>=Date.parse(winE.value)) return "The start time must be before the expiry.";
+    if(winE.value&&Date.parse(winE.value)<=Date.now()) return "The expiry time is already in the past.";
     return null;
   }
+  // The collapsed summary line always shows what's set, so a window is never
+  // hidden behind the expander; clicking a field opens the native calendar+clock.
+  const winSum=bg.querySelector(".win-sum");
+  const fmt=v=>new Date(v).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+  function updateWinSum(){
+    const parts=[];
+    if(winS.value) parts.push("starts "+fmt(winS.value));
+    if(winE.value) parts.push("expires "+fmt(winE.value));
+    winSum.textContent=parts.length?parts.join(" · "):"optional — set a start & expiry";
+    winSum.classList.toggle("on", !!parts.length);
+  }
+  [winS,winE].forEach(inp=>{
+    inp.addEventListener("input", updateWinSum);
+    inp.addEventListener("click", ()=>{ try{ inp.showPicker(); }catch(_e){} });
+  });
 
-  // Build a recipient list first; ONE Share click then processes everyone in a
-  // single request (per-person on-chain roots, but you only wait once).
-  const PENDING=new Map();   // uid -> display name
+  // ONE recipient list for everyone — network people AND email invitees queue as
+  // chips (dashed chip = invite), then a single Share click processes the lot:
+  // network grantees in one batched request, each email through the invite path.
+  const PENDING=new Map();   // key: uid or lowercased email -> {kind:"user"|"email", id, label}
   const chips=bg.querySelector(".chips"), goBtn=bg.querySelector(".share-go");
+  const restartBtn=bg.querySelector(".share-restart"), statusEl=bg.querySelector(".share-status");
+  let SHARED=false;          // after a successful share: Share button becomes Done
+  function status(msg, err){
+    statusEl.style.display=msg?"block":"none"; statusEl.textContent=msg||"";
+    statusEl.classList.toggle("err", !!err);
+  }
   function renderChips(){
     chips.innerHTML="";
-    for(const [uid,name] of PENDING){
-      const c=document.createElement("span"); c.className="chip";
-      c.innerHTML=`${esc(name)} <button type="button" aria-label="Remove">✕</button>`;
-      c.querySelector("button").onclick=()=>{ PENDING.delete(uid); renderChips(); };
+    for(const [key,p] of PENDING){
+      const c=document.createElement("span"); c.className="chip"+(p.kind==="email"?" email":"");
+      c.innerHTML=`${p.kind==="email"?"✉ ":""}${esc(p.label)} <button type="button" aria-label="Remove">✕</button>`;
+      c.querySelector("button").onclick=()=>{ PENDING.delete(key); renderChips(); };
       chips.appendChild(c);
     }
-    goBtn.classList.toggle("hidden", !PENDING.size);
-    goBtn.textContent=`Share with ${PENDING.size} ${PENDING.size===1?"person":"people"}`;
+    if(!SHARED){
+      goBtn.disabled=!PENDING.size;
+      goBtn.textContent=PENDING.size?`Share with ${PENDING.size} ${PENDING.size===1?"person":"people"}`:"Share";
+    }
   }
-  function queueUser(uid, name){ PENDING.set(uid, (name||"").split(" ")[0]||name); renderChips(); q.value=""; results.innerHTML=""; }
-  goBtn.onclick=async()=>{
-    const werr=windowError(); if(werr){ toast("✗ "+werr); return; }
-    goBtn.disabled=true; goBtn.textContent="Recording grants on-chain…";
-    const fd=new FormData(); fd.append("node_id",node.id);
-    fd.append("grantee",[...PENDING.keys()].join(",")); fd.append("share_type",permSel.value);
-    appendWindow(fd);
-    const r=await api("/api/share",{method:"POST",body:fd});
-    if(r.ok){ const d=await r.json();
-      const win=d.not_after?` · expires ${new Date(d.not_after*1000).toLocaleDateString()}`:"";
-      toast(`Shared with ${d.granted} ${d.granted===1?"person":"people"}${d.failed?` · ${d.failed} failed — retry`:""} · on-chain${win}`);
-      refresh();
-    } else { toast((await r.json()).error||"Share failed"); goBtn.disabled=false; renderChips(); }
-  };
+  function queueUser(uid, name){ PENDING.set(uid, {kind:"user", id:uid, label:(name||"").split(" ")[0]||name}); renderChips(); q.value=""; results.innerHTML=""; }
+  function queueEmail(email){ const e=email.trim().toLowerCase(); if(!e) return;
+    PENDING.set(e, {kind:"email", id:e, label:e}); renderChips(); q.value=""; results.innerHTML=""; }
+  function startOver(){
+    PENDING.clear(); SHARED=false; q.value=""; results.innerHTML="";
+    winS.value=""; winE.value=""; updateWinSum(); status("");
+    restartBtn.classList.add("hidden"); renderChips(); q.focus();
+  }
+  restartBtn.onclick=startOver;
+  async function doShare(){
+    const werr=windowError(); if(werr){ status("✗ "+werr, true); return; }
+    const users=[...PENDING.values()].filter(p=>p.kind==="user");
+    const mails=[...PENDING.values()].filter(p=>p.kind==="email");
+    goBtn.disabled=true; goBtn.textContent="Recording grants on-chain…"; status("");
+    const base=()=>{ const fd=new FormData(); fd.append("node_id",node.id);
+      fd.append("share_type",permSel.value); appendWindow(fd); return fd; };
+    let granted=0, invited=0; const errors=[];
+    if(users.length){
+      try{
+        const fd=base(); fd.append("grantee", users.map(u=>u.id).join(","));
+        const r=await api("/api/share",{method:"POST",body:fd});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok){ granted+=d.granted||0; if(d.failed) errors.push(`${d.failed} in your network failed`); }
+        else errors.push(d.error||`network share failed (${r.status})`);
+      }catch(_e){ errors.push("network share didn't complete — connection lost"); }
+    }
+    for(const m of mails){
+      try{
+        const fd=base(); fd.append("email", m.id);
+        const r=await api("/api/share",{method:"POST",body:fd});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok){ if(d.invited) invited++; else granted++; }
+        else errors.push(`${m.id}: ${d.error||"failed ("+r.status+")"}`);
+      }catch(_e){ errors.push(`${m.id}: didn't complete`); }
+    }
+    const bits=[];
+    if(granted) bits.push(`shared with ${granted} ${granted===1?"person":"people"} — recorded on-chain`);
+    if(invited) bits.push(`${invited} ${invited===1?"invitation":"invitations"} sent — they'll get access when they join`);
+    if(winE.value&&(granted||invited)) bits.push(`expires ${fmt(winE.value)}`);
+    if(errors.length){
+      status(`✗ ${errors.join(" · ")}${bits.length?` — otherwise: ${bits.join(" · ")}`:""} Press Share to retry.`, true);
+      goBtn.disabled=false; renderChips(); restartBtn.classList.remove("hidden");
+    } else {
+      status(`✓ ${bits.length?bits.join(" · ").replace(/^./,c=>c.toUpperCase()):"Nothing to do."}`);
+      SHARED=true; PENDING.clear(); chips.innerHTML="";
+      goBtn.textContent="Done"; goBtn.disabled=false; restartBtn.classList.remove("hidden");
+      openFolder(CURRENT);   // refresh the grid behind the dialog
+    }
+  }
+  goBtn.onclick=()=>{ SHARED ? refresh() : doShare(); };
 
   // Revoke an existing grantee (on-chain per file; fails closed).
   async function revokeUser(u){
@@ -1957,9 +2035,18 @@ function openShare(node){
   }
   renderCurrent();
 
-  // Typeahead: debounced search against /api/users/search.
+  // Typeahead: debounced search against /api/users/search. A term that is a full
+  // email address ALSO offers an invite row (unless it matches a network profile),
+  // so new people queue as chips exactly like people already on Xinsere.
   const q=bg.querySelector(".share-q"); let timer=null, seq=0;
   const sharedIds=new Set((node.shared_with||[]).map(s=>s.id));
+  const EMAIL_RE=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  function inviteRow(term){
+    const b=document.createElement("button"); b.className="person"; b.type="button";
+    b.innerHTML=`<span class="nm">✉ Invite ${esc(term.toLowerCase())}</span><span class="st">new to Xinsere — added on join</span>`;
+    if(PENDING.has(term.toLowerCase())) b.disabled=true; else b.onclick=()=>queueEmail(term);
+    return b;
+  }
   q.oninput=()=>{
     clearTimeout(timer);
     const term=q.value.trim(); const mine=++seq;
@@ -1968,7 +2055,8 @@ function openShare(node){
       const r=await api("/api/users/search?q="+encodeURIComponent(term));
       if(!r.ok || mine!==seq) return;
       const {results:people}=await r.json();
-      results.innerHTML = people.length?"":`<p class="msub" style="padding:6px 2px;">No matches — invite by email below.</p>`;
+      const isEmail=EMAIL_RE.test(term);
+      results.innerHTML = (people.length||isEmail)?"":`<p class="msub" style="padding:6px 2px;">No matches — type a full email address to invite someone new.</p>`;
       people.forEach(u=>{
         const b=document.createElement("button"); b.className="person"; b.type="button";
         const already=sharedIds.has(u.id);
@@ -1976,32 +2064,16 @@ function openShare(node){
         if(already||PENDING.has(u.id)){ b.disabled=true; } else { b.onclick=()=>queueUser(u.id,u.name||u.email); }
         results.appendChild(b);
       });
+      if(isEmail && !people.some(u=>(u.email||"").toLowerCase()===term.toLowerCase()))
+        results.appendChild(inviteRow(term));
     },220);
   };
+  q.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault();
+    const term=q.value.trim(); if(EMAIL_RE.test(term)) queueEmail(term); } };
 
-  // Invite by email: existing account grants now; unknown email -> pending stub.
-  const inv=bg.querySelector(".invite-email"); const invBtn=bg.querySelector(".invite-btn");
-  async function invite(){
-    const email=inv.value.trim(); if(!email) return;
-    const werr=windowError(); if(werr){ toast("✗ "+werr); return; }
-    invBtn.disabled=true;
-    const fd=new FormData(); fd.append("node_id",node.id); fd.append("email",email);
-    fd.append("share_type",permSel.value);
-    appendWindow(fd);
-    const r=await api("/api/share",{method:"POST",body:fd});
-    if(r.ok){ const d=await r.json();
-      toast(d.invited ? `Invitation created for ${d.email} — they’ll get access when they join Xinsere.`
-                      : `Shared with ${d.grantee?.name||email} · on-chain proof ${(d.tx||"").slice(0,14)}…`);
-      refresh();
-    } else { toast((await r.json()).error); invBtn.disabled=false; }
-  }
-  invBtn.onclick=invite;
-  inv.onkeydown=(e)=>{ if(e.key==="Enter"){ e.preventDefault(); invite(); } };
-
-  bg.querySelector(".x").onclick=close;
-  // Cancel backs out without sharing: nothing queued is committed until the
-  // "Share with N people" click, so discarding the queue and closing is safe.
-  bg.querySelector(".x-cancel").onclick=()=>{ PENDING.clear(); close(); };
+  // Nothing queued is committed until Share, so closing at any point is safe;
+  // after a successful share, X and Done are equivalent.
+  bg.querySelector(".x-close").onclick=()=>{ SHARED ? refresh() : close(); };
   bg.addEventListener("click",e=>{ if(e.target===bg) close(); });
   const onEsc=(e)=>{ if(e.key==="Escape"){ close(); document.removeEventListener("keydown",onEsc); } };
   document.addEventListener("keydown",onEsc);
