@@ -848,6 +848,10 @@ function restoreLoc(desc){
 }
 function navBack(){ if(!HIST.length) return; const prev=HIST.pop(); restoreLoc(prev); CUR_LOC=prev;
   const bb=$("#navback"); if(bb) bb.classList.toggle("hidden", HIST.length===0); }
+// Re-render whatever the user is LOOKING AT after a mutation (share, revoke,
+// rename). Always jumping to openFolder(CURRENT) yanked people out of Shared by
+// me / search / trash back into the folder tree (Mark, 2026-07-21).
+function refreshView(){ if(CUR_LOC) restoreLoc({...CUR_LOC}); else openFolder(CURRENT); }
 function markNav(){ document.querySelectorAll(".side .nav").forEach(b=>b.classList.toggle("active",b.dataset.view===VIEW)); }
 $("#navback")?.addEventListener("click",navBack);
 
@@ -1222,11 +1226,32 @@ async function bulkTrash(nodes){
   }
   T.done(failed?`Moved ${ok}/${nodes.length} to Trash — ${failed} failed`:`${ok} item${ok>1?"s":""} moved to Trash`);
   selClear();
-  openFolder(CURRENT);
+  refreshView();
   if(done.length) undoToast(`${done.length} item${done.length>1?"s":""} moved to Trash`, async ()=>{
     for(const n of done){ const f2=new FormData(); f2.append("node_id",n.id); await api("/api/restore",{method:"POST",body:f2}); }
-    openFolder(CURRENT);
+    refreshView();
   });
+}
+// Group revoke ("Shared by me" bulk flow): everyone with a DIRECT share on each
+// selected item, one confirm, one pass. Fail-closed per person server-side — a
+// failed revoke keeps that share row for retry.
+async function bulkRevoke(nodes){
+  const people=new Set(); nodes.forEach(n=>(n.shared_with||[]).forEach(u=>{ if(!u.inherited) people.add(u.id); }));
+  if(!confirm(`Revoke ALL shares on ${nodes.length} item${nodes.length>1?"s":""} (${people.size} ${people.size===1?"person":"people"} affected)?\nThis writes an on-chain revocation for every file covered.`)) return;
+  const T=newTask(""); T.set(`Revoking shares on ${nodes.length} item${nodes.length>1?"s":""} on-chain…`,{indet:true});
+  let okItems=0, failedItems=0, peopleRevoked=0;
+  for(const n of nodes){
+    try{
+      const fd=new FormData(); fd.append("node_id",n.id); fd.append("grantee","*");
+      const r=await api("/api/unshare",{method:"POST",body:fd});
+      const d=await r.json().catch(()=>({}));
+      if(r.ok && !d.people_failed){ okItems++; peopleRevoked+=d.people_revoked||0; }
+      else { failedItems++; peopleRevoked+=(d.people_revoked||0); }
+    }catch(_e){ failedItems++; }
+  }
+  T.done(failedItems ? `✗ Revoked on ${okItems}/${nodes.length} items (${peopleRevoked} shares) — ${failedItems} failed, retry`
+                     : `✓ Revoked ${peopleRevoked} share${peopleRevoked!==1?"s":""} across ${okItems} item${okItems!==1?"s":""} — on-chain`);
+  selClear(); refreshView();
 }
 function openMultiCtx(e){
   const nodes=selNodes(); if(!nodes.length) return;
@@ -1240,6 +1265,8 @@ function openMultiCtx(e){
   // Move/Trash need ownership of everything selected (share/rename stay per-item).
   if(nodes.every(n=>n.owner===ME.id)){
     add("moveto", `Move ${N} items to…`, ()=>openMove(nodes));
+    const shared=nodes.filter(n=>(n.shared_with||[]).some(u=>!u.inherited));
+    if(shared.length) add("share", `Revoke all shares on ${shared.length} item${shared.length>1?"s":""}`, ()=>bulkRevoke(shared), true);
     add("trash", `Move ${N} items to Trash`, ()=>bulkTrash(nodes), true);
   }
   document.body.appendChild(m);
@@ -1367,8 +1394,8 @@ function inlineRename(el, n){
     if(r===null){ restore(); return; }                       // conflict cancelled
     if(!r.ok){ toast("✗ "+(((await r.json().catch(()=>({}))).error)||"Rename failed")); restore(); return; }
     const finalName=((await r.json().catch(()=>({}))).name)||name;
-    openFolder(CURRENT);
-    undoToast(`Renamed to “${finalName}”`, async ()=>{ await apiWithConflict("/api/rename",{node_id:n.id, name:old}); openFolder(CURRENT); });
+    refreshView();
+    undoToast(`Renamed to “${finalName}”`, async ()=>{ await apiWithConflict("/api/rename",{node_id:n.id, name:old}); refreshView(); });
   };
   inp.onmousedown=e=>e.stopPropagation();
   inp.onclick=e=>e.stopPropagation();
@@ -1393,8 +1420,8 @@ async function renameItemPrompt(n){
   // If the preview overlay is showing this file, update its title in place.
   const vnm=document.querySelector(".viewer-top .vnm");
   if(vnm && vnm.textContent===old) vnm.textContent=finalName;
-  openFolder(CURRENT);
-  undoToast(`Renamed to “${finalName}”`, async ()=>{ await apiWithConflict("/api/rename",{node_id:n.id, name:old}); openFolder(CURRENT); });
+  refreshView();
+  undoToast(`Renamed to “${finalName}”`, async ()=>{ await apiWithConflict("/api/rename",{node_id:n.id, name:old}); refreshView(); });
 }
 
 /* ---- drag-to-move + inline-rename decoration for a rendered tile/row ---- */
@@ -1457,7 +1484,7 @@ async function moveNodesTo(ids, targetId, targetName){
   T.done(probs?`Moved ${ok}/${ids.length}${dest} — ${probs}`
               :(ids.length>1?`Moved ${ok} items${dest}`:`Moved${dest}`));
   selClear();
-  openFolder(CURRENT);
+  refreshView();
 }
 
 async function listFolders(excludeIds){
@@ -1541,10 +1568,10 @@ async function trashItem(n){
   const fd=new FormData(); fd.append("node_id",n.id);
   const r=await api("/api/delete",{method:"POST",body:fd});
   if(!r.ok){ toast("✗ "+((await r.json()).error||"Could not move to Trash")); return; }
-  openFolder(CURRENT);
+  refreshView();
   undoToast(`“${n.name}” moved to Trash`, async ()=>{
     const f2=new FormData(); f2.append("node_id",n.id);
-    await api("/api/restore",{method:"POST",body:f2}); openFolder(CURRENT);
+    await api("/api/restore",{method:"POST",body:f2}); refreshView();
   });
 }
 
@@ -1908,7 +1935,7 @@ function openShare(node){
   const results=bg.querySelector(".results");
   const current=bg.querySelector(".current");
   const close=()=>{ if(bg.parentNode) document.body.removeChild(bg); };
-  const refresh=()=>{ close(); openFolder(CURRENT); };
+  const refresh=()=>{ close(); refreshView(); };
 
   const permVal=()=>bg.querySelector('input[name="share-perm"]:checked').value;
   const permSel={get value(){return permVal();}};
@@ -2009,7 +2036,7 @@ function openShare(node){
     // server. If it's gone by the time we finish, report through a toast instead.
     if(!bg.parentNode){
       toast(errors.length?`✗ ${errors.join(" · ")}`:`✓ Share finished — ${bits.join(" · ")||"nothing to do"}`);
-      if(!errors.length) openFolder(CURRENT);
+      if(!errors.length) refreshView();
       return;
     }
     if(errors.length){
@@ -2019,7 +2046,7 @@ function openShare(node){
       status(`✓ ${bits.length?bits.join(" · ").replace(/^./,c=>c.toUpperCase()):"Nothing to do."}`);
       SHARED=true; PENDING.clear(); chips.innerHTML="";
       goBtn.textContent="Done"; goBtn.disabled=false; restartBtn.classList.remove("hidden");
-      openFolder(CURRENT);   // refresh the grid behind the dialog
+      refreshView();   // refresh the grid behind the dialog
     }
   }
   goBtn.onclick=()=>{ SHARED ? refresh() : doShare(); };
@@ -2054,7 +2081,20 @@ function openShare(node){
     return "";
   }
   function renderCurrent(){
-    current.innerHTML=(node.shared_with||[]).length?`<p class="msub" style="margin:8px 0 4px;">Shared with <span style="opacity:.65">— re-add a person to change their permission</span></p>`:``;
+    const direct=(node.shared_with||[]).filter(u=>!u.inherited);
+    current.innerHTML=(node.shared_with||[]).length?`<p class="msub" style="margin:8px 0 4px;display:flex;align-items:center;gap:8px;">Shared with <span style="opacity:.65">— re-add a person to change their permission</span>${direct.length>1?`<button type="button" class="linkbtn revoke-all" style="margin-left:auto;color:var(--coral);">Revoke everyone</button>`:""}</p>`:``;
+    const ra=current.querySelector(".revoke-all");
+    if(ra) ra.onclick=async()=>{
+      if(!confirm(`Revoke access for all ${direct.length} people on “${node.name}”?\nThis writes an on-chain revocation for every file covered.`)) return;
+      const T=newTask(node.name); T.set(`Revoking ${direct.length} shares on-chain…`,{indet:true});
+      try{
+        const fd=new FormData(); fd.append("node_id",node.id); fd.append("grantee","*");
+        const r=await api("/api/unshare",{method:"POST",body:fd});
+        const d=await r.json().catch(()=>({}));
+        if(r.ok && !d.people_failed){ T.done(`✓ Revoked ${d.people_revoked} share${d.people_revoked!==1?"s":""} · ${d.files_revoked} file grant${d.files_revoked!==1?"s":""} on-chain`); refresh(); }
+        else T.done(`✗ ${d.people_failed||"?"} revoke${(d.people_failed||2)!==1?"s":""} failed — kept for retry`);
+      }catch(_e){ T.done("✗ Revoke didn't complete — connection lost or timed out. Retry."); }
+    };
     (node.shared_with||[]).forEach(u=>{
       const row=document.createElement("div"); row.className="person";
       const lvl=u.share_type==="view"?"read only":u.share_type==="co-owner"?"co-owner":"download / edit";

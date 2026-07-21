@@ -934,16 +934,9 @@ async def anchor_access_log(request: Request):
         raise HTTPException(status_code=502, detail="Anchor failed — retry")
 
 
-@app.post("/api/unshare")
-async def unshare(request: Request, node_id: str = Form(...), grantee: str = Form(...)):
-    """Revoke a share: on-chain revocation per file under the node, then remove
-    the share row. The contract is authoritative — downloads fail immediately."""
-    s = _session(request)
-    token, uid = s["access_token"], s["user_id"]
-    node = supa.get_node(token, node_id)
-    if not node or node["owner"] != uid:
-        raise HTTPException(status_code=403, detail="You can only manage shares on your own items")
-    files = supa.files_under(token, node_id)
+def _unshare_one(token: str, node_id: str, grantee: str, files: list[dict]) -> dict:
+    """Revoke ONE grantee's share on a node: batch roots + legacy per-file grants.
+    Returns {revoked, errors, tx}; the caller decides row deletion / fail-closed."""
     svc = supa.SERVICE_ROLE_KEY
     last_tx, revoked, errors = None, 0, 0
     # Batch-granted interactive shares (Finding 2): revoke the recorded root(s) —
@@ -973,14 +966,49 @@ async def unshare(request: Request, node_id: str = Form(...), grantee: str = For
                 last_tx, revoked = tx, revoked + 1
         except Exception:
             errors += 1
-    if errors:
-        # Fail closed: keep the share row (and any un-revoked batch mapping) so the
-        # owner can see it and retry. Batch roots already revoked and per-file grants
-        # already inactive are skipped on retry — it can never brick on prior successes.
+    return {"revoked": revoked, "errors": errors, "tx": last_tx}
+
+
+@app.post("/api/unshare")
+async def unshare(request: Request, node_id: str = Form(...), grantee: str = Form(...)):
+    """Revoke share(s): on-chain revocation per file under the node, then remove the
+    share row(s). The contract is authoritative — downloads fail immediately.
+
+    `grantee` is one user id, a comma-separated list, or `*` for EVERYONE with a
+    direct share on the node (group revoke from "Shared by me"). Each grantee is
+    processed independently and fail-closed: a failure keeps that person's share
+    row for retry; already-revoked roots and inactive grants are skipped, so a
+    retry can never brick on prior successes."""
+    s = _session(request)
+    token, uid = s["access_token"], s["user_id"]
+    node = supa.get_node(token, node_id)
+    if not node or node["owner"] != uid:
+        raise HTTPException(status_code=403, detail="You can only manage shares on your own items")
+    if grantee.strip() == "*":
+        targets = [sh["grantee"] for sh in supa.shares_for_node(token, node_id)]
+    else:
+        targets = [g.strip() for g in grantee.split(",") if g.strip()]
+    if not targets:
+        return {"ok": True, "people_revoked": 0, "people_failed": 0,
+                "files_revoked": 0, "files_covered": 0, "tx": None}
+    files = supa.files_under(token, node_id)
+    last_tx, files_revoked = None, 0
+    people_ok, people_failed = 0, 0
+    for g in targets:
+        res = _unshare_one(token, node_id, g, files)
+        files_revoked += res["revoked"]
+        last_tx = res["tx"] or last_tx
+        if res["errors"]:
+            people_failed += 1          # fail closed: keep this person's row; retry-safe
+        else:
+            supa.delete_share(token, node_id, g)
+            people_ok += 1
+    if people_failed and not people_ok:
         raise HTTPException(status_code=502,
-                            detail=f"On-chain revoke failed ({errors} error(s)) — share kept; retry")
-    supa.delete_share(token, node_id, grantee)
-    return {"ok": True, "files_revoked": revoked, "files_covered": len(files), "tx": last_tx}
+                            detail="On-chain revoke failed — share kept; retry")
+    return {"ok": people_failed == 0, "people_revoked": people_ok,
+            "people_failed": people_failed, "files_revoked": files_revoked,
+            "files_covered": len(files), "tx": last_tx}
 
 
 # --- share / download -------------------------------------------------------
