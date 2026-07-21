@@ -498,6 +498,7 @@ select option{background:var(--menu-bg,#17112A);color:var(--text,#ECE9F8);}
           <button data-layout="grid" title="Grid view" aria-label="Grid view"></button>
         </div>
         <div class="tools" id="tools">
+          <span id="folder-acts" style="display:none;align-items:center;gap:8px;"></span>
           <button class="btn-ghost btn" id="new-folder">New folder</button>
           <button class="btn-ghost btn" id="up-folder">Upload folder</button>
           <button class="btn" id="up-file">Upload file</button>
@@ -892,6 +893,30 @@ async function openFolder(folderId){
   if(!r.ok){ toast((await r.json()).error||"Error"); return; }
   const d=await r.json(); CURRENT=d.folder.id;
   renderCrumbs(d.breadcrumbs); renderGrid(d.children, true);
+  renderFolderActs(d.folder, d.breadcrumbs);
+}
+// Folder-level actions in the header while INSIDE the folder (Mark, 2026-07-21) —
+// previously share/rename lived only on the folder's tile in the PARENT listing.
+function renderFolderActs(folder, crumbs){
+  const box=$("#folder-acts"); if(!box) return;
+  box.innerHTML="";
+  const root=!crumbs || crumbs.length<2;                 // no actions on My Files root
+  const mine=ME && folder.owner===ME.id;
+  if(root || (!mine && folder.access!=="co-owner")){ box.style.display="none"; return; }
+  const mk=(label,fn,primary)=>{ const b=document.createElement("button");
+    b.className=(primary?"btn":"btn-ghost btn"); b.textContent=label; b.onclick=fn; return b; };
+  box.appendChild(mk("Share folder", ()=>openShare(folder)));
+  if(mine){
+    box.appendChild(mk("Rename", ()=>renameItemPrompt(folder)));
+    const more=document.createElement("button"); more.className="btn-ghost btn";
+    more.textContent="⋯"; more.title="More folder actions";
+    // Delete/Move act on the folder we're standing in — hop to the parent first so
+    // the refreshed view isn't a 404 on the folder that just went away.
+    const parent=crumbs[crumbs.length-2];
+    more.onclick=(e)=>openCtx(e, folder, {inViewer:true, onDestroy:()=>openFolder(parent.id)});
+    box.appendChild(more);
+  }
+  box.style.display="inline-flex";
 }
 async function loadShared(){
   setLoc({kind:"shared"});
