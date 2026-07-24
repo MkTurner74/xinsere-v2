@@ -133,3 +133,34 @@ def test_size_histogram_buckets_by_size():
     assert hist["500MB-2GB"]["count"] == 1
     assert hist["2GB+"]["count"] == 1
     assert sum(b["count"] for b in hist.values()) == len(files)
+
+
+# --- stratified calibration sample + replay (2026-07-24) ---------------------
+
+def test_sample_per_bucket_caps_each_bucket_independently():
+    runner = MigrationRunner(client=None)
+    # 5 tiny files, 1 medium, 0 large -- caps at 2 should take 2 tiny, 1 medium,
+    # 0 large (a bucket with fewer than n just gives what it has).
+    files = ([DbxFile(f"/tiny{i}", str(i), 10, "h") for i in range(5)]
+             + [DbxFile("/mid", "m", 5 * 1024 * 1024, "h")])
+    sample = runner.sample_per_bucket(files, 2)
+    hist = runner.size_histogram(sample)
+    assert hist["<128KB"]["count"] == 2
+    assert hist["128KB-10MB"]["count"] == 1
+    assert len(sample) == 3
+
+
+def test_sample_per_bucket_is_deterministic():
+    runner = MigrationRunner(client=None)
+    files = [DbxFile(f"/f{i}", str(i), 10, "h") for i in range(10)]
+    assert runner.sample_per_bucket(files, 3) == runner.sample_per_bucket(files, 3)
+
+
+def test_save_and_load_sample_roundtrips_paths(tmp_path):
+    files = [DbxFile("/Founders/a.pdf", "1", 10, "h"),
+             DbxFile("/Founders/Sub/B.MOV", "2", 20, "h")]
+    out = tmp_path / "sample.json"
+    dc.save_sample(files, str(out))
+    loaded = dc.load_sample(str(out))
+    # lowercased, leading-slash-stripped -- must match the key run() checks against.
+    assert loaded == {"founders/a.pdf", "founders/sub/b.mov"}

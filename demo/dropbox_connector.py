@@ -294,6 +294,25 @@ class Report:
         }
 
 
+# --- Calibration sample persistence (2026-07-24) ----------------------------
+# A stratified sample only makes for a fair compute/storage comparison if every
+# config processes the IDENTICAL file set — so the sample is written once
+# (--sample-per-bucket + --sample-out) and replayed (--sample-file) unchanged
+# across every run being compared, rather than re-sampled per run.
+
+def save_sample(files: list[DbxFile], path: str) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump([{"path": f.path, "size": f.size} for f in files], fh, indent=2)
+
+
+def load_sample(path: str) -> set[str]:
+    """Lowercased, leading-slash-stripped paths — the same key run() already uses
+    to check `existing` and to match sample_paths against the live walk."""
+    with open(path, encoding="utf-8") as fh:
+        rows = json.load(fh)
+    return {r["path"].lstrip("/").lower() for r in rows}
+
+
 # --- Runner ----------------------------------------------------------------
 DEFAULT_WORKERS = int(os.environ.get("XINSERE_MIGRATION_WORKERS", "8"))
 
@@ -346,8 +365,27 @@ class MigrationRunner:
         small = sum(1 for f in files if f.size < 128 * 1024)
         return files, small
 
+    def sample_per_bucket(self, files: list[DbxFile], n: int) -> list[DbxFile]:
+        """Stratified calibration sample (Dropbox-Ingest-Test-Program, 2026-07-24):
+        up to `n` files per size bucket, in the order enumerate() found them, rather
+        than "first N files overall" — which would just reflect whichever folder
+        happens to enumerate first, not a representative mix. Deterministic (no
+        randomness) so the exact same sample can be replayed across every compute/
+        storage config being compared -- see save_sample/load_sample."""
+        counts = {label: 0 for label, _, _ in self._SIZE_BUCKETS}
+        out: list[DbxFile] = []
+        for f in files:
+            for label, lo, hi in self._SIZE_BUCKETS:
+                if f.size >= lo and (hi is None or f.size < hi):
+                    if counts[label] < n:
+                        counts[label] += 1
+                        out.append(f)
+                    break
+        return out
+
     def run(self, folder: str, *, limit: int | None, full: bool, grants: bool = False,
-            workers: int = DEFAULT_WORKERS):
+            workers: int = DEFAULT_WORKERS, sample_per_bucket: int | None = None,
+            sample_out: str | None = None, sample_paths: set[str] | None = None):
         if grants:
             # Permission-preservation pass over the already-migrated tree. The path
             # setup mirrors --full (needs Supabase + chain env), but moves no bytes.
@@ -358,10 +396,26 @@ class MigrationRunner:
 
         if not full:
             files, small = self.enumerate(folder)
-            rep.sourced = len(files)
             print(f"Manifest: {len(files)} files, {small} under 128KB "
                   f"({100 * small / max(len(files), 1):.0f}%), "
-                  f"{sum(f.size for f in files) / 1e9:.2f} GB", file=sys.stderr, flush=True)
+                  f"{sum(f.size for f in files) / 1e9:.2f} GB\n"
+                  f"histogram: {self.size_histogram(files)}", file=sys.stderr, flush=True)
+            # Stratified calibration sample (Dropbox-Ingest-Test-Program, 2026-07-24):
+            # up to N files per size bucket, written out so the SAME sample can be
+            # replayed via --sample-file across every compute/storage config being
+            # compared -- an apples-to-apples throughput test, not just a smaller one.
+            if sample_per_bucket:
+                files = self.sample_per_bucket(files, sample_per_bucket)
+                print(f"Stratified sample: {len(files)} files, "
+                      f"{sum(f.size for f in files) / 1e9:.3f} GB\n"
+                      f"sample histogram: {self.size_histogram(files)}",
+                      file=sys.stderr, flush=True)
+                if sample_out:
+                    save_sample(files, sample_out)
+                    print(f"Sample manifest written to {sample_out} "
+                          f"(replay with --sample-file {sample_out} --full)",
+                          file=sys.stderr, flush=True)
+            rep.sourced = len(files)
             return rep  # enumerate-only: manifest built, nothing moved
 
         # Lazy imports: the store path needs the pipeline env (KMS/Dynamo/S3) and
@@ -436,6 +490,14 @@ class MigrationRunner:
 
         with cf.ThreadPoolExecutor(max_workers=workers) as ex:
             for f in self._walk(folder):
+                # Sample replay (Dropbox-Ingest-Test-Program, 2026-07-24): when
+                # comparing compute/storage configs, every run must process the
+                # exact same files, not just "the first N encountered" -- files
+                # outside a loaded --sample-file are skipped WITHOUT counting
+                # against rep.sourced, so the report reflects the sample, not
+                # however much of the tree happened to be walked past.
+                if sample_paths is not None and f.path.lstrip("/").lower() not in sample_paths:
+                    continue
                 rep.sourced += 1  # main thread only
                 if f.path.lstrip("/").lower() in existing:
                     rep.skipped += 1
@@ -667,12 +729,26 @@ def main() -> None:
                          "the personal-content exclusion (EXCLUDE_TOP) -- an explicit, "
                          "one-off opt-in, e.g. --include-top \"Mark Turner\". "
                          "Env: XINSERE_MIGRATION_INCLUDE_TOP")
+    ap.add_argument("--sample-per-bucket", type=int, default=None,
+                    help="With --enumerate-only: build a stratified calibration sample "
+                         "(up to N files per size bucket) instead of the whole manifest. "
+                         "Use with --sample-out to save it for replay.")
+    ap.add_argument("--sample-out", default="sample_manifest.json",
+                    help="Where --sample-per-bucket writes the chosen file list "
+                         "(default: sample_manifest.json)")
+    ap.add_argument("--sample-file", default=None,
+                    help="With --full: replay a previously-saved sample (from "
+                         "--sample-out) instead of the whole folder -- use this to run "
+                         "the IDENTICAL sample through each compute/storage config being "
+                         "compared.")
     args = ap.parse_args()
 
     include_top = {s.strip() for s in args.include_top.split(",") if s.strip()}
     runner = MigrationRunner(DropboxClient(DropboxAuth()), include_top=include_top)
+    sample_paths = load_sample(args.sample_file) if args.sample_file else None
     rep = runner.run(args.folder, limit=args.limit, full=args.full, grants=args.grants,
-                     workers=args.workers)
+                     workers=args.workers, sample_per_bucket=args.sample_per_bucket,
+                     sample_out=args.sample_out, sample_paths=sample_paths)
     if args.grants:
         print(json.dumps(rep, indent=2))       # preserve_permissions returns a dict
     else:

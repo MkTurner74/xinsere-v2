@@ -77,7 +77,7 @@ class FakeSupa:
         return {"id": f"fil-{len(self.files)}"}
 
 
-def _run(files, workers):
+def _run(files, workers, sample_paths=None):
     runner = MigrationRunner(FakeWalkClient(files))
     rep = Report()
     supa = FakeSupa()
@@ -92,6 +92,10 @@ def _run(files, workers):
             sem.release()
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
         for path, data in files:
+            # Sample replay filter (2026-07-24) -- mirrors run()'s --sample-file
+            # gate: files outside the sample don't count against rep.sourced.
+            if sample_paths is not None and path.lstrip("/").lower() not in sample_paths:
+                continue
             f = DbxFile(path, f"id:{path}", len(data), dropbox_content_hash(data))
             rep.sourced += 1
             sem.acquire()
@@ -134,6 +138,13 @@ def test_content_hash_mismatch_is_isolated_not_fatal():
     bad = DbxFile("/g/bad.bin", "id:bad", 3, "deadbeef" * 8)
     runner._ingest_one(bad, pipeline, supa, "t", "o", "root", rep)
     assert len(rep.failed) == 1 and rep.verified == 0
+
+
+def test_sample_replay_only_processes_the_sampled_files():
+    files = [(f"/x/f{i}.bin", f"d{i}".encode()) for i in range(10)]
+    sample = {"x/f2.bin", "x/f5.bin"}
+    rep, supa, pipeline = _run(files, workers=4, sample_paths=sample)
+    assert rep.sourced == 2 and rep.verified == 2 and len(supa.files) == 2
 
 
 def test_failure_categories_buckets_known_error_strings():

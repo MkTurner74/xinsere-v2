@@ -47,11 +47,19 @@ def main() -> None:
     # Empty by default: the safety-by-default exclusion is untouched unless set.
     include_top = {s.strip() for s in
                    os.environ.get("XINSERE_MIGRATION_INCLUDE_TOP", "").split(",") if s.strip()}
-    from dropbox_connector import MigrationRunner, DropboxClient, DropboxAuth
+    from dropbox_connector import MigrationRunner, DropboxClient, DropboxAuth, load_sample
+    # Calibration-sample replay (2026-07-24, compute/storage comparison test
+    # matrix): a path to a --sample-out manifest, mounted/copied into the
+    # container, so this exact same host can be compared apples-to-apples
+    # against every other compute config on the identical file set.
+    sample_file = os.environ.get("XINSERE_MIGRATION_SAMPLE_FILE", "")
+    sample_paths = load_sample(sample_file) if sample_file else None
     print(f">>> cloud-to-cloud migration folder={folder!r} workers={workers} "
-          f"include_top={sorted(include_top) or 'none'}", flush=True)
+          f"include_top={sorted(include_top) or 'none'} "
+          f"sample_file={sample_file or 'none'}"
+          f"{f' ({len(sample_paths)} files)' if sample_paths is not None else ''}", flush=True)
     runner = MigrationRunner(DropboxClient(DropboxAuth()), include_top=include_top)
-    rep = runner.run(folder, limit=None, full=True, workers=workers)
+    rep = runner.run(folder, limit=None, full=True, workers=workers, sample_paths=sample_paths)
     print("RESULT " + json.dumps(rep.as_dict(rep.sourced, 0)), flush=True)
 
 

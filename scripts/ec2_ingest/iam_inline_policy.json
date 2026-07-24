@@ -1,0 +1,86 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:HeadObject",
+        "s3:CopyObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::xinsere-dev-frag-*",
+        "arn:aws:s3:::xinsere-dev-frag-*/*",
+        "arn:aws:s3:::xinsere-dev-staging",
+        "arn:aws:s3:::xinsere-dev-staging/*",
+        "arn:aws:s3:::xinsere-dev-downloads",
+        "arn:aws:s3:::xinsere-dev-downloads/*"
+      ]
+    },
+    {
+      "Sid": "KMS",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-1:058264449111:key/062e9a3d-7d05-4241-beb6-00f69daf1ec3"
+    },
+    {
+      "Sid": "DynamoDB",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:TransactWriteItems"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:058264449111:table/Xinsere_*",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/Xinsere_*/index/*",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/xinsere_*",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/xinsere_*/index/*",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/Upload_status",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/Upload_status/index/*",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/S3_locations",
+        "arn:aws:dynamodb:us-east-1:058264449111:table/S3_locations/index/*"
+      ]
+    },
+    {
+      "Sid": "SecretsManager",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": [
+        "arn:aws:secretsmanager:us-east-1:058264449111:secret:xinsere/dev/*",
+        "arn:aws:secretsmanager:us-east-1:058264449111:secret:xinsere/dropbox/oauth-*",
+        "arn:aws:secretsmanager:us-east-1:058264449111:secret:xinsere/supabase/service-role-*"
+      ]
+    },
+    {
+      "Sid": "ECRAuth",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ECRPull",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage"
+      ],
+      "Resource": "arn:aws:ecr:us-east-1:058264449111:repository/xinsere-migrate"
+    }
+  ]
+}

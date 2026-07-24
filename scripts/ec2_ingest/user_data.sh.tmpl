@@ -1,0 +1,45 @@
+#!/bin/bash
+# EC2 bootstrap for a one-shot Xinsere Dropbox-ingest compute comparison run
+# (Cloud-Performance-Test-Matrix / Dropbox-Ingest-Test-Program, 2026-07-24).
+# Rendered by scripts/ec2_ingest/launch.py -- placeholders shown below in braces.
+#
+# Reuses the SAME container image already built for Fargate (Dockerfile.migrate)
+# so this is purely a compute-tier comparison: identical code, identical env
+# shape, only the host changes.
+set -euo pipefail
+exec > >(tee /var/log/xinsere-ingest.log) 2>&1
+
+echo ">>> $(date -u +%FT%TZ) bootstrap starting on $(uname -m)"
+
+dnf install -y docker
+systemctl enable --now docker
+
+aws ecr get-login-password --region {aws_region} \
+  | docker login --username AWS --password-stdin {account_id}.dkr.ecr.{aws_region}.amazonaws.com
+
+mkdir -p /data
+{sample_file_fetch}
+
+# --network host: the simplest fix for containers-can't-reach-IMDS-by-default
+# under Docker's bridge network + IMDSv2's hop-limit-1 default. No custom
+# metadata-options needed on the instance side.
+docker run --rm --network host \
+  -e XINSERE_BACKEND=aws \
+  -e AWS_REGION={aws_region} \
+  -e XINSERE_S3_BUCKETS="{s3_buckets}" \
+  -e XINSERE_MIGRATION_WORKERS={workers} \
+  -e XINSERE_MIGRATION_FOLDER="{migration_folder}" \
+  -e XINSERE_MIGRATION_OWNER={migration_owner} \
+  -e XINSERE_MIGRATION_ACTOR={migration_actor} \
+  -e XINSERE_MIGRATION_ROOT={migration_root} \
+  -e XINSERE_OWNER_EMAILS="{owner_emails}" \
+  -e XINSERE_MIGRATION_INCLUDE_TOP="{include_top}" \
+  -e XINSERE_MIGRATION_SAMPLE_FILE="{sample_file_container_path}" \
+  -v /data:/data \
+  {image_uri}
+
+echo ">>> $(date -u +%FT%TZ) container exited rc=$?"
+# Progress/results already landed in Supabase migration_runs (Admin > Imports
+# dashboard) via the connector's own heartbeat -- that's the source of truth
+# regardless of which host ran it, not this console log.
+{shutdown_line}
