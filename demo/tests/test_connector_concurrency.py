@@ -134,3 +134,17 @@ def test_content_hash_mismatch_is_isolated_not_fatal():
     bad = DbxFile("/g/bad.bin", "id:bad", 3, "deadbeef" * 8)
     runner._ingest_one(bad, pipeline, supa, "t", "o", "root", rep)
     assert len(rep.failed) == 1 and rep.verified == 0
+
+
+def test_failure_categories_buckets_known_error_strings():
+    rep = Report()
+    rep.failed = [
+        ("/a", "Dropbox content_hash mismatch on download"),
+        ("/b", "L2 reassembly SHA-256 mismatch"),
+        ("/c", "POST https://x failed after 10 tries: ConnectionError"),
+        ("/d", "something totally unexpected"),
+    ]
+    cats = rep.failure_categories()
+    assert cats == {"integrity_l3_dropbox_hash": 1, "integrity_l2_reassembly": 1,
+                    "network": 1, "other": 1}
+    assert rep.as_dict(4, 0)["failed_count"] == 4

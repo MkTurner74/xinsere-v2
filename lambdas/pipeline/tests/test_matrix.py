@@ -106,6 +106,18 @@ def group_a() -> None:
         ok_all = ok_all and this
     check("A6 all fragment counts round-trip", ok_all, " ".join(detail))
 
+    # A7 — store() timings mirror retrieve()'s breakdown (2026-07-24, for the
+    # cloud performance test matrix: write-side needs the same KMS/AES/S3
+    # attribution the read side already had).
+    svc, *_ = make_service()
+    r = svc.store(os.urandom(50_000), "application/octet-stream")
+    t = r.timings
+    has_keys = all(k in t for k in ("total_ms", "fanout_ms", "index_ms",
+                                    "kms_generate", "aes_gcm", "s3_put"))
+    has_agg = all(k in t["kms_generate"] for k in ("max", "avg", "sum"))
+    check("A7 store() timings present with S3/KMS/AES breakdown",
+          has_keys and has_agg, str(list(t.keys())))
+
 
 # --- B. Integrity & security ------------------------------------------------
 

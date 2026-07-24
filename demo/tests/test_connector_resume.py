@@ -84,3 +84,52 @@ def test_resume_set_matches_walk_paths_lowercased():
     # what _existing_paths produces so a re-run actually skips.
     walk_path = "/Founders/Legal/b.pdf"
     assert walk_path.lstrip("/").lower() == "founders/legal/b.pdf"
+
+
+# --- include_top override (2026-07-24) ---------------------------------------
+
+def test_default_still_prunes_personal_folders():
+    pages = {
+        "": {"entries": [_folder("/Founders"), _folder("/Mark Turner")], "has_more": False},
+        "/Founders": {"entries": [_file("/Founders/a.pdf")], "has_more": False},
+        "/Mark Turner": {"entries": [_file("/Mark Turner/secret.pdf")], "has_more": False},
+    }
+    runner = MigrationRunner(FakeClient(pages))   # no override -> safety-by-default
+    got = sorted(f.path for f in runner._walk(""))
+    assert got == ["/Founders/a.pdf"]
+
+
+def test_include_top_overrides_the_exclusion_explicitly():
+    pages = {
+        "": {"entries": [_folder("/Founders"), _folder("/Mark Turner"),
+                         _folder("/Photos Backup")], "has_more": False},
+        "/Founders": {"entries": [_file("/Founders/a.pdf")], "has_more": False},
+        "/Mark Turner": {"entries": [_file("/Mark Turner/big.mov")], "has_more": False},
+        "/Photos Backup": {"entries": [_file("/Photos Backup/pic.jpg")], "has_more": False},
+    }
+    runner = MigrationRunner(FakeClient(pages), include_top={"Mark Turner"})
+    got = sorted(f.path for f in runner._walk(""))
+    # Mark Turner is included now the caller opted in; Photos Backup stays pruned.
+    assert got == ["/Founders/a.pdf", "/Mark Turner/big.mov"]
+
+
+# --- size histogram (2026-07-24, corpus profiling) ---------------------------
+
+def test_size_histogram_buckets_by_size():
+    runner = MigrationRunner(client=None)
+    files = [
+        DbxFile("/a", "1", 1000, "h"),                       # <128KB
+        DbxFile("/b", "2", 5 * 1024 * 1024, "h"),             # 128KB-10MB
+        DbxFile("/c", "3", 50 * 1024 * 1024, "h"),            # 10-100MB
+        DbxFile("/d", "4", 300 * 1024 * 1024, "h"),           # 100-500MB
+        DbxFile("/e", "5", 1024 * 1024 * 1024, "h"),          # 500MB-2GB
+        DbxFile("/f", "6", 3 * 1024 ** 3, "h"),                # 2GB+
+    ]
+    hist = runner.size_histogram(files)
+    assert hist["<128KB"]["count"] == 1
+    assert hist["128KB-10MB"]["count"] == 1
+    assert hist["10-100MB"]["count"] == 1
+    assert hist["100-500MB"]["count"] == 1
+    assert hist["500MB-2GB"]["count"] == 1
+    assert hist["2GB+"]["count"] == 1
+    assert sum(b["count"] for b in hist.values()) == len(files)

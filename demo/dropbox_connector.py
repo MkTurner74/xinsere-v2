@@ -149,7 +149,7 @@ class DropboxClient:
     def _post(self, url: str, body: dict) -> dict:
         return _resilient("POST", url, headers=self._headers(), data=json.dumps(body)).json()
 
-    def walk(self, path: str) -> Iterator[DbxFile]:
+    def walk(self, path: str, *, exclude: set[str] = EXCLUDE_TOP) -> Iterator[DbxFile]:
         """Yield every file under `path`, descending folder-by-folder with
         NON-recursive list_folder calls.
 
@@ -159,13 +159,19 @@ class DropboxClient:
         itself (a 500 wave on one subfolder is retried by _resilient without wedging
         the whole walk). Personal top-level folders are pruned as we descend. Still
         streams: files are yielded as each folder page arrives, so ingest starts
-        immediately and never waits on a full tree enumeration."""
+        immediately and never waits on a full tree enumeration.
+
+        `exclude` defaults to the hard-coded personal-content set (EXCLUDE_TOP);
+        callers that need a deliberate, explicit override for one of those folders
+        (e.g. migrating a personal-backup folder on purpose) pass a narrowed set
+        rather than this ever silently changing for everyone (see
+        MigrationRunner's include_top)."""
         stack = [path]
         while stack:
             folder = stack.pop()
             seg = folder.strip("/").split("/", 1)[0] if folder.strip("/") else ""
-            if seg in EXCLUDE_TOP:
-                continue  # personal backups — never enumerate or migrate
+            if seg in exclude:
+                continue  # personal backups — never enumerate or migrate, unless overridden
             r = self._post(f"{API}/files/list_folder",
                            {"path": folder, "recursive": False, "limit": 2000})
             while True:
@@ -244,6 +250,27 @@ class Report:
     bytes_in: int = 0
     started: float = field(default_factory=time.time)
 
+    # Coarse failure-reason buckets (2026-07-24, for the scale/reliability test
+    # pass on a real large corpus) — matched against the known error strings this
+    # module and the pipeline actually raise, so a run's failures read as "N
+    # network, M integrity, K other" instead of a wall of raw exception text.
+    _FAILURE_PATTERNS = (
+        ("integrity_l3_dropbox_hash", "Dropbox content_hash mismatch"),
+        ("integrity_l2_reassembly", "L2 reassembly SHA-256 mismatch"),
+        ("network", "failed after"),        # _resilient's exhausted-retries message
+        ("network", "Connection"),
+        ("network", "Timeout"),
+        ("oom_or_memory", "MemoryError"),
+        ("oom_or_memory", "memory"),
+    )
+
+    def failure_categories(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for _path, reason in self.failed:
+            cat = next((c for c, needle in self._FAILURE_PATTERNS if needle in reason), "other")
+            counts[cat] = counts.get(cat, 0) + 1
+        return counts
+
     def as_dict(self, files: int, folders: int) -> dict:
         wall = max(time.time() - self.started, 1e-6)
         return {
@@ -254,6 +281,8 @@ class Report:
             "verified": self.verified,
             "skipped": self.skipped,
             "failed": self.failed,
+            "failed_count": len(self.failed),
+            "failure_categories": self.failure_categories(),
             "bytes_in": self.bytes_in,
             "gb_in": round(self.bytes_in / 1e9, 3),
             "wall_seconds": round(wall, 1),
@@ -270,16 +299,50 @@ DEFAULT_WORKERS = int(os.environ.get("XINSERE_MIGRATION_WORKERS", "8"))
 
 
 class MigrationRunner:
-    def __init__(self, client: DropboxClient):
+    def __init__(self, client: DropboxClient, include_top: set[str] | None = None):
         self.client = client
+        # Deliberate, explicit override of the personal-content exclusion (EXCLUDE_TOP)
+        # for a specific folder someone actually wants migrated (e.g. a personal
+        # Dropbox backup being brought into Xinsere on purpose). Default is empty —
+        # the safety-by-default exclusion is untouched unless a caller opts in by name.
+        self._exclude = EXCLUDE_TOP - (include_top or set())
         # Concurrency guards (used only on the --full parallel path).
         self._rep_lock = threading.Lock()     # serialize Report mutations across workers
         self._path_lock = threading.Lock()    # serialize folder creation (avoid dup folders)
         self._path_cache: dict[str, str] = {}  # rel_dir(lower) -> parent node id (memoized)
 
+    def _walk(self, folder: str) -> Iterator[DbxFile]:
+        return self.client.walk(folder, exclude=self._exclude)
+
+    # Size buckets for corpus profiling (Cloud-Performance-Test-Matrix, 2026-07-24):
+    # lines up with the codec/master-vs-distribution split used in the AWS test
+    # matrix, so a manifest's histogram tells us directly whether this corpus has
+    # files near/over the current staged-upload cap or likely gateway-memory limits.
+    _SIZE_BUCKETS = (
+        ("<128KB", 0, 128 * 1024),
+        ("128KB-10MB", 128 * 1024, 10 * 1024 * 1024),
+        ("10-100MB", 10 * 1024 * 1024, 100 * 1024 * 1024),
+        ("100-500MB", 100 * 1024 * 1024, 500 * 1024 * 1024),
+        ("500MB-2GB", 500 * 1024 * 1024, 2 * 1024 ** 3),
+        ("2GB+", 2 * 1024 ** 3, None),
+    )
+
+    def size_histogram(self, files: list[DbxFile]) -> dict:
+        """Bucketed file count + total bytes, for pre-flight corpus profiling
+        (enumerate-only). Tells us the real size mix before picking a stratified
+        calibration sample, and flags any files near/over known ceilings."""
+        hist = {label: {"count": 0, "bytes": 0} for label, _, _ in self._SIZE_BUCKETS}
+        for f in files:
+            for label, lo, hi in self._SIZE_BUCKETS:
+                if f.size >= lo and (hi is None or f.size < hi):
+                    hist[label]["count"] += 1
+                    hist[label]["bytes"] += f.size
+                    break
+        return hist
+
     def enumerate(self, folder: str) -> tuple[list[DbxFile], int]:
         """Build the manifest (L1 source of truth). Returns (files, small<128KB)."""
-        files = list(self.client.walk(folder))
+        files = list(self._walk(folder))
         small = sum(1 for f in files if f.size < 128 * 1024)
         return files, small
 
@@ -372,7 +435,7 @@ class MigrationRunner:
                 sem.release()
 
         with cf.ThreadPoolExecutor(max_workers=workers) as ex:
-            for f in self.client.walk(folder):
+            for f in self._walk(folder):
                 rep.sourced += 1  # main thread only
                 if f.path.lstrip("/").lower() in existing:
                     rep.skipped += 1
@@ -599,9 +662,15 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
                     help=f"Concurrent ingest workers (default {DEFAULT_WORKERS}; "
                          "env XINSERE_MIGRATION_WORKERS)")
+    ap.add_argument("--include-top", default=os.environ.get("XINSERE_MIGRATION_INCLUDE_TOP", ""),
+                    help="Comma-separated top-level folder names to migrate DESPITE "
+                         "the personal-content exclusion (EXCLUDE_TOP) -- an explicit, "
+                         "one-off opt-in, e.g. --include-top \"Mark Turner\". "
+                         "Env: XINSERE_MIGRATION_INCLUDE_TOP")
     args = ap.parse_args()
 
-    runner = MigrationRunner(DropboxClient(DropboxAuth()))
+    include_top = {s.strip() for s in args.include_top.split(",") if s.strip()}
+    runner = MigrationRunner(DropboxClient(DropboxAuth()), include_top=include_top)
     rep = runner.run(args.folder, limit=args.limit, full=args.full, grants=args.grants,
                      workers=args.workers)
     if args.grants:

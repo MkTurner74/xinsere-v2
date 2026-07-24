@@ -42,6 +42,10 @@ class StoreResult:
     file_sha256: str
     fragment_count: int
     stored_at: str
+    # Per-stage wall-clock breakdown (ms), mirroring RetrieveResult.timings — added
+    # 2026-07-24 so write-side throughput (KMS/S3/AES-GCM attribution) can be
+    # profiled with the same rigor as reads across compute/storage benchmarks.
+    timings: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -113,6 +117,7 @@ class PipelineService:
         """Fragment, encrypt, scatter, and index a file. Metadata (filename,
         path, type inference) is never persisted — only the opaque file_id,
         the whole-file SHA-256, and the caller's optional label."""
+        t_all = time.perf_counter()
         file_id = uuid.uuid4().hex
         file_sha = _sha256_hex(content)
 
@@ -122,13 +127,18 @@ class PipelineService:
 
         # Encrypt + scatter every fragment concurrently; .result() order matches
         # submit order, so records stay in sequence. Any worker error propagates.
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
             futures = [
                 pool.submit(self._encrypt_and_store, file_id, seq, frag, buckets, jitter)
                 for seq, frag in enumerate(fragments)
             ]
-            records = [f.result() for f in futures]
+            results = [f.result() for f in futures]
+        fanout_ms = _ms(t0)
+        records = [r[0] for r in results]
+        frag_timings = [r[1] for r in results]
 
+        t0 = time.perf_counter()
         for rec in records:
             self._index.put_fragment(rec)
 
@@ -143,20 +153,48 @@ class PipelineService:
                 label=label,
             )
         )
-        return StoreResult(file_id, file_sha, self._n, _now_iso())
+        index_ms = _ms(t0)
 
-    def _encrypt_and_store(self, file_id, seq, frag, buckets, jitter) -> FragmentRecord:
-        """Worker: fresh key -> AES-256-GCM encrypt -> write to a bucket."""
+        timings = {
+            "total_ms": _ms(t_all),
+            "fanout_ms": fanout_ms,   # wall-clock of the parallel encrypt+PUT fan-out
+            "index_ms": index_ms,
+            "fragments": self._n,
+            "workers": self._workers,
+            "bytes": len(content),
+            "kms_generate": _agg(frag_timings, "kms_ms"),
+            "aes_gcm": _agg(frag_timings, "aes_ms"),
+            "s3_put": _agg(frag_timings, "s3_ms"),
+        }
+        _log.info("store %s %s", file_id, timings)
+        return StoreResult(file_id, file_sha, self._n, _now_iso(), timings)
+
+    def _encrypt_and_store(self, file_id, seq, frag, buckets, jitter) -> tuple[FragmentRecord, dict]:
+        """Worker: fresh key -> AES-256-GCM encrypt -> write to a bucket.
+
+        Returns (record, timing) where timing splits the KMS key generation, the
+        local AES-GCM encrypt, and the S3 write — the write-side mirror of
+        _read_and_decrypt's breakdown, for compute/storage benchmarking."""
+        t0 = time.perf_counter()
         data_key, wrapped = self._keys.generate_data_key()
+        kms_ms = _ms(t0)
+
+        t0 = time.perf_counter()
         nonce = os.urandom(NONCE_BYTES)
         ciphertext = AESGCM(data_key).encrypt(nonce, frag, None)
+        aes_ms = _ms(t0)
+
+        t0 = time.perf_counter()
         fragment_id = f"{uuid.uuid4().hex}_{seq}"  # UUID + seq only; no file link
         bucket = fragmenter.route(seq, buckets, mode=self._mode, jitter=jitter)
         self._objects.put(bucket, fragment_id, ciphertext)
-        return FragmentRecord(
+        s3_ms = _ms(t0)
+
+        rec = FragmentRecord(
             file_id=file_id, sequence=seq, fragment_id=fragment_id,
             bucket=bucket, wrapped_key=wrapped, nonce=nonce,
         )
+        return rec, {"seq": seq, "kms_ms": kms_ms, "aes_ms": aes_ms, "s3_ms": s3_ms}
 
     # --- Retrieve ------------------------------------------------------------
 

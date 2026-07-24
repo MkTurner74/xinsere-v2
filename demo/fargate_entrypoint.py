@@ -42,9 +42,15 @@ def main() -> None:
     _load_supabase()
     folder = os.environ.get("XINSERE_MIGRATION_FOLDER", "")
     workers = int(os.environ.get("XINSERE_MIGRATION_WORKERS", "16"))
+    # Explicit, one-off opt-in to migrate a folder normally excluded as personal
+    # content (EXCLUDE_TOP) -- e.g. XINSERE_MIGRATION_INCLUDE_TOP="Mark Turner".
+    # Empty by default: the safety-by-default exclusion is untouched unless set.
+    include_top = {s.strip() for s in
+                   os.environ.get("XINSERE_MIGRATION_INCLUDE_TOP", "").split(",") if s.strip()}
     from dropbox_connector import MigrationRunner, DropboxClient, DropboxAuth
-    print(f">>> cloud-to-cloud migration folder={folder!r} workers={workers}", flush=True)
-    runner = MigrationRunner(DropboxClient(DropboxAuth()))
+    print(f">>> cloud-to-cloud migration folder={folder!r} workers={workers} "
+          f"include_top={sorted(include_top) or 'none'}", flush=True)
+    runner = MigrationRunner(DropboxClient(DropboxAuth()), include_top=include_top)
     rep = runner.run(folder, limit=None, full=True, workers=workers)
     print("RESULT " + json.dumps(rep.as_dict(rep.sourced, 0)), flush=True)
 
