@@ -344,6 +344,15 @@ document.documentElement.dataset.theme=localStorage.getItem("xin-theme")||"dark"
         <span class="note"><strong>Visible image watermark</strong> — additionally weaves a faint pixel-domain mark into raster images so a <em>screen grab</em> can be traced. It very slightly perturbs the picture; leave OFF for pre-res / professional imaging where any change is unacceptable. Invisible marking above is unaffected.</span>
         <button class="btn ghost sm" id="od-wmpix" type="button">…</button>
       </div>
+      <div class="dz-row" style="flex-direction:column;align-items:stretch;gap:8px;">
+        <span class="note"><strong>Marking-policy matrix</strong> — per file-format class, whether previews and downloads get marked. Production masters (raw/uncompressed video, images, audio) default to <b>unmarked</b> — bit-perfect for editorial use. Distribution copies and documents default to <b>marked</b> — traceable. Click a cell to cycle Default → Mark → Don't mark. Only applies while forensic watermarking above is On.</span>
+        <div style="overflow-x:auto;">
+          <table id="wm-matrix" style="width:100%;border-collapse:collapse;font-size:12.5px;">
+            <thead><tr><th style="text-align:left;padding:4px 8px;">Format class</th><th style="padding:4px 8px;">Preview</th><th style="padding:4px 8px;">Download</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div class="danger-zone">
@@ -827,6 +836,44 @@ $("#u-filter").addEventListener("change",renderUsers);
 
 /* ---------- org detail ---------- */
 let CUR=null;
+let WM_DEFAULTS=null;
+const WM_CLASS_LABELS={
+  video_master:"Video — master (ProRes/DNxHD/MXF…)", video_distribution:"Video — distribution (H.264/H.265…)",
+  image_master:"Image — master (RAW/DPX/EXR/TIFF…)", image_distribution:"Image — distribution (JPEG/PNG…)",
+  audio_master:"Audio — master (WAV/AIFF)", audio_distribution:"Audio — distribution (MP3/AAC…)",
+  document:"Documents (PDF/Office/text)", other:"Other / unrecognized",
+};
+
+async function renderWatermarkMatrix(orgId, org, wmOn){
+  if(!WM_DEFAULTS){ try{ WM_DEFAULTS=await api("/api/admin/watermark-policy-defaults"); }catch(e){ return; } }
+  const policy=org.watermark_policy||{};
+  const tbody=$("#wm-matrix tbody"); tbody.innerHTML="";
+  for(const cls of WM_DEFAULTS.classes){
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td style="padding:4px 8px;">${esc(WM_CLASS_LABELS[cls]||cls)}</td>`+
+      WM_DEFAULTS.contexts.map(ctx=>`<td style="padding:4px 8px;text-align:center;"><button class="btn ghost sm" data-cls="${cls}" data-ctx="${ctx}" type="button" style="min-width:150px;"></button></td>`).join("");
+    tbody.appendChild(tr);
+    for(const ctx of WM_DEFAULTS.contexts){
+      const btn=tr.querySelector(`button[data-ctx="${ctx}"]`);
+      const override=(policy[cls]||{})[ctx];   // undefined = default
+      const def=WM_DEFAULTS.defaults[cls][ctx];
+      const state=override===undefined?"default":(override?"mark":"unmark");
+      const labelFor=st=>st==="default"?`Default (${def?"Mark":"Don't mark"})`:(st==="mark"?"Mark":"Don't mark");
+      btn.textContent=labelFor(state);
+      btn.className="btn sm "+(state==="default"?"ghost":"danger");   // danger = explicit override from default
+      btn.disabled=!wmOn;
+      btn.onclick=async()=>{
+        const next={default:"mark",mark:"unmark",unmark:"default"}[state];
+        try{
+          await api(`/api/admin/orgs/${orgId}/watermark-policy`,{method:"POST",
+            body:form({format_class:cls,context:ctx,value:next})});
+          openOrg(orgId);
+        }catch(e){alert(e.message);}
+      };
+    }
+  }
+}
+
 async function openOrg(id){
   const d=await api(`/api/admin/orgs/${id}`);CUR=d.org;
   showView("org");
@@ -849,6 +896,7 @@ async function openOrg(id){
     try{await api(`/api/admin/orgs/${id}/watermark-pixel`,{method:"POST",body:form({enabled:pixOn?"false":"true"})});openOrg(id);}
     catch(e){alert(e.message);}
   };
+  await renderWatermarkMatrix(id, d.org, wmOn);
   $("#dz-suspend-row").classList.toggle("hidden",d.org.status!=="active");
   $("#dz-activate-row").classList.toggle("hidden",d.org.status!=="suspended");
 

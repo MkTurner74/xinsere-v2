@@ -105,3 +105,30 @@ def test_office_docx_mark_roundtrips_and_stays_valid_zip():
     assert "docProps/custom.xml" in z2.namelist()
     assert b"quarterly plan" in z2.read("word/document.xml")   # content intact
     assert MARK in watermark.extract(out)                      # zip-aware auditor
+
+
+def test_office_reserve_updates_mark_in_place_no_duplicate():
+    """A file downloaded twice used to carry two XinsereFWM properties (2026-07-21
+    follow-up) — re-marking an already-marked file now updates that property in
+    place instead of appending a second one."""
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="x"></Types>')
+        z.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="x"></Relationships>')
+        z.writestr("word/document.xml", "<w:document>quarterly plan</w:document>")
+    ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    first, _, marked1 = watermark.apply(buf.getvalue(), ct, ENTRY)
+    assert marked1
+    assert b"XinsereFWM" in zipfile.ZipFile(io.BytesIO(first)).read("docProps/custom.xml")
+
+    entry2 = "b4a2c3d5e6f7a8b9c0d1e2f3a4b5c6d7"
+    mark2 = watermark.forensic_mark(entry2)
+    second, _, marked2 = watermark.apply(first, ct, entry2)
+    assert marked2
+
+    z2 = zipfile.ZipFile(io.BytesIO(second))
+    custom_xml = z2.read("docProps/custom.xml")
+    assert custom_xml.count(b"XinsereFWM") == 1     # still exactly one property
+    assert b"quarterly plan" in z2.read("word/document.xml")   # content untouched
+    assert watermark.extract(second) == [mark2]     # only the latest mark resolves

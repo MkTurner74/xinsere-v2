@@ -153,8 +153,8 @@ class ReconcileHarness:
         monkeypatch.setattr(app.supa, "files_under",
                             lambda t, n: [{"id": "f1", "sha256": "ab" * 32}])
         monkeypatch.setattr(app.supa, "insert_share",
-                            lambda t, n, g, tx, st, not_before=0, not_after=0:
-                            self.shares.append((n, g, st, not_before, not_after)))
+                            lambda t, n, g, tx, st, not_before=0, not_after=0, serve_unmarked=False:
+                            self.shares.append((n, g, st, not_before, not_after, serve_unmarked)))
         monkeypatch.setattr(app.supa, "delete_pending_share",
                             lambda t, pid: self.deleted.append(pid))
         monkeypatch.setattr(
@@ -173,7 +173,7 @@ def test_reconcile_threads_window_through(monkeypatch):
     out = h.app._reconcile_pending("user-9", "a@b.c")
     assert out == {"materialized": 1, "expired": 0}
     assert h.granted == [("n1", "user-9", "download", 42, na)]
-    assert h.shares == [("n1", "user-9", "download", 42, na)]
+    assert h.shares == [("n1", "user-9", "download", 42, na, False)]
     assert h.deleted == ["p1"]
 
 
@@ -193,7 +193,7 @@ def test_reconcile_windowless_stub_stays_perpetual(monkeypatch):
     out = h.app._reconcile_pending("user-9", "a@b.c")
     assert out == {"materialized": 1, "expired": 0}
     assert h.granted == [("n2", "user-9", "view", 0, 0)]
-    assert h.shares == [("n2", "user-9", "view", 0, 0)]
+    assert h.shares == [("n2", "user-9", "view", 0, 0, False)]
 
 
 def test_reconcile_future_start_still_materializes(monkeypatch):

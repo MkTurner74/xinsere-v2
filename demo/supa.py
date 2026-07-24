@@ -345,18 +345,22 @@ def platform_admins_empty() -> bool:
 # shares/permission_batches window flags: a pre-0021 deploy pays one failed
 # request, then stores invites windowless (perpetual) until the migration lands.
 _PENDING_WINDOW_COLUMNS = True
+_PENDING_UNMARKED_COLUMN = True   # pending_shares.serve_unmarked (0023)
 
 
 def insert_pending_share(token: str, node_id: str, email: str, invited_by: str,
                          share_type: str = "download",
-                         not_before: int = 0, not_after: int = 0) -> dict:
+                         not_before: int = 0, not_after: int = 0,
+                         serve_unmarked: bool = False) -> dict:
     """Create (or keep) a pending invite for an email with no account yet. Idempotent
     on (node_id, email) via merge-duplicates so re-inviting doesn't error (and a
     re-invite REFRESHES the stored window/type — last invite wins, like a re-share).
     `not_before`/`not_after` (unix seconds, 0 = unbounded) carry the share dialog's
     validity window to first-login materialization; stripped-and-retried if 0021
-    isn't applied yet, so the invite degrades to perpetual rather than 500ing."""
-    global _PENDING_WINDOW_COLUMNS
+    isn't applied yet, so the invite degrades to perpetual rather than 500ing.
+    `serve_unmarked` (0023) carries the per-share marking override the same way;
+    stripped-and-retried if 0023 isn't applied yet."""
+    global _PENDING_WINDOW_COLUMNS, _PENDING_UNMARKED_COLUMN
     body = {"node_id": node_id, "email": email.strip().lower(), "invited_by": invited_by}
     if share_type and share_type != "download":   # pre-0016 tolerance
         body["share_type"] = share_type
@@ -364,28 +368,40 @@ def insert_pending_share(token: str, node_id: str, email: str, invited_by: str,
     # naming the real unique constraint, a re-invite 409'd on
     # pending_shares_node_id_email_key instead of refreshing the stub (2026-07-21).
     conflict = {"on_conflict": "node_id,email"}
-    if _PENDING_WINDOW_COLUMNS and (not_before or not_after):
+
+    def _try(extra: dict) -> dict:
+        rows = _rest("POST", "/pending_shares", token, params=conflict,
+                     prefer="return=representation,resolution=merge-duplicates",
+                     json_body={**body, **extra})
+        return rows[0] if rows else {"node_id": node_id, "email": email}
+
+    window = ({"not_before": not_before, "not_after": not_after}
+             if _PENDING_WINDOW_COLUMNS and (not_before or not_after) else {})
+    unmarked = {"serve_unmarked": True} if _PENDING_UNMARKED_COLUMN and serve_unmarked else {}
+
+    if unmarked:
         try:
-            rows = _rest("POST", "/pending_shares", token, params=conflict,
-                         prefer="return=representation,resolution=merge-duplicates",
-                         json_body={**body, "not_before": not_before,
-                                    "not_after": not_after})
-            return rows[0] if rows else {"node_id": node_id, "email": email}
+            return _try({**window, **unmarked})
         except SupabaseError as exc:
             if getattr(exc, "status", None) == 409:
-                raise                             # real conflict, not a missing column
+                raise
+            _PENDING_UNMARKED_COLUMN = False   # pre-0023 — retry without it
+    if window:
+        try:
+            return _try(window)
+        except SupabaseError as exc:
+            if getattr(exc, "status", None) == 409:
+                raise
             _PENDING_WINDOW_COLUMNS = False   # pre-0021 — windowless fallback below
-    rows = _rest("POST", "/pending_shares", token, params=conflict,
-                 prefer="return=representation,resolution=merge-duplicates",
-                 json_body=body)
-    return rows[0] if rows else {"node_id": node_id, "email": email}
+    return _try({})
 
 
 def pending_shares_for_email(token: str, email: str) -> list[dict]:
     params = {"email": f"eq.{email.strip().lower()}"}
-    selects = ["id,node_id,invited_by,share_type,not_before,not_after",  # 0021
-               "id,node_id,invited_by,share_type",                       # 0016
-               "id,node_id,invited_by"]                                  # legacy
+    selects = ["id,node_id,invited_by,share_type,not_before,not_after,serve_unmarked",  # 0023
+               "id,node_id,invited_by,share_type,not_before,not_after",                  # 0021
+               "id,node_id,invited_by,share_type",                                      # 0016
+               "id,node_id,invited_by"]                                                 # legacy
     rows = []
     for i, sel in enumerate(selects):
         try:
@@ -399,6 +415,7 @@ def pending_shares_for_email(token: str, email: str) -> list[dict]:
         r.setdefault("share_type", "download")
         r.setdefault("not_before", 0)
         r.setdefault("not_after", 0)
+        r.setdefault("serve_unmarked", False)
     return rows
 
 
@@ -576,6 +593,29 @@ def shares_covering(token: str, node_id: str) -> list[dict]:
         {"node_id": f"in.({','.join(ids)})", "select": "node_id,grantee,tx"})
 
 
+_SHARE_UNMARKED_COLUMN = True   # shares.serve_unmarked (0023)
+
+
+def share_serve_unmarked(token: str, node_id: str, uid: str) -> bool:
+    """True if ANY share covering this node (itself or an ancestor) for this
+    grantee carries the per-share 'serve unmarked' override (0023) — checked at
+    serve time so a legal-hold/internal-transfer share stays bit-perfect
+    regardless of the org's marking-policy matrix. Fails toward False (marked):
+    a lookup error or a pre-0023 deploy never silently suppresses a mark."""
+    global _SHARE_UNMARKED_COLUMN
+    if not _SHARE_UNMARKED_COLUMN:
+        return False
+    ids = [node_id] + [a["id"] for a in ancestors(token, node_id)]
+    try:
+        rows = _rest("GET", "/shares", token,
+                     params={"node_id": f"in.({','.join(ids)})", "grantee": f"eq.{uid}",
+                             "select": "serve_unmarked"}) or []
+        return any(r.get("serve_unmarked") for r in rows)
+    except SupabaseError:
+        _SHARE_UNMARKED_COLUMN = False   # pre-0023
+        return False
+
+
 def shares_for_nodes(token: str, node_ids: list[str]) -> list[dict]:
     """Share rows (with windows when 0020 is applied) across a set of nodes in one
     request — feeds inherited-share display: a folder listing passes its breadcrumb
@@ -652,24 +692,38 @@ def _shares_select(token: str, params_with: dict, params_without: dict) -> list[
 
 def insert_share(token: str, node_id: str, grantee: str, tx: str | None,
                  share_type: str = "download",
-                 not_before: int = 0, not_after: int = 0) -> dict:
+                 not_before: int = 0, not_after: int = 0,
+                 serve_unmarked: bool = False) -> dict:
     """Upsert on (node_id, grantee). share_type is always sent when the column
     exists (a re-share must be able to RESET a previous 'view' to 'download');
     pre-0016 the key is retried without so the deploy order can't break shares.
     `not_before`/`not_after` (unix seconds, 0 = unbounded) mirror the on-chain
-    validity window for the owner UI; dropped-and-retried if 0020 isn't applied."""
-    global _SHARE_TYPE_COLUMN, _SHARE_WINDOW_COLUMNS
+    validity window for the owner UI; dropped-and-retried if 0020 isn't applied.
+    `serve_unmarked` (0023) forces an unmarked serve for this grantee regardless
+    of the org's marking-policy matrix; dropped-and-retried if 0023 isn't applied.
+    The two optional column groups degrade independently, unmarked first (it's
+    the newer migration), so either one being unapplied can't break the other."""
+    global _SHARE_TYPE_COLUMN, _SHARE_WINDOW_COLUMNS, _SHARE_UNMARKED_COLUMN
     body = {"node_id": node_id, "grantee": grantee, "tx": tx}
-    # Window columns (0020) are only sent when a bound is set, and stripped-and-retried
-    # if the columns aren't there yet — so a windowless (perpetual) share is unaffected
-    # by deploy order, and a windowed one degrades to perpetual rather than 500ing.
-    if _SHARE_WINDOW_COLUMNS and (not_before or not_after):
+
+    def _try(extra: dict) -> dict:
+        return _insert_share_row(token, {**body, **extra}, share_type)
+
+    window = ({"not_before": not_before, "not_after": not_after}
+             if _SHARE_WINDOW_COLUMNS and (not_before or not_after) else {})
+    unmarked = {"serve_unmarked": True} if _SHARE_UNMARKED_COLUMN and serve_unmarked else {}
+
+    if unmarked:
         try:
-            return _insert_share_row(token, {**body, "not_before": not_before,
-                                             "not_after": not_after}, share_type)
+            return _try({**window, **unmarked})
         except SupabaseError:
-            _SHARE_WINDOW_COLUMNS = False   # pre-0020 — perpetual fallback below
-    return _insert_share_row(token, body, share_type)
+            _SHARE_UNMARKED_COLUMN = False   # pre-0023 — retry without it
+    if window:
+        try:
+            return _try(window)
+        except SupabaseError:
+            _SHARE_WINDOW_COLUMNS = False    # pre-0020 — perpetual fallback below
+    return _try({})
 
 
 def _insert_share_row(token: str, body: dict, share_type: str) -> dict:

@@ -117,6 +117,50 @@ def org_watermark_pixel(org_id: str, s: dict = Depends(authn.require_admin),
     return {"ok": True, "watermark_pixel_images": val}
 
 
+@router.get("/watermark-policy-defaults")
+def watermark_policy_defaults(s: dict = Depends(authn.require_admin)):
+    """The built-in class x context defaults (format_policy.DEFAULT_POLICY) —
+    the admin UI renders each cell against this so it can show "Default (Mark)"
+    vs an org's explicit override."""
+    import format_policy
+    return {"classes": format_policy.CLASSES, "contexts": format_policy.CONTEXTS,
+            "defaults": format_policy.DEFAULT_POLICY}
+
+
+@router.post("/orgs/{org_id}/watermark-policy")
+def org_watermark_policy(org_id: str, s: dict = Depends(authn.require_admin),
+                         format_class: str = Form(...), context: str = Form(...),
+                         value: str = Form(...)):
+    """Set (or clear) one cell of the marking-policy matrix (0023) for an org.
+    `value` is 'default' (remove the override -> falls through to
+    format_policy.DEFAULT_POLICY), 'mark', or 'unmark'. Only touches the one
+    cell — every other class/context the org hasn't set keeps its own state."""
+    import format_policy
+    if format_class not in format_policy.CLASSES:
+        raise HTTPException(status_code=400, detail=f"Unknown format class '{format_class}'")
+    if context not in format_policy.CONTEXTS:
+        raise HTTPException(status_code=400, detail=f"Unknown context '{context}'")
+    if value not in ("default", "mark", "unmark"):
+        raise HTTPException(status_code=400, detail="value must be default, mark or unmark")
+    org = orgs.get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    policy = dict(org.get("watermark_policy") or {})
+    cell = dict(policy.get(format_class) or {})
+    if value == "default":
+        cell.pop(context, None)
+    else:
+        cell[context] = (value == "mark")
+    if cell:
+        policy[format_class] = cell
+    else:
+        policy.pop(format_class, None)
+    supa._rest("PATCH", "/organizations", supa.SERVICE_ROLE_KEY,
+               params={"id": f"eq.{org_id}"}, prefer="return=minimal",
+               json_body={"watermark_policy": policy})
+    return {"ok": True, "watermark_policy": policy}
+
+
 @router.post("/orgs/{org_id}/status")
 def org_status(org_id: str, s: dict = Depends(authn.require_admin), status: str = Form(...)):
     if status not in ("active", "suspended"):

@@ -116,13 +116,17 @@ _CUSTOM_XML = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
                '<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="XinsereFWM">'
                '<vt:lpwstr>%s</vt:lpwstr></property></Properties>')
+# Matches an EXISTING XinsereFWM property's value so a re-serve of an
+# already-marked file (2026-07-21 follow-up) updates it in place instead of
+# appending a second property — a file downloaded twice used to carry two marks.
+_XIN_PROP_RE = re.compile(
+    rb'(<property [^>]*name="XinsereFWM"[^>]*>\s*<vt:lpwstr>)([^<]*)(</vt:lpwstr>\s*</property>)')
 
 
 def office(content: bytes, mark: str) -> bytes:
     """Embed the mark as a custom document property (docProps/custom.xml) —
     Office apps carry custom properties through edits and re-saves, unlike an
     alien zip entry. Wires the part into [Content_Types].xml and _rels/.rels."""
-    import re as _re
     import zipfile
     src = zipfile.ZipFile(io.BytesIO(content))
     names = set(src.namelist())
@@ -131,10 +135,15 @@ def office(content: bytes, mark: str) -> bytes:
         for item in src.infolist():
             data = src.read(item.filename)
             if item.filename == "docProps/custom.xml":
-                data = data.replace(b"</Properties>",
-                    ('<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="99" '
-                     'name="XinsereFWM"><vt:lpwstr>' + mark + "</vt:lpwstr></property></Properties>"
-                     ).encode())
+                mark_bytes = mark.encode()
+                if _XIN_PROP_RE.search(data):
+                    data = _XIN_PROP_RE.sub(
+                        lambda m: m.group(1) + mark_bytes + m.group(3), data, count=1)
+                else:
+                    data = data.replace(b"</Properties>",
+                        ('<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="99" '
+                         'name="XinsereFWM"><vt:lpwstr>' + mark + "</vt:lpwstr></property></Properties>"
+                         ).encode())
             elif item.filename == "[Content_Types].xml" and "docProps/custom.xml" not in names:
                 data = data.replace(b"</Types>",
                     b'<Override PartName="/docProps/custom.xml" ContentType="application/'

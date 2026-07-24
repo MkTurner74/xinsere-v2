@@ -26,6 +26,7 @@ from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
 import config
+import format_policy
 import share_grants
 import share_quota
 import supa
@@ -340,6 +341,7 @@ def _reconcile_pending(user_id: str, email: str) -> dict:
         node_id = p["node_id"]
         stype = p.get("share_type", "download")
         nb, na = int(p.get("not_before") or 0), int(p.get("not_after") or 0)
+        su = bool(p.get("serve_unmarked"))
         try:
             if na and na <= int(time.time()):
                 supa.delete_pending_share(svc, p["id"])
@@ -356,7 +358,7 @@ def _reconcile_pending(user_id: str, email: str) -> dict:
                 logging.getLogger("xinsere.app").warning(
                     "pending-share grant failed node=%s grantee=%s: %s", node_id, user_id, exc)
             supa.insert_share(svc, node_id, user_id, last_tx, stype,
-                              not_before=nb, not_after=na)
+                              not_before=nb, not_after=na, serve_unmarked=su)
             supa.delete_pending_share(svc, p["id"])
             done += 1
         except Exception as exc:
@@ -1041,7 +1043,8 @@ def _parse_window(starts_at: str | None, expires_at: str | None) -> tuple[int, i
 async def share(request: Request, node_id: str = Form(...),
                 grantee: str = Form(None), email: str = Form(None),
                 share_type: str = Form("download"),
-                starts_at: str = Form(None), expires_at: str = Form(None)):
+                starts_at: str = Form(None), expires_at: str = Form(None),
+                serve_unmarked: str = Form(None)):
     """Share an item. Provide either `grantee` (a user id picked from typeahead) or
     `email`. An email that already has a Xinsere account resolves to an internal
     share (granted now); an email with no account yet becomes a pending invite that
@@ -1054,12 +1057,17 @@ async def share(request: Request, node_id: str = Form(...),
     `starts_at`/`expires_at` (0020, unix seconds; blank = unbounded) anchor a validity
     WINDOW on-chain (grantBatchWindowed). Start defaults to immediate, expiry to
     perpetual; the contract's verifyBatch fails closed outside the window, so an
-    end-dated share ends with no revoke tx."""
+    end-dated share ends with no revoke tx.
+
+    `serve_unmarked` (0023, any truthy string): forces every serve to this
+    grantee to skip forensic marking regardless of the org's marking-policy
+    matrix — for a legal hold or internal transfer that must stay bit-perfect."""
     s = _session(request)
     token, uid = s["access_token"], s["user_id"]
     if share_type not in ("view", "download", "co-owner"):
         raise HTTPException(status_code=400, detail="share_type must be view, download or co-owner")
     not_before, not_after = _parse_window(starts_at, expires_at)
+    unmarked = (serve_unmarked or "").strip().lower() in ("1", "true", "on", "yes")
     node = supa.get_node(token, node_id)
     if not node:
         raise HTTPException(status_code=403, detail="You can only share items you can access")
@@ -1087,7 +1095,7 @@ async def share(request: Request, node_id: str = Form(...),
                 raise HTTPException(status_code=500, detail="Service role key not configured")
             supa.insert_pending_share(supa.SERVICE_ROLE_KEY, node_id, addr, uid,
                                       share_type, not_before=not_before,
-                                      not_after=not_after)  # no gas
+                                      not_after=not_after, serve_unmarked=unmarked)  # no gas
             return {"ok": True, "invited": True, "email": addr, "share_type": share_type,
                     "not_before": not_before, "not_after": not_after,
                     "message": "Invitation created — they'll get access as soon as they join Xinsere."}
@@ -1140,7 +1148,8 @@ async def share(request: Request, node_id: str = Form(...),
                                            not_before=not_before, not_after=not_after)
             last_tx = res.tx_hashes[-1] if res and res.tx_hashes else None
             supa.insert_share(svc, node_id, t, last_tx, share_type,
-                              not_before=not_before, not_after=not_after)
+                              not_before=not_before, not_after=not_after,
+                              serve_unmarked=unmarked)
             granted_ok += 1
             results.append({"ok": True, "grantee": _public(pmap.get(t, {"id": t})), "tx": last_tx})
         except Exception as exc:
@@ -1272,6 +1281,42 @@ def _wm_pixel_enabled(owner_uid: str) -> bool:
         return False
 
 
+def _wm_policy_mark(node: dict, token: str, uid: str, context: str) -> bool:
+    """Marking-policy matrix (0023): per-format-class x per-serve-context
+    default, plus the per-share 'serve unmarked' override — layered ON TOP OF
+    _wm_enabled (0017), which callers must still check separately (keeps
+    _wm_enabled's existing all-or-nothing semantics, and its test coverage,
+    untouched). `context` is 'preview' or 'download'. Fails toward marking:
+    any lookup error or an org that hasn't set a policy just gets
+    format_policy.DEFAULT_POLICY for the file's class."""
+    watermark_policy = None
+    svc = supa.SERVICE_ROLE_KEY
+    if svc:
+        try:
+            mems = supa._rest("GET", "/org_members", svc,
+                              params={"user_id": f"eq.{node['owner']}", "select": "org_id"}) or []
+            ids = [m["org_id"] for m in mems]
+            if ids:
+                orgs_rows = supa._rest("GET", "/organizations", svc,
+                                       params={"id": f"in.({','.join(ids)})",
+                                               "select": "watermark_policy"}) or []
+                for o in orgs_rows:
+                    if o.get("watermark_policy"):
+                        watermark_policy = o["watermark_policy"]
+                        break
+        except Exception:
+            pass
+    share_unmarked = False
+    try:
+        share_unmarked = supa.share_serve_unmarked(token, node["id"], uid)
+    except Exception:
+        pass
+    return format_policy.resolve(
+        node.get("name", ""), node.get("content_type", ""), context,
+        watermark_downloads=True,   # 0017 kill switch is the caller's job (_wm_enabled)
+        watermark_policy=watermark_policy, share_serve_unmarked=share_unmarked)
+
+
 def _record_access(node: dict, uid: str, action: str) -> dict | None:
     """Interactive-plane access telemetry into the tamper-evident access_log
     (0005/0014) — same ground truth the machine API writes. Fail-open by design.
@@ -1358,7 +1403,7 @@ async def preview(request: Request, node_id: str):
     # entry, so an auditor can trace a leaked copy to who viewed it and when.
     # Design doc: forensic-watermarking-design.
     watermarked = False
-    if entry and _wm_enabled(node["owner"]):
+    if entry and _wm_enabled(node["owner"]) and _wm_policy_mark(node, token, uid, "preview"):
         import watermark
         content, serve_type, watermarked = watermark.apply(
             content, serve_type, entry.get("entry_hash", ""),
@@ -1408,13 +1453,15 @@ async def download_plan(request: Request, node_id: str):
         raise HTTPException(status_code=403,
                             detail="Your access is view-only — ask the owner for download access"
                             if level == "view" else "No active on-chain grant for you")
-    if _wm_enabled(node["owner"]):
+    if _wm_enabled(node["owner"]) and _wm_policy_mark(node, token, uid, "download"):
         # Watermarked downloads are universal — owners included (Mark, 2026-07-15).
         # The forensic mark can only be embedded server-side, and client-side
         # reassembly delivers the bit-perfect original, so issuing a plan would be
         # an unmarked, untraceable copy for anyone. 501 makes the client fall back
-        # to /api/download. Orgs that explicitly opted out of marking (0017) keep
-        # the fast in-browser path — for every role equally.
+        # to /api/download. Orgs that explicitly opted out of marking (0017), and
+        # files the marking-policy matrix (0023) resolves to unmarked for this
+        # context (e.g. a video/image MASTER format, by default), keep the fast
+        # in-browser path — nothing would be embedded server-side anyway.
         raise HTTPException(status_code=501, detail="Server-mediated download (forensic marking)")
     _record_access(node, uid, "file.download_plan")
     try:
@@ -1479,7 +1526,7 @@ async def download(request: Request, node_id: str):
     # DELIVERED copy's hash — attribution over frozen-hash. Bit-perfect originals
     # remain retrievable only for platform audit via the stored fragments.
     content, marked = r.content, False
-    if entry and _wm_enabled(node["owner"]):
+    if entry and _wm_enabled(node["owner"]) and _wm_policy_mark(node, token, uid, "download"):
         import watermark
         content, _, marked = watermark.apply(
             content, r.content_type or "application/octet-stream",
@@ -1553,7 +1600,7 @@ async def download_folder(request: Request, node_id: str):
             # Universal forensic mark (Mark, 2026-07-15) — owners' copies in a
             # folder ZIP are marked exactly like everyone else's.
             entry = _record_access(f, uid, "file.download")
-            if entry and _wm_enabled(f["owner"]):
+            if entry and _wm_enabled(f["owner"]) and _wm_policy_mark(f, token, uid, "download"):
                 import watermark
                 content, _, _ = watermark.apply(
                     content, f.get("content_type") or "application/octet-stream",

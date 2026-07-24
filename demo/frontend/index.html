@@ -1964,6 +1964,10 @@ function openShare(node){
       </div>
       <p class="msub" style="margin:6px 0 0;font-size:11.5px;">Times are in your local timezone (${TZ}). Leave blank for immediate start / no expiry. Enforced on-chain — an expired grant simply stops verifying, no revoke needed.</p>
     </details>
+    <label style="display:flex;align-items:center;gap:8px;margin:2px 0 10px;font-size:12.5px;color:var(--faint);">
+      <input type="checkbox" class="share-unmarked">
+      Serve unmarked — skip forensic watermarking for these people (legal hold / internal transfer)
+    </label>
     <input class="share-q" type="text" autocomplete="off" placeholder="Add people — search your network, or type an email to invite…"
       style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#2a3550);background:transparent;color:inherit;font-size:14px;">
     <div class="results" style="margin:6px 0 2px;max-height:220px;overflow:auto;"></div>
@@ -1987,9 +1991,11 @@ function openShare(node){
   // the correct epoch for the browser's tz, so we post unix seconds and the server
   // does no tz guessing. Blank = unbounded (immediate start / never expires).
   const winS=bg.querySelector(".win-start"), winE=bg.querySelector(".win-expiry");
+  const unmarkedChk=bg.querySelector(".share-unmarked");
   function appendWindow(fd){
     if(winS.value){ const t=Date.parse(winS.value); if(!isNaN(t)) fd.append("starts_at", Math.floor(t/1000)); }
     if(winE.value){ const t=Date.parse(winE.value); if(!isNaN(t)) fd.append("expires_at", Math.floor(t/1000)); }
+    if(unmarkedChk.checked) fd.append("serve_unmarked", "true");
   }
   function windowError(){
     if(winS.value&&winE.value&&Date.parse(winS.value)>=Date.parse(winE.value)) return "The start time must be before the expiry.";
@@ -2042,6 +2048,7 @@ function openShare(node){
   function startOver(){
     PENDING.clear(); SHARED=false; q.value=""; results.innerHTML="";
     winS.value=""; winE.value=""; updateWinSum(); status("");
+    unmarkedChk.checked=false;
     restartBtn.classList.add("hidden"); renderChips(); q.focus();
   }
   restartBtn.onclick=startOver;
