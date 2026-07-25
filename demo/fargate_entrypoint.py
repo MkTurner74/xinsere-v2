@@ -54,12 +54,18 @@ def main() -> None:
     # against every other compute config on the identical file set.
     sample_file = os.environ.get("XINSERE_MIGRATION_SAMPLE_FILE", "")
     sample_paths = load_sample(sample_file) if sample_file else None
+    # Test-run cap (2026-07-24, compute-tier comparison): unset by default so a
+    # real production migration is still unbounded, as designed. Set for a
+    # deliberate few-files smoke/calibration run so a comparison test can NEVER
+    # silently turn into a full-corpus migration by omission.
+    limit_env = os.environ.get("XINSERE_MIGRATION_LIMIT", "")
+    limit = int(limit_env) if limit_env else None
     print(f">>> cloud-to-cloud migration folder={folder!r} workers={workers} "
-          f"include_top={sorted(include_top) or 'none'} "
+          f"include_top={sorted(include_top) or 'none'} limit={limit or 'unbounded'} "
           f"sample_file={sample_file or 'none'}"
           f"{f' ({len(sample_paths)} files)' if sample_paths is not None else ''}", flush=True)
     runner = MigrationRunner(DropboxClient(DropboxAuth()), include_top=include_top)
-    rep = runner.run(folder, limit=None, full=True, workers=workers, sample_paths=sample_paths)
+    rep = runner.run(folder, limit=limit, full=True, workers=workers, sample_paths=sample_paths)
     print("RESULT " + json.dumps(rep.as_dict(rep.sourced, 0)), flush=True)
 
 

@@ -133,7 +133,7 @@ def upload_sample(local_path: str) -> str:
     return f"s3://{STAGING_BUCKET}/{key}"
 
 
-def render_user_data(*, workers: int, folder: str, include_top: str,
+def render_user_data(*, workers: int, folder: str, include_top: str, limit: int | None,
                      sample_s3_uri: str | None, auto_terminate: bool) -> str:
     with open(os.path.join(_HERE, "user_data.sh.tmpl")) as f:
         tmpl = f.read()
@@ -149,7 +149,8 @@ def render_user_data(*, workers: int, folder: str, include_top: str,
                      "terminate it manually when you are done comparing.'")
     return tmpl.format(
         aws_region=REGION, account_id=ACCOUNT_ID, s3_buckets=S3_BUCKETS,
-        workers=workers, migration_folder=folder, migration_owner=MIGRATION_OWNER,
+        workers=workers, limit=(limit if limit is not None else ""),
+        migration_folder=folder, migration_owner=MIGRATION_OWNER,
         migration_actor=MIGRATION_ACTOR, migration_root=MIGRATION_ROOT,
         owner_emails=OWNER_EMAILS, include_top=include_top,
         sample_file_fetch=sample_fetch, sample_file_container_path=sample_container_path,
@@ -174,6 +175,15 @@ def main() -> None:
                     help="Local --sample-out manifest (from dropbox_connector.py "
                          "--sample-per-bucket) to replay on this instance for an "
                          "apples-to-apples comparison against other configs.")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="Cap on NEW files this run processes -- required unless "
+                         "--sample-file already caps it (or --unbounded is passed "
+                         "explicitly). This tool is for compute-tier COMPARISON "
+                         "testing; a real full migration should go through the "
+                         "existing Fargate task, not an ad-hoc EC2 box.")
+    ap.add_argument("--unbounded", action="store_true",
+                    help="Explicit opt-out of the --limit/--sample-file requirement -- "
+                         "e.g. for an intentional full production run on this instance.")
     ap.add_argument("--auto-terminate", action="store_true",
                     help="Instance terminates itself when the ingest job exits -- use for "
                          "one-shot calibration runs so nothing is left running/billing.")
@@ -188,13 +198,16 @@ def main() -> None:
 
     if not args.instance_type:
         ap.error("--instance-type is required (or use --setup-iam alone)")
+    if args.limit is None and not args.sample_file and not args.unbounded:
+        ap.error("refusing to run unbounded: pass --limit N, or --sample-file, or "
+                 "--unbounded to explicitly opt out (see --help)")
 
     spec = INSTANCE_CATALOG[args.instance_type]
     ami_id, ami_name = resolve_ami(spec["arch"])
     sample_s3_uri = upload_sample(args.sample_file) if args.sample_file else None
     user_data = render_user_data(workers=args.workers, folder=args.folder,
-                                 include_top=args.include_top, sample_s3_uri=sample_s3_uri,
-                                 auto_terminate=args.auto_terminate)
+                                 include_top=args.include_top, limit=args.limit,
+                                 sample_s3_uri=sample_s3_uri, auto_terminate=args.auto_terminate)
 
     print("=" * 70)
     print(f"PLAN  instance_type={args.instance_type}  arch={spec['arch']}  "
