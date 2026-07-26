@@ -93,6 +93,55 @@ automatic POSIX-path conversion (MSYS). Prefix the command with
 printed plan's `XINSERE_MIGRATION_FOLDER=` line reads `/Mark Turner`, not
 `C:/Program Files/Git/Mark Turner`, before passing `--launch`.
 
+## Verified 2026-07-26 — real first test run + two gotchas found
+
+Ran a real, capped (`--limit 3`) ingest of `/Mark Turner` on both `c7i.4xlarge`
+(x86_64) and `c7g.4xlarge` (Graviton). Both completed cleanly, 3/3 verified,
+0 failures, self-terminated, no stray cost. Results in Supabase
+`migration_runs`:
+
+| Run | Files | Bytes | Wall | 
+|---|---:|---:|---:|
+| Local (Sedona, home network, earlier session) | 3 | 179,900 | 64.5s |
+| EC2 c7i.4xlarge (us-east-1) | 3 | 179,900 | **6.8s** |
+| EC2 c7g.4xlarge (us-east-1) | 3 | 2,867,200 | 7.4s |
+
+**~9.5x faster running from inside AWS than from a home network for the
+identical 3 files** — confirms the network-path warning from the original
+research: this workload is dominated by round-trip count (KMS/S3/DynamoDB
+calls per fragment), and running off-AWS-network multiplies every one of
+those round trips. The Graviton row isn't a clean architecture comparison
+(it picked up different/larger files, since the x86_64 run's 3 files were
+already migrated) — treat it as "proof it works," not a pace comparison; a
+real Graviton-vs-x86_64 comparison needs the `--sample-file` replay so both
+runs see identical bytes.
+
+**Two real gotchas hit and fixed during this run:**
+1. **The image was 12 days stale.** `xinsere-migrate:latest` in ECR predated
+   this session's connector changes (`--include-top`, `--limit`,
+   sample-per-bucket) — the container silently ran old code, ignored the new
+   env vars, and produced a confusing "0 files processed, 3.6s" result that
+   looked like a bug for a while. **Always rebuild before testing a code
+   change:**
+   ```bash
+   docker build -f Dockerfile.migrate -t 058264449111.dkr.ecr.us-east-1.amazonaws.com/xinsere-migrate:latest .
+   docker push 058264449111.dkr.ecr.us-east-1.amazonaws.com/xinsere-migrate:latest
+   ```
+   `launch.py` now prints the image's push time before every launch as a
+   reminder (`warn_if_image_stale()`).
+2. **The image was x86_64-only** (no arm64 manifest) — a `c7g` launch failed
+   at `docker run` with `no matching manifest for linux/arm64/v8`. Fixed by
+   rebuilding as multi-arch via buildx and pushing both platforms in one
+   manifest:
+   ```bash
+   docker buildx build --platform linux/amd64,linux/arm64 \
+     -f Dockerfile.migrate -t 058264449111.dkr.ecr.us-east-1.amazonaws.com/xinsere-migrate:latest \
+     --push .
+   ```
+   Do this instead of a plain `docker build`+`push` whenever a `c7g`/Graviton
+   test is planned — a plain build only produces the host machine's own
+   architecture.
+
 ## Checking on / cleaning up a running instance
 
 ```bash
