@@ -126,6 +126,27 @@ def ensure_iam_role() -> str:
     return INSTANCE_PROFILE_NAME
 
 
+def warn_if_image_stale() -> None:
+    """Print the ECR image's push time so a stale :latest (built before a recent
+    code change) is visible before launching, not discovered after a confusing
+    result. Real incident 2026-07-26: the image was 12 days stale, the container
+    silently ran pre--include-top code, and a "0 files, 3.6s" run looked like a
+    connector bug for a while before the actual cause (never rebuilt/pushed
+    after this session's code changes) was found. This is a warning, not a
+    hard stop -- some tests legitimately want the currently-deployed image."""
+    ecr = boto3.client("ecr", region_name=REGION)
+    try:
+        detail = ecr.describe_images(repositoryName="xinsere-migrate",
+                                     imageIds=[{"imageTag": "latest"}])["imageDetails"][0]
+        print(f"NOTE: xinsere-migrate:latest was pushed {detail['imagePushedAt']}. "
+              f"If you've changed dropbox_connector.py/fargate_entrypoint.py since then, "
+              f"rebuild + push first:\n"
+              f"  docker build -f Dockerfile.migrate -t {IMAGE_URI} .\n"
+              f"  docker push {IMAGE_URI}")
+    except Exception as exc:   # noqa: BLE001 -- advisory only, never blocks a run
+        print(f"(couldn't check image push time: {exc})")
+
+
 def resolve_ami(arch: str) -> tuple[str, str]:
     """Latest Amazon Linux 2023 AMI for the given arch (x86_64|arm64), resolved
     live via describe-images rather than a hard-coded id that goes stale."""
@@ -229,6 +250,7 @@ def main() -> None:
                  "--unbounded to explicitly opt out (see --help)")
 
     assert_correct_account()
+    warn_if_image_stale()
     spec = INSTANCE_CATALOG[args.instance_type]
     ami_id, ami_name = resolve_ami(spec["arch"])
     sample_s3_uri = upload_sample(args.sample_file) if args.sample_file else None
