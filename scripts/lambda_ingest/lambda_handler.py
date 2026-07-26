@@ -39,23 +39,6 @@ def _load_supabase() -> None:
     os.environ["SUPABASE_ANON_KEY"] = s.get("anon_key") or s["service_role_key"]
 
 
-def _resolve_sample_file() -> str | None:
-    """XINSERE_MIGRATION_SAMPLE_FILE may be an s3:// URI (uploaded by the launch
-    script, mirroring the EC2 path) -- Lambda has no persistent volume, so pull
-    it into /tmp (up to 10GB ephemeral storage per invocation) first."""
-    env = os.environ.get("XINSERE_MIGRATION_SAMPLE_FILE", "")
-    if not env:
-        return None
-    if env.startswith("s3://"):
-        import boto3
-        bucket, key = env[5:].split("/", 1)
-        local = "/tmp/sample.json"
-        boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1")).download_file(
-            bucket, key, local)
-        return local
-    return env
-
-
 def handler(event, context):
     _load_supabase()
     from dropbox_connector import DropboxAuth, DropboxClient, MigrationRunner, load_sample
@@ -66,12 +49,12 @@ def handler(event, context):
                    os.environ.get("XINSERE_MIGRATION_INCLUDE_TOP", "").split(",") if s.strip()}
     limit_env = os.environ.get("XINSERE_MIGRATION_LIMIT", "")
     limit = int(limit_env) if limit_env else None
-    sample_path = _resolve_sample_file()
-    sample_paths = load_sample(sample_path) if sample_path else None
+    sample_file = os.environ.get("XINSERE_MIGRATION_SAMPLE_FILE", "")
+    sample_paths = load_sample(sample_file) if sample_file else None
 
     print(f">>> lambda ingest folder={folder!r} workers={workers} "
           f"include_top={sorted(include_top) or 'none'} limit={limit or 'unbounded'} "
-          f"sample_file={sample_path or 'none'}"
+          f"sample_file={sample_file or 'none'}"
           f"{f' ({len(sample_paths)} files)' if sample_paths is not None else ''}", flush=True)
 
     runner = MigrationRunner(DropboxClient(DropboxAuth()), include_top=include_top)

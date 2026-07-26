@@ -164,3 +164,27 @@ def test_save_and_load_sample_roundtrips_paths(tmp_path):
     loaded = dc.load_sample(str(out))
     # lowercased, leading-slash-stripped -- must match the key run() checks against.
     assert loaded == {"founders/a.pdf", "founders/sub/b.mov"}
+
+
+def test_load_sample_downloads_s3_uri_first(tmp_path, monkeypatch):
+    # Real incident 2026-07-26: a Fargate run-task override passed an s3://
+    # sample URI straight through to load_sample(), which just tried open() on
+    # the literal string and crashed. This proves the s3:// branch downloads
+    # first, matching the local-path behavior otherwise.
+    files = [DbxFile("/Founders/a.pdf", "1", 10, "h")]
+    local = tmp_path / "sample.json"
+    dc.save_sample(files, str(local))
+
+    downloaded_to = {}
+    class FakeS3:
+        def download_file(self, bucket, key, dest):
+            assert bucket == "xinsere-dev-staging"
+            assert key == "some/key.json"
+            import shutil
+            shutil.copy(str(local), dest)
+            downloaded_to["path"] = dest
+
+    monkeypatch.setattr(dc.boto3, "client", lambda *a, **kw: FakeS3())
+    result = dc.load_sample("s3://xinsere-dev-staging/some/key.json")
+    assert result == {"founders/a.pdf"}
+    assert downloaded_to["path"].startswith("/tmp/")

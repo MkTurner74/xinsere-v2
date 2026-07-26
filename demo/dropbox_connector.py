@@ -307,7 +307,19 @@ def save_sample(files: list[DbxFile], path: str) -> None:
 
 def load_sample(path: str) -> set[str]:
     """Lowercased, leading-slash-stripped paths — the same key run() already uses
-    to check `existing` and to match sample_paths against the live walk."""
+    to check `existing` and to match sample_paths against the live walk.
+
+    `path` may be an `s3://bucket/key` URI (as uploaded by launch.py/
+    deploy_and_test.py for a compute-tier comparison run) -- downloaded to /tmp
+    first, since Fargate/Lambda have no access to the machine that built the
+    sample. A local path is opened directly, unchanged from before."""
+    if path.startswith("s3://"):
+        import boto3
+        bucket, key = path[len("s3://"):].split("/", 1)
+        local = "/tmp/xinsere_sample_" + key.rsplit("/", 1)[-1]
+        boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1")) \
+            .download_file(bucket, key, local)
+        path = local
     with open(path, encoding="utf-8") as fh:
         rows = json.load(fh)
     return {r["path"].lstrip("/").lower() for r in rows}
