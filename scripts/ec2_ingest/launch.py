@@ -173,7 +173,7 @@ def upload_sample(local_path: str) -> str:
 
 
 def render_user_data(*, workers: int, folder: str, include_top: str, limit: int | None,
-                     sample_s3_uri: str | None, auto_terminate: bool) -> str:
+                     root: str, sample_s3_uri: str | None, auto_terminate: bool) -> str:
     with open(os.path.join(_HERE, "user_data.sh.tmpl")) as f:
         tmpl = f.read()
     if sample_s3_uri:
@@ -190,7 +190,7 @@ def render_user_data(*, workers: int, folder: str, include_top: str, limit: int 
         aws_region=REGION, account_id=ACCOUNT_ID, s3_buckets=S3_BUCKETS,
         workers=workers, limit=(limit if limit is not None else ""),
         migration_folder=folder, migration_owner=MIGRATION_OWNER,
-        migration_actor=MIGRATION_ACTOR, migration_root=MIGRATION_ROOT,
+        migration_actor=MIGRATION_ACTOR, migration_root=root,
         owner_emails=OWNER_EMAILS, include_top=include_top,
         sample_file_fetch=sample_fetch, sample_file_container_path=sample_container_path,
         image_uri=IMAGE_URI, shutdown_line=shutdown_line,
@@ -228,6 +228,13 @@ def main() -> None:
     ap.add_argument("--unbounded", action="store_true",
                     help="Explicit opt-out of the --limit/--sample-file requirement -- "
                          "e.g. for an intentional full production run on this instance.")
+    ap.add_argument("--root", default=MIGRATION_ROOT,
+                    help="Xinsere destination folder node id (default: the real "
+                         "Mark Turner migration root). Use a DIFFERENT node id per "
+                         "compute config when comparing configs on the same sample -- "
+                         "otherwise the second+ config's run just resume-skips files "
+                         "the first config already ingested, instead of measuring a "
+                         "real cold ingest.")
     ap.add_argument("--auto-terminate", action="store_true",
                     help="Instance terminates itself when the ingest job exits -- use for "
                          "one-shot calibration runs so nothing is left running/billing.")
@@ -255,7 +262,7 @@ def main() -> None:
     ami_id, ami_name = resolve_ami(spec["arch"])
     sample_s3_uri = upload_sample(args.sample_file) if args.sample_file else None
     user_data = render_user_data(workers=args.workers, folder=args.folder,
-                                 include_top=args.include_top, limit=args.limit,
+                                 include_top=args.include_top, limit=args.limit, root=args.root,
                                  sample_s3_uri=sample_s3_uri, auto_terminate=args.auto_terminate)
 
     print("=" * 70)
