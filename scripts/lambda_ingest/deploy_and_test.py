@@ -27,6 +27,7 @@ import time
 import uuid
 
 import boto3
+from botocore.config import Config
 
 REGION = "us-east-1"
 ACCOUNT_ID = "058264449111"
@@ -167,7 +168,12 @@ def invoke(*, root: str, folder: str, include_top: str, workers: int,
         "XINSERE_MIGRATION_INCLUDE_TOP": include_top,
         "XINSERE_MIGRATION_SAMPLE_FILE": sample_s3_uri,
     }
-    lam = boto3.client("lambda", region_name=REGION)
+    # read_timeout must exceed the function's own execution timeout (900s) --
+    # boto3's 60s default gave a false "failure" on the first real-sample run
+    # (2026-07-26): the client gave up while the function was still legitimately
+    # running server-side (confirmed via CloudWatch Logs afterward).
+    lam = boto3.client("lambda", region_name=REGION,
+                       config=Config(read_timeout=910, connect_timeout=10))
     lam.update_function_configuration(FunctionName=FUNCTION_NAME, Environment={"Variables": env})
     lam.get_waiter("function_updated_v2").wait(FunctionName=FUNCTION_NAME)
     print(f"invoking {FUNCTION_NAME} (root={root}, sample={sample_s3_uri or 'none'}) ...")
