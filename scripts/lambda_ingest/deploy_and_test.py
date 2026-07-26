@@ -66,7 +66,13 @@ def build_and_push_image() -> None:
     subprocess.run(["docker", "login", "--username", "AWS", "--password-stdin",
                     f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com"],
                    input=login, check=True, text=True)
+    # --provenance=false --sbom=false: buildx defaults to attaching an OCI
+    # attestation manifest list, which Lambda's CreateFunction rejects outright
+    # ("image manifest ... is not supported") -- Lambda needs a plain
+    # single-platform manifest. Found 2026-07-26 after the first push succeeded
+    # but create_function failed on exactly this.
     subprocess.run(["docker", "buildx", "build", "--platform", "linux/amd64",
+                    "--provenance=false", "--sbom=false",
                     "-f", os.path.join(_HERE, "Dockerfile"), "-t", IMAGE_URI,
                     "--push", _REPO_ROOT], check=True, cwd=_REPO_ROOT)
     print(f"Pushed {IMAGE_URI}")
@@ -150,7 +156,10 @@ def invoke(*, root: str, folder: str, include_top: str, workers: int,
     assert_correct_account()
     sample_s3_uri = upload_sample(sample_file) if sample_file else ""
     env = {
-        "XINSERE_BACKEND": "aws", "AWS_REGION": REGION, "XINSERE_S3_BUCKETS": S3_BUCKETS,
+        # AWS_REGION is Lambda-reserved (auto-set by the runtime to the
+        # function's own region) -- can't be set via UpdateFunctionConfiguration,
+        # and the handler's os.environ.get("AWS_REGION", ...) picks it up anyway.
+        "XINSERE_BACKEND": "aws", "XINSERE_S3_BUCKETS": S3_BUCKETS,
         "XINSERE_MIGRATION_WORKERS": str(workers),
         "XINSERE_MIGRATION_LIMIT": str(limit) if limit is not None else "",
         "XINSERE_MIGRATION_FOLDER": folder, "XINSERE_MIGRATION_OWNER": MIGRATION_OWNER,
