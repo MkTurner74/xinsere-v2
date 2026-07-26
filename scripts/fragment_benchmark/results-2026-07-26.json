@@ -1,0 +1,800 @@
+[
+  {
+    "size_bytes": 10485760,
+    "fragment_count": 7,
+    "ok": true,
+    "store_wall_s": 0.489,
+    "store_mb_s": 21.43,
+    "retrieve_wall_s": 0.291,
+    "retrieve_mb_s": 36.05,
+    "store_timings": {
+      "total_ms": 489.0,
+      "fanout_ms": 408.8,
+      "index_ms": 71.4,
+      "fragments": 7,
+      "workers": 7,
+      "bytes": 10485760,
+      "kms_generate": {
+        "max": 32.2,
+        "avg": 28.2,
+        "sum": 197.3
+      },
+      "aes_gcm": {
+        "max": 1.4,
+        "avg": 0.8,
+        "sum": 5.6
+      },
+      "s3_put": {
+        "max": 374.9,
+        "avg": 343.9,
+        "sum": 2407.3
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 290.8,
+      "index_ms": 8.7,
+      "fetch_decrypt_ms": 272.4,
+      "join_ms": 4.0,
+      "verify_sha_ms": 5.7,
+      "fragments": 7,
+      "workers": 7,
+      "bytes": 10485760,
+      "s3_get": {
+        "max": 257.5,
+        "avg": 190.6,
+        "sum": 1334.3
+      },
+      "kms_decrypt": {
+        "max": 6.4,
+        "avg": 5.9,
+        "sum": 41.5
+      },
+      "aes_gcm": {
+        "max": 0.2,
+        "avg": 0.2,
+        "sum": 1.4
+      }
+    }
+  },
+  {
+    "size_bytes": 10485760,
+    "fragment_count": 16,
+    "ok": true,
+    "store_wall_s": 0.495,
+    "store_mb_s": 21.17,
+    "retrieve_wall_s": 0.322,
+    "retrieve_mb_s": 32.57,
+    "store_timings": {
+      "total_ms": 495.3,
+      "fanout_ms": 396.0,
+      "index_ms": 90.2,
+      "fragments": 16,
+      "workers": 16,
+      "bytes": 10485760,
+      "kms_generate": {
+        "max": 15.3,
+        "avg": 8.9,
+        "sum": 142.9
+      },
+      "aes_gcm": {
+        "max": 0.3,
+        "avg": 0.2,
+        "sum": 3.8
+      },
+      "s3_put": {
+        "max": 359.9,
+        "avg": 192.0,
+        "sum": 3072.0
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 321.8,
+      "index_ms": 7.7,
+      "fetch_decrypt_ms": 306.5,
+      "join_ms": 1.8,
+      "verify_sha_ms": 5.7,
+      "fragments": 16,
+      "workers": 16,
+      "bytes": 10485760,
+      "s3_get": {
+        "max": 283.6,
+        "avg": 135.3,
+        "sum": 2165.1
+      },
+      "kms_decrypt": {
+        "max": 7.8,
+        "avg": 6.5,
+        "sum": 103.8
+      },
+      "aes_gcm": {
+        "max": 0.2,
+        "avg": 0.1,
+        "sum": 2.0
+      }
+    }
+  },
+  {
+    "size_bytes": 10485760,
+    "fragment_count": 32,
+    "ok": true,
+    "store_wall_s": 0.449,
+    "store_mb_s": 23.38,
+    "retrieve_wall_s": 0.252,
+    "retrieve_mb_s": 41.58,
+    "store_timings": {
+      "total_ms": 448.4,
+      "fanout_ms": 276.8,
+      "index_ms": 162.6,
+      "fragments": 32,
+      "workers": 16,
+      "bytes": 10485760,
+      "kms_generate": {
+        "max": 33.2,
+        "avg": 8.5,
+        "sum": 272.5
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.1,
+        "sum": 3.2
+      },
+      "s3_put": {
+        "max": 206.2,
+        "avg": 105.6,
+        "sum": 3379.6
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 252.1,
+      "index_ms": 9.1,
+      "fetch_decrypt_ms": 235.7,
+      "join_ms": 1.6,
+      "verify_sha_ms": 5.7,
+      "fragments": 32,
+      "workers": 16,
+      "bytes": 10485760,
+      "s3_get": {
+        "max": 192.4,
+        "avg": 82.7,
+        "sum": 2646.4
+      },
+      "kms_decrypt": {
+        "max": 8.5,
+        "avg": 5.9,
+        "sum": 190.1
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.1,
+        "sum": 3.1
+      }
+    }
+  },
+  {
+    "size_bytes": 10485760,
+    "fragment_count": 64,
+    "ok": true,
+    "store_wall_s": 0.735,
+    "store_mb_s": 14.26,
+    "retrieve_wall_s": 0.33,
+    "retrieve_mb_s": 31.76,
+    "store_timings": {
+      "total_ms": 735.0,
+      "fanout_ms": 419.2,
+      "index_ms": 306.6,
+      "fragments": 64,
+      "workers": 16,
+      "bytes": 10485760,
+      "kms_generate": {
+        "max": 35.6,
+        "avg": 8.0,
+        "sum": 511.7
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.0,
+        "sum": 2.3
+      },
+      "s3_put": {
+        "max": 193.4,
+        "avg": 84.8,
+        "sum": 5429.7
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 330.0,
+      "index_ms": 11.0,
+      "fetch_decrypt_ms": 311.2,
+      "join_ms": 1.8,
+      "verify_sha_ms": 5.9,
+      "fragments": 64,
+      "workers": 16,
+      "bytes": 10485760,
+      "s3_get": {
+        "max": 150.7,
+        "avg": 59.0,
+        "sum": 3776.4
+      },
+      "kms_decrypt": {
+        "max": 11.1,
+        "avg": 6.5,
+        "sum": 415.0
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.0,
+        "sum": 0.2
+      }
+    }
+  },
+  {
+    "size_bytes": 10485760,
+    "fragment_count": 128,
+    "ok": true,
+    "store_wall_s": 1.298,
+    "store_mb_s": 8.08,
+    "retrieve_wall_s": 0.5,
+    "retrieve_mb_s": 20.99,
+    "store_timings": {
+      "total_ms": 1297.3,
+      "fanout_ms": 670.0,
+      "index_ms": 617.9,
+      "fragments": 128,
+      "workers": 16,
+      "bytes": 10485760,
+      "kms_generate": {
+        "max": 22.2,
+        "avg": 7.7,
+        "sum": 989.7
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.0,
+        "sum": 0.5
+      },
+      "s3_put": {
+        "max": 152.1,
+        "avg": 70.1,
+        "sum": 8968.8
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 499.4,
+      "index_ms": 14.1,
+      "fetch_decrypt_ms": 474.9,
+      "join_ms": 4.4,
+      "verify_sha_ms": 5.8,
+      "fragments": 128,
+      "workers": 16,
+      "bytes": 10485760,
+      "s3_get": {
+        "max": 115.2,
+        "avg": 48.3,
+        "sum": 6187.4
+      },
+      "kms_decrypt": {
+        "max": 17.8,
+        "avg": 6.8,
+        "sum": 873.5
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.0,
+        "sum": 0.1
+      }
+    }
+  },
+  {
+    "size_bytes": 10485760,
+    "fragment_count": 256,
+    "ok": true,
+    "store_wall_s": 2.719,
+    "store_mb_s": 3.86,
+    "retrieve_wall_s": 0.853,
+    "retrieve_mb_s": 12.3,
+    "store_timings": {
+      "total_ms": 2719.0,
+      "fanout_ms": 1182.4,
+      "index_ms": 1529.6,
+      "fragments": 256,
+      "workers": 16,
+      "bytes": 10485760,
+      "kms_generate": {
+        "max": 40.7,
+        "avg": 7.8,
+        "sum": 1988.9
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.0,
+        "sum": 0.3
+      },
+      "s3_put": {
+        "max": 134.3,
+        "avg": 63.6,
+        "sum": 16278.8
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 852.5,
+      "index_ms": 24.1,
+      "fetch_decrypt_ms": 821.2,
+      "join_ms": 1.5,
+      "verify_sha_ms": 5.8,
+      "fragments": 256,
+      "workers": 16,
+      "bytes": 10485760,
+      "s3_get": {
+        "max": 110.4,
+        "avg": 42.5,
+        "sum": 10871.5
+      },
+      "kms_decrypt": {
+        "max": 29.7,
+        "avg": 6.7,
+        "sum": 1718.7
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.0,
+        "sum": 0.1
+      }
+    }
+  },
+  {
+    "size_bytes": 10485760,
+    "fragment_count": 1000,
+    "ok": true,
+    "store_wall_s": 9.36,
+    "store_mb_s": 1.12,
+    "retrieve_wall_s": 3.256,
+    "retrieve_mb_s": 3.22,
+    "store_timings": {
+      "total_ms": 9358.7,
+      "fanout_ms": 4360.0,
+      "index_ms": 4991.5,
+      "fragments": 1000,
+      "workers": 16,
+      "bytes": 10485760,
+      "kms_generate": {
+        "max": 46.0,
+        "avg": 7.3,
+        "sum": 7338.0
+      },
+      "aes_gcm": {
+        "max": 0.3,
+        "avg": 0.0,
+        "sum": 0.7
+      },
+      "s3_put": {
+        "max": 118.4,
+        "avg": 61.8,
+        "sum": 61829.3
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 3254.8,
+      "index_ms": 49.6,
+      "fetch_decrypt_ms": 3197.6,
+      "join_ms": 1.7,
+      "verify_sha_ms": 5.8,
+      "fragments": 1000,
+      "workers": 16,
+      "bytes": 10485760,
+      "s3_get": {
+        "max": 134.3,
+        "avg": 42.8,
+        "sum": 42836.1
+      },
+      "kms_decrypt": {
+        "max": 31.1,
+        "avg": 7.2,
+        "sum": 7192.6
+      },
+      "aes_gcm": {
+        "max": 0.0,
+        "avg": 0.0,
+        "sum": 0.0
+      }
+    }
+  },
+  {
+    "size_bytes": 104857600,
+    "fragment_count": 7,
+    "ok": true,
+    "store_wall_s": 0.586,
+    "store_mb_s": 178.85,
+    "retrieve_wall_s": 0.461,
+    "retrieve_mb_s": 227.3,
+    "store_timings": {
+      "total_ms": 584.4,
+      "fanout_ms": 450.5,
+      "index_ms": 41.6,
+      "fragments": 7,
+      "workers": 7,
+      "bytes": 104857600,
+      "kms_generate": {
+        "max": 76.3,
+        "avg": 52.2,
+        "sum": 365.7
+      },
+      "aes_gcm": {
+        "max": 39.4,
+        "avg": 17.4,
+        "sum": 121.9
+      },
+      "s3_put": {
+        "max": 369.3,
+        "avg": 354.1,
+        "sum": 2478.5
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 455.2,
+      "index_ms": 6.6,
+      "fetch_decrypt_ms": 349.4,
+      "join_ms": 42.1,
+      "verify_sha_ms": 57.1,
+      "fragments": 7,
+      "workers": 7,
+      "bytes": 104857600,
+      "s3_get": {
+        "max": 329.0,
+        "avg": 268.4,
+        "sum": 1879.0
+      },
+      "kms_decrypt": {
+        "max": 10.0,
+        "avg": 7.2,
+        "sum": 50.4
+      },
+      "aes_gcm": {
+        "max": 15.6,
+        "avg": 8.4,
+        "sum": 58.8
+      }
+    }
+  },
+  {
+    "size_bytes": 104857600,
+    "fragment_count": 16,
+    "ok": true,
+    "store_wall_s": 0.657,
+    "store_mb_s": 159.52,
+    "retrieve_wall_s": 0.428,
+    "retrieve_mb_s": 244.9,
+    "store_timings": {
+      "total_ms": 655.9,
+      "fanout_ms": 479.4,
+      "index_ms": 83.4,
+      "fragments": 16,
+      "workers": 16,
+      "bytes": 104857600,
+      "kms_generate": {
+        "max": 43.4,
+        "avg": 21.6,
+        "sum": 345.6
+      },
+      "aes_gcm": {
+        "max": 3.2,
+        "avg": 2.9,
+        "sum": 46.7
+      },
+      "s3_put": {
+        "max": 390.9,
+        "avg": 252.1,
+        "sum": 4034.2
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 428.0,
+      "index_ms": 7.3,
+      "fetch_decrypt_ms": 320.6,
+      "join_ms": 42.7,
+      "verify_sha_ms": 57.4,
+      "fragments": 16,
+      "workers": 16,
+      "bytes": 104857600,
+      "s3_get": {
+        "max": 295.3,
+        "avg": 178.3,
+        "sum": 2853.1
+      },
+      "kms_decrypt": {
+        "max": 10.1,
+        "avg": 6.8,
+        "sum": 108.0
+      },
+      "aes_gcm": {
+        "max": 2.9,
+        "avg": 1.3,
+        "sum": 20.7
+      }
+    }
+  },
+  {
+    "size_bytes": 104857600,
+    "fragment_count": 32,
+    "ok": true,
+    "store_wall_s": 0.94,
+    "store_mb_s": 111.54,
+    "retrieve_wall_s": 0.447,
+    "retrieve_mb_s": 234.33,
+    "store_timings": {
+      "total_ms": 938.6,
+      "fanout_ms": 658.8,
+      "index_ms": 192.0,
+      "fragments": 32,
+      "workers": 16,
+      "bytes": 104857600,
+      "kms_generate": {
+        "max": 44.1,
+        "avg": 10.8,
+        "sum": 346.3
+      },
+      "aes_gcm": {
+        "max": 1.6,
+        "avg": 0.8,
+        "sum": 26.4
+      },
+      "s3_put": {
+        "max": 619.5,
+        "avg": 168.3,
+        "sum": 5384.4
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 447.3,
+      "index_ms": 8.4,
+      "fetch_decrypt_ms": 339.1,
+      "join_ms": 42.8,
+      "verify_sha_ms": 57.0,
+      "fragments": 32,
+      "workers": 16,
+      "bytes": 104857600,
+      "s3_get": {
+        "max": 319.8,
+        "avg": 111.5,
+        "sum": 3569.3
+      },
+      "kms_decrypt": {
+        "max": 18.2,
+        "avg": 6.8,
+        "sum": 218.8
+      },
+      "aes_gcm": {
+        "max": 1.4,
+        "avg": 0.7,
+        "sum": 21.0
+      }
+    }
+  },
+  {
+    "size_bytes": 104857600,
+    "fragment_count": 64,
+    "ok": true,
+    "store_wall_s": 0.943,
+    "store_mb_s": 111.17,
+    "retrieve_wall_s": 0.487,
+    "retrieve_mb_s": 215.19,
+    "store_timings": {
+      "total_ms": 941.8,
+      "fanout_ms": 540.7,
+      "index_ms": 312.2,
+      "fragments": 64,
+      "workers": 16,
+      "bytes": 104857600,
+      "kms_generate": {
+        "max": 15.1,
+        "avg": 7.9,
+        "sum": 506.3
+      },
+      "aes_gcm": {
+        "max": 3.8,
+        "avg": 0.4,
+        "sum": 27.9
+      },
+      "s3_put": {
+        "max": 288.0,
+        "avg": 110.1,
+        "sum": 7043.6
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 487.1,
+      "index_ms": 11.8,
+      "fetch_decrypt_ms": 375.4,
+      "join_ms": 42.7,
+      "verify_sha_ms": 57.1,
+      "fragments": 64,
+      "workers": 16,
+      "bytes": 104857600,
+      "s3_get": {
+        "max": 253.3,
+        "avg": 77.6,
+        "sum": 4966.8
+      },
+      "kms_decrypt": {
+        "max": 11.7,
+        "avg": 6.6,
+        "sum": 419.9
+      },
+      "aes_gcm": {
+        "max": 0.4,
+        "avg": 0.2,
+        "sum": 15.1
+      }
+    }
+  },
+  {
+    "size_bytes": 104857600,
+    "fragment_count": 128,
+    "ok": true,
+    "store_wall_s": 1.513,
+    "store_mb_s": 69.31,
+    "retrieve_wall_s": 0.679,
+    "retrieve_mb_s": 154.45,
+    "store_timings": {
+      "total_ms": 1511.4,
+      "fanout_ms": 792.2,
+      "index_ms": 631.9,
+      "fragments": 128,
+      "workers": 16,
+      "bytes": 104857600,
+      "kms_generate": {
+        "max": 43.2,
+        "avg": 8.3,
+        "sum": 1062.7
+      },
+      "aes_gcm": {
+        "max": 1.9,
+        "avg": 0.2,
+        "sum": 19.3
+      },
+      "s3_put": {
+        "max": 262.9,
+        "avg": 86.3,
+        "sum": 11042.4
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 678.7,
+      "index_ms": 12.6,
+      "fetch_decrypt_ms": 565.6,
+      "join_ms": 43.4,
+      "verify_sha_ms": 57.0,
+      "fragments": 128,
+      "workers": 16,
+      "bytes": 104857600,
+      "s3_get": {
+        "max": 316.1,
+        "avg": 59.9,
+        "sum": 7669.6
+      },
+      "kms_decrypt": {
+        "max": 11.0,
+        "avg": 6.8,
+        "sum": 870.0
+      },
+      "aes_gcm": {
+        "max": 0.2,
+        "avg": 0.1,
+        "sum": 16.6
+      }
+    }
+  },
+  {
+    "size_bytes": 104857600,
+    "fragment_count": 256,
+    "ok": true,
+    "store_wall_s": 2.762,
+    "store_mb_s": 37.96,
+    "retrieve_wall_s": 1.109,
+    "retrieve_mb_s": 94.53,
+    "store_timings": {
+      "total_ms": 2760.6,
+      "fanout_ms": 1379.4,
+      "index_ms": 1292.2,
+      "fragments": 256,
+      "workers": 16,
+      "bytes": 104857600,
+      "kms_generate": {
+        "max": 43.4,
+        "avg": 8.4,
+        "sum": 2157.7
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.1,
+        "sum": 25.6
+      },
+      "s3_put": {
+        "max": 235.5,
+        "avg": 74.9,
+        "sum": 19163.7
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 1108.9,
+      "index_ms": 18.2,
+      "fetch_decrypt_ms": 990.6,
+      "join_ms": 43.1,
+      "verify_sha_ms": 57.1,
+      "fragments": 256,
+      "workers": 16,
+      "bytes": 104857600,
+      "s3_get": {
+        "max": 228.0,
+        "avg": 53.0,
+        "sum": 13575.8
+      },
+      "kms_decrypt": {
+        "max": 13.9,
+        "avg": 6.8,
+        "sum": 1737.1
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.1,
+        "sum": 25.6
+      }
+    }
+  },
+  {
+    "size_bytes": 104857600,
+    "fragment_count": 1000,
+    "ok": true,
+    "store_wall_s": 9.808,
+    "store_mb_s": 10.69,
+    "retrieve_wall_s": 5.058,
+    "retrieve_mb_s": 20.73,
+    "store_timings": {
+      "total_ms": 9805.3,
+      "fanout_ms": 4621.8,
+      "index_ms": 5097.1,
+      "fragments": 1000,
+      "workers": 16,
+      "bytes": 104857600,
+      "kms_generate": {
+        "max": 55.1,
+        "avg": 7.6,
+        "sum": 7554.4
+      },
+      "aes_gcm": {
+        "max": 1.1,
+        "avg": 0.0,
+        "sum": 2.3
+      },
+      "s3_put": {
+        "max": 168.3,
+        "avg": 65.5,
+        "sum": 65517.4
+      }
+    },
+    "retrieve_timings": {
+      "total_ms": 5056.9,
+      "index_ms": 48.6,
+      "fetch_decrypt_ms": 4906.7,
+      "join_ms": 44.2,
+      "verify_sha_ms": 57.1,
+      "fragments": 1000,
+      "workers": 16,
+      "bytes": 104857600,
+      "s3_get": {
+        "max": 201.0,
+        "avg": 71.1,
+        "sum": 71083.5
+      },
+      "kms_decrypt": {
+        "max": 32.0,
+        "avg": 6.5,
+        "sum": 6452.1
+      },
+      "aes_gcm": {
+        "max": 0.1,
+        "avg": 0.0,
+        "sum": 1.4
+      }
+    }
+  }
+]
