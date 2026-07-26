@@ -72,9 +72,27 @@ INSTANCE_CATALOG = {
 }
 
 
+def assert_correct_account() -> None:
+    """Refuse to touch IAM/EC2 unless the caller's ACTIVE credentials really are
+    the Xinsere dev account. Added 2026-07-26 after --setup-iam silently created
+    a role in a DIFFERENT account (393903547849, botverse-deploy) because that
+    shell's ambient AWS_PROFILE/AWS_ACCESS_KEY_ID env vars shadowed the intended
+    default profile -- harmless that time (Botverse's account has none of
+    Xinsere's S3/KMS/DynamoDB, so nothing there could have worked), but this
+    check makes the failure loud instead of silent."""
+    ident = boto3.client("sts", region_name=REGION).get_caller_identity()
+    if ident["Account"] != ACCOUNT_ID:
+        raise SystemExit(
+            f"REFUSING TO PROCEED: active AWS credentials are account "
+            f"{ident['Account']} ({ident['Arn']}), not the Xinsere dev account "
+            f"{ACCOUNT_ID}. Pass --profile xinsere, or check for a shadowing "
+            f"AWS_PROFILE/AWS_ACCESS_KEY_ID env var in this shell/profile script.")
+
+
 def ensure_iam_role() -> str:
     """Create the EC2 ingest role + instance profile if they don't exist yet.
     Idempotent -- safe to re-run. Returns the instance profile name."""
+    assert_correct_account()
     iam = boto3.client("iam", region_name=REGION)
     with open(os.path.join(_HERE, "iam_trust_policy.json")) as f:
         trust = f.read()
@@ -163,6 +181,11 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--setup-iam", action="store_true",
                     help="Create/update the EC2 ingest IAM role + instance profile, then exit.")
+    ap.add_argument("--profile", default=None,
+                    help="AWS CLI profile to use (e.g. xinsere) -- overrides whatever "
+                         "AWS_PROFILE/AWS_ACCESS_KEY_ID may already be set in this shell. "
+                         "The script refuses to proceed either way unless the resolved "
+                         "credentials are account " + ACCOUNT_ID + ".")
     ap.add_argument("--instance-type", choices=sorted(INSTANCE_CATALOG),
                     help="Which candidate machine type to launch.")
     ap.add_argument("--folder", default="", help="Team-root Dropbox path (default: whole tree)")
@@ -192,6 +215,9 @@ def main() -> None:
                          "(AMI, user-data, cost estimate) is printed -- nothing is created.")
     args = ap.parse_args()
 
+    if args.profile:
+        os.environ["AWS_PROFILE"] = args.profile   # must be set before any boto3 client()
+
     if args.setup_iam:
         ensure_iam_role()
         return
@@ -202,6 +228,7 @@ def main() -> None:
         ap.error("refusing to run unbounded: pass --limit N, or --sample-file, or "
                  "--unbounded to explicitly opt out (see --help)")
 
+    assert_correct_account()
     spec = INSTANCE_CATALOG[args.instance_type]
     ami_id, ami_name = resolve_ami(spec["arch"])
     sample_s3_uri = upload_sample(args.sample_file) if args.sample_file else None
