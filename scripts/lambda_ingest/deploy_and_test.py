@@ -40,7 +40,8 @@ STAGING_BUCKET = "xinsere-dev-staging"
 
 S3_BUCKETS = ("xinsere-dev-frag-cac1-01,xinsere-dev-frag-cac1-02,xinsere-dev-frag-cac1-03,"
              "xinsere-dev-frag-cac1-04,xinsere-dev-frag-cac1-05,xinsere-dev-frag-cac1-06,"
-             "xinsere-dev-frag-cac1-07")
+             "xinsere-dev-frag-cac1-07,xinsere-dev-frag-cac1-08,xinsere-dev-frag-cac1-09,"
+             "xinsere-dev-frag-cac1-10,xinsere-dev-frag-cac1-11,xinsere-dev-frag-cac1-12")
 MIGRATION_OWNER = "98b3cf84-88fa-4a35-9ee3-70ced1ba3c32"
 MIGRATION_ACTOR = MIGRATION_OWNER
 

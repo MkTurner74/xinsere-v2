@@ -24,7 +24,8 @@ from xinsere_pipeline import PipelineService, XinsereIntegrityError, XinsereNotF
 from xinsere_pipeline.backends.local import LocalIndexStore, LocalKeyManager, LocalObjectStore
 from xinsere_pipeline.backends.router import MultiCloudObjectStore
 from xinsere_pipeline.config import ROUTE_HYBRID
-from xinsere_pipeline import fragmenter
+from xinsere_pipeline import compute_selector, fragmenter
+from xinsere_pipeline.compute_selector import GB, JobProfile
 
 _passed = 0
 _failed = 0
@@ -307,6 +308,145 @@ def group_e() -> None:
           providers_used == {"a", "b"}, f"providers={sorted(providers_used)}")
 
 
+# --- F. Region-weighted routing (added 2026-07-26, EU/US region-bias) -------
+
+def group_f() -> None:
+    section("F. Region-weighted routing")
+
+    # F1/F2: weighted_cycle building block.
+    cycle = fragmenter.weighted_cycle({"a": 0.5, "b": 0.3, "c": 0.2}, resolution=100)
+    counts = {g: cycle.count(g) for g in ("a", "b", "c")}
+    check("F1 weighted_cycle hits exact requested proportions",
+          counts == {"a": 50, "b": 30, "c": 20}, str(counts))
+
+    raised = False
+    try:
+        fragmenter.weighted_cycle({"a": 0.5, "b": 0.3})  # sums to 0.8, not 1.0
+    except ValueError:
+        raised = True
+    check("F2 weighted_cycle rejects weights that don't sum to 1.0", raised)
+
+    # F3: route_region_weighted honors weights over many fragments (statistical,
+    # generous tolerance -- exactness isn't the contract, proportionality is).
+    region_buckets = {
+        "eu": [f"eu-{i}" for i in range(4)],
+        "us-east": [f"use-{i}" for i in range(4)],
+        "us-west": [f"usw-{i}" for i in range(4)],
+    }
+    weights = {"eu": 0.6, "us-east": 0.25, "us-west": 0.15}
+    n = 2000
+    routed = [fragmenter.route_region_weighted(seq, n, region_buckets, weights, jitter=0)
+              for seq in range(n)]
+    groups = [g for _bucket, g in routed]
+    observed = {g: groups.count(g) / n for g in weights}
+    within_tolerance = all(abs(observed[g] - weights[g]) < 0.03 for g in weights)
+    check("F3 route_region_weighted matches requested weights within 3%",
+          within_tolerance, f"observed={observed}")
+
+    # F4: within a favored region, still spreads across every bucket in that
+    # region -- a strong bias should not collapse to a single bucket.
+    eu_buckets_used = {bucket for bucket, group in routed if group == "eu"}
+    check("F4 strong regional bias still spreads across every bucket in that region",
+          eu_buckets_used == set(region_buckets["eu"]), f"used={eu_buckets_used}")
+
+    # F5: missing region group raises loudly, not silently mis-routes.
+    raised = False
+    try:
+        fragmenter.route_region_weighted(
+            0, 10, {"eu": ["eu-0"]}, {"eu": 0.5, "us-east": 0.5}, jitter=0)
+    except ValueError:
+        raised = True
+    check("F5 route_region_weighted raises for an unregistered region group", raised)
+
+    # F6/F7: full PipelineService integration -- round-trip integrity + report.
+    store = LocalObjectStore(bucket_count=6, region_groups={
+        "xinsere-frag-00": "eu", "xinsere-frag-01": "eu",
+        "xinsere-frag-02": "us-east", "xinsere-frag-03": "us-east",
+        "xinsere-frag-04": "us-west", "xinsere-frag-05": "us-west",
+    })
+    svc = PipelineService(store, LocalKeyManager(), LocalIndexStore(),
+                          fragment_count=16, region_weights={"eu": 0.6, "us-east": 0.25, "us-west": 0.15})
+    content = os.urandom(50_000)
+    r = svc.store(content, "application/octet-stream")
+    out = svc.retrieve(r.file_id)
+    check("F6 region-weighted routing round-trips byte-identical", out.content == content)
+
+    report = svc.region_report(r.file_id)
+    eu_pct = report["by_region_group"].get("eu", {}).get("pct", 0)
+    # Cycle is sized to fragment_count (16), not a fixed resolution, so this is
+    # exact largest-remainder rounding, not a statistical sample: 60% of 16 ->
+    # 9.6 -> base 9, +1 remainder (eu has the largest fractional part) -> 10/16.
+    check("F7 region_report() hits the exact largest-remainder allocation for N=16",
+          eu_pct == 62.5, f"eu_pct={eu_pct} report={report['by_region_group']}")
+
+    # F8: default region_group_for() with no map is "default" for every bucket.
+    plain = LocalObjectStore(bucket_count=4)
+    check("F8 region_group_for() defaults to 'default' with no region map",
+          all(plain.region_group_for(b) == "default" for b in plain.buckets()))
+
+    # F9: region_weights=None is a pure no-op -- identical behaviour to before
+    # this feature existed (regression guard).
+    svc_plain, _s, _k, index_plain = make_service(fragment_count=7, bucket_count=8)
+    r2 = svc_plain.store(os.urandom(1000), "application/octet-stream")
+    used = {f.bucket for f in index_plain.get_fragments(r2.file_id)}
+    check("F9 region_weights=None preserves plain modular routing (no regression)",
+          len(used) > 1)
+
+
+# --- G. Compute-tier selector (added 2026-07-26) ----------------------------
+
+def group_g() -> None:
+    section("G. Compute-tier selector")
+
+    # G1: a small job (few MB, small max file) should recommend lambda --
+    # spin-up overhead dominates cost at this scale for every other tier.
+    small = JobProfile(total_bytes=50 * 1024 * 1024, file_count=5,
+                       max_file_bytes=10 * 1024 * 1024)
+    small_plan = compute_selector.recommend(small)
+    check("G1 small job recommends lambda (spin-up overhead dominates)",
+          small_plan.tier == "lambda", f"got {small_plan.tier}")
+
+    # G2: a single huge file (e.g. 15GB, beyond even EC2's proven 32GB-tier
+    # ceiling of ~10.67GB at the 3x memory multiplier) is beyond EVERY tier's
+    # safe ceiling today (whole-file-in-memory) -- recommend() must raise, not
+    # silently pick something that will OOM in production.
+    huge = JobProfile(total_bytes=15 * GB, file_count=1, max_file_bytes=15 * GB)
+    raised = False
+    try:
+        compute_selector.recommend(huge)
+    except ValueError:
+        raised = True
+    check("G2 a file beyond every tier's safe ceiling raises, not silently recommends", raised)
+
+    # G3: a file too big for Lambda (memory) but fine for Fargate/EC2 should
+    # never recommend lambda.
+    mid = JobProfile(total_bytes=6 * GB, file_count=1, max_file_bytes=6 * GB)
+    mid_plan = compute_selector.recommend(mid)
+    check("G3 a 6GB file never recommends lambda (over its safe memory ceiling)",
+          mid_plan.tier != "lambda", f"got {mid_plan.tier}")
+
+    # G4: evaluate() always returns exactly 3 tiers (capable or not), sorted
+    # capable-first then cheapest-first -- callers can inspect why a tier was
+    # excluded, not just get a single opaque answer.
+    plans = compute_selector.evaluate(mid)
+    check("G4 evaluate() returns all 3 tiers with capability + reason",
+          len(plans) == 3 and all(p.reason for p in plans),
+          f"tiers={[(p.tier, p.capable) for p in plans]}")
+    capable_flags = [p.capable for p in plans]
+    check("G5 capable tiers sort before incapable ones",
+          capable_flags == sorted(capable_flags, reverse=True))
+
+    # G6: a very long job (1TB) should NOT recommend lambda even if every file
+    # is small -- Lambda's 15-min-per-invocation ceiling makes it an awkward
+    # fit operationally even when technically chunkable; EC2/Fargate's spin-up
+    # amortizes to nothing at this scale, and their lower steady-state cost
+    # per hour wins on price too.
+    long_job = JobProfile(total_bytes=1024 * GB, file_count=2000, max_file_bytes=2 * GB)
+    long_plan = compute_selector.recommend(long_job)
+    check("G6 a 1TB job (small files) does not recommend lambda",
+          long_plan.tier != "lambda", f"got {long_plan.tier}, cost=${long_plan.est_cost_usd:.2f}")
+
+
 def main() -> int:
     print("=" * 64)
     print("Xinsere file-fragment pipeline — test matrix (local backends)")
@@ -316,6 +456,8 @@ def main() -> int:
     group_c()
     group_d()
     group_e()
+    group_f()
+    group_g()
     print("\n" + "=" * 64)
     print(f"RESULT: {_passed} passed, {_failed} failed")
     print("=" * 64)

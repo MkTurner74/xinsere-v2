@@ -87,6 +87,7 @@ class PipelineService:
         fragment_count: int = DEFAULT_FRAGMENT_COUNT,
         route_mode: str = ROUTE_MODULAR,
         max_workers: int | None = None,
+        region_weights: dict[str, float] | None = None,
     ) -> None:
         if fragment_count not in ALLOWED_FRAGMENT_COUNTS:
             raise ValueError(
@@ -97,6 +98,11 @@ class PipelineService:
         self._index = index_store
         self._n = fragment_count
         self._mode = route_mode
+        # Optional region bias (e.g. {"eu": 0.7, "us-east": 0.2, "us-west": 0.1})
+        # -- when set, overrides route_mode entirely: fragmenter.route_region_weighted
+        # picks the region group per the weights, then spreads within that
+        # group's own buckets. None (default) preserves today's behaviour exactly.
+        self._region_weights = dict(region_weights) if region_weights else None
         # Per-fragment work is I/O-bound: an S3 GET/PUT (often cross-region) plus a
         # KMS round-trip, both of which release the GIL. So pool width should track
         # the fragment count, NOT cpu_count — on serverless os.cpu_count() is 1-2,
@@ -125,12 +131,21 @@ class PipelineService:
         buckets = self._objects.buckets()
         jitter = int.from_bytes(os.urandom(2), "big")  # per-file routing jitter
 
+        # Region-biased routing needs bucket->group once per file (constant
+        # across all its fragments), not re-derived per fragment.
+        region_buckets = None
+        if self._region_weights is not None:
+            region_buckets = {}
+            for b in buckets:
+                region_buckets.setdefault(self._objects.region_group_for(b), []).append(b)
+
         # Encrypt + scatter every fragment concurrently; .result() order matches
         # submit order, so records stay in sequence. Any worker error propagates.
         t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
             futures = [
-                pool.submit(self._encrypt_and_store, file_id, seq, frag, buckets, jitter)
+                pool.submit(self._encrypt_and_store, file_id, seq, frag, buckets, jitter,
+                            region_buckets)
                 for seq, frag in enumerate(fragments)
             ]
             results = [f.result() for f in futures]
@@ -169,7 +184,8 @@ class PipelineService:
         _log.info("store %s %s", file_id, timings)
         return StoreResult(file_id, file_sha, self._n, _now_iso(), timings)
 
-    def _encrypt_and_store(self, file_id, seq, frag, buckets, jitter) -> tuple[FragmentRecord, dict]:
+    def _encrypt_and_store(self, file_id, seq, frag, buckets, jitter,
+                            region_buckets=None) -> tuple[FragmentRecord, dict]:
         """Worker: fresh key -> AES-256-GCM encrypt -> write to a bucket.
 
         Returns (record, timing) where timing splits the KMS key generation, the
@@ -186,7 +202,11 @@ class PipelineService:
 
         t0 = time.perf_counter()
         fragment_id = f"{uuid.uuid4().hex}_{seq}"  # UUID + seq only; no file link
-        bucket = fragmenter.route(seq, buckets, mode=self._mode, jitter=jitter)
+        if region_buckets is not None:
+            bucket, _group = fragmenter.route_region_weighted(
+                seq, self._n, region_buckets, self._region_weights, jitter=jitter)
+        else:
+            bucket = fragmenter.route(seq, buckets, mode=self._mode, jitter=jitter)
         self._objects.put(bucket, fragment_id, ciphertext)
         s3_ms = _ms(t0)
 
@@ -329,6 +349,32 @@ class PipelineService:
         aes_ms = _ms(t0)
 
         return plaintext, {"seq": fr.sequence, "s3_ms": s3_ms, "kms_ms": kms_ms, "aes_ms": aes_ms}
+
+    def region_report(self, file_id: str) -> dict:
+        """Per-region-group and per-bucket fragment distribution for a stored
+        file. Demo/observability only — region is derived from each fragment's
+        bucket at report time (via ObjectStore.region_group_for), not stored
+        redundantly on the fragment record."""
+        file_rec = self._index.get_file(file_id)
+        if file_rec is None:
+            raise XinsereNotFoundError(f"unknown file_id: {file_id}")
+        frags = self._index.get_fragments(file_id)
+        by_bucket: dict[str, int] = {}
+        by_group: dict[str, int] = {}
+        for fr in frags:
+            by_bucket[fr.bucket] = by_bucket.get(fr.bucket, 0) + 1
+            group = self._objects.region_group_for(fr.bucket)
+            by_group[group] = by_group.get(group, 0) + 1
+        total = len(frags) or 1
+        return {
+            "file_id": file_id,
+            "fragment_count": len(frags),
+            "by_region_group": {
+                g: {"fragments": n, "pct": round(100 * n / total, 1)}
+                for g, n in sorted(by_group.items())
+            },
+            "by_bucket": dict(sorted(by_bucket.items())),
+        }
 
     # --- Existence / lifecycle ----------------------------------------------
 

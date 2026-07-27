@@ -54,3 +54,59 @@ def route(sequence: int, buckets: list[str], *, mode: str, jitter: int) -> str:
         return buckets[half + ((sequence + jitter) % (count - half))]  # group B
 
     raise ValueError(f"unknown routing mode: {mode}")
+
+
+def weighted_cycle(weights: dict[str, float], resolution: int = 100) -> list[str]:
+    """A deterministic repeating list of region-group labels whose frequency
+    matches `weights` (e.g. {"eu": 0.5, "us-east": 0.3, "us-west": 0.2}), built
+    to `resolution` slots via largest-remainder rounding so it hits the exact
+    total even when weights don't divide evenly."""
+    total = sum(weights.values())
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(f"region weights must sum to 1.0, got {total}")
+    order = sorted(weights)  # deterministic regardless of dict insertion order
+    raw = {g: weights[g] * resolution for g in order}
+    counts = {g: int(raw[g]) for g in order}
+    shortfall = resolution - sum(counts.values())
+    if shortfall > 0:
+        by_remainder = sorted(order, key=lambda g: raw[g] - counts[g], reverse=True)
+        for g in by_remainder[:shortfall]:
+            counts[g] += 1
+    cycle: list[str] = []
+    for g in order:
+        cycle.extend([g] * counts[g])
+    return cycle
+
+
+def route_region_weighted(
+    sequence: int, fragment_count: int, region_buckets: dict[str, list[str]],
+    weights: dict[str, float], *, jitter: int,
+) -> tuple[str, str]:
+    """Region-biased routing: pick a region group per `weights`, then modular-
+    route within that group's own bucket list -- so diversity within a favored
+    region is preserved even under a strong regional bias (e.g. 80% EU still
+    spreads across every EU bucket, not just one).
+
+    The cycle is sized to `fragment_count`, not a fixed resolution: sizing it
+    to a large fixed constant (e.g. 100) would sample only a small, jitter-
+    shifted window of that cycle for any one file's fragments, which can miss
+    the requested proportions badly at small fragment counts (e.g. 16 frags
+    against a 100-slot cycle only ever sees ~16 of the 100 slots). Sizing the
+    cycle to the file's own fragment count instead guarantees every fragment
+    of a SINGLE file participates, hitting the requested weights as closely as
+    integer rounding allows for that fragment count.
+
+    `region_buckets` maps group name -> that group's bucket list (built once
+    per store() call from ObjectStore.region_group_for(), not per-fragment).
+    Returns (bucket, region_group) -- the caller may want the group for
+    reporting without a second lookup."""
+    missing = set(weights) - set(region_buckets)
+    if missing:
+        raise ValueError(f"no buckets registered for region group(s): {sorted(missing)}")
+    cycle = weighted_cycle(weights, resolution=fragment_count)
+    group = cycle[(sequence + jitter) % len(cycle)]
+    buckets = region_buckets[group]
+    if not buckets:
+        raise ValueError(f"region group {group!r} has no buckets")
+    bucket = buckets[(sequence + jitter) % len(buckets)]
+    return bucket, group

@@ -1,0 +1,32 @@
+{
+  "round_trip_ok": true,
+  "file_id": "47144b3ddebf48c3ab9db9ed265c6046",
+  "fragment_count": 16,
+  "by_region_group": {
+    "eu": {
+      "fragments": 6,
+      "pct": 37.5
+    },
+    "us-east": {
+      "fragments": 6,
+      "pct": 37.5
+    },
+    "us-west": {
+      "fragments": 4,
+      "pct": 25.0
+    }
+  },
+  "by_bucket": {
+    "xinsere-dev-frag-euw2-01": 2,
+    "xinsere-dev-frag-euw2-02": 2,
+    "xinsere-dev-frag-euw2-03": 2,
+    "xinsere-dev-frag-use1-01": 2,
+    "xinsere-dev-frag-use1-02": 2,
+    "xinsere-dev-frag-use2-01": 1,
+    "xinsere-dev-frag-use2-02": 1,
+    "xinsere-dev-frag-usw1-01": 1,
+    "xinsere-dev-frag-usw1-02": 1,
+    "xinsere-dev-frag-usw2-01": 1,
+    "xinsere-dev-frag-usw2-02": 1
+  }
+}

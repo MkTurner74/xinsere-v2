@@ -53,6 +53,13 @@ class ObjectStore(ABC):
         caller falls back to server-side retrieval."""
         raise NotImplementedError("this backend does not support presigned GETs")
 
+    def region_group_for(self, bucket: str) -> str:
+        """Coarse region label for a bucket (e.g. "us-east", "eu") -- used for
+        region-biased routing (PipelineService(region_weights=...)) and for
+        reporting where a file's fragments actually landed. Backends with no
+        real regional concept (e.g. local dev) return "default"."""
+        return "default"
+
 
 # --- Index (DynamoDB metadata) ----------------------------------------------
 

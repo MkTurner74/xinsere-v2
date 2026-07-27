@@ -41,9 +41,14 @@ class LocalKeyManager(KeyManager):
 class LocalObjectStore(ObjectStore):
     """Subdirectories as buckets. In-memory by default; on-disk if root given."""
 
-    def __init__(self, bucket_count: int = 8, root: str | None = None) -> None:
+    def __init__(self, bucket_count: int = 8, root: str | None = None,
+                 region_groups: dict[str, str] | None = None) -> None:
         self._names = [f"xinsere-frag-{i:02d}" for i in range(bucket_count)]
         self._root = root
+        # Optional bucket -> region-group map, for exercising region-weighted
+        # routing offline (no real AWS regions locally). Unmapped buckets fall
+        # back to "default", matching ObjectStore's base behaviour.
+        self._region_groups = region_groups or {}
         # In-memory store: {bucket: {key: data}}
         self._mem: dict[str, dict[str, bytes]] = {b: {} for b in self._names}
         if root:
@@ -52,6 +57,9 @@ class LocalObjectStore(ObjectStore):
 
     def buckets(self) -> list[str]:
         return list(self._names)
+
+    def region_group_for(self, bucket: str) -> str:
+        return self._region_groups.get(bucket, "default")
 
     def _path(self, bucket: str, key: str) -> str:
         return os.path.join(self._root, bucket, key)  # type: ignore[arg-type]

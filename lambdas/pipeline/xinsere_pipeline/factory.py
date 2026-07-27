@@ -21,6 +21,23 @@ from .pipeline import PipelineService
 FRAGMENT_COUNT = int(os.environ.get("XINSERE_FRAGMENT_COUNT", "7"))
 
 
+def _region_weights() -> dict[str, float] | None:
+    """XINSERE_REGION_WEIGHTS, e.g. "eu=0.5,us-east=0.3,us-west=0.2" -- region-
+    biased fragment routing (added 2026-07-26 for EU/US data-residency bias).
+    Unset (default) preserves plain modular/hybrid routing."""
+    raw = os.environ.get("XINSERE_REGION_WEIGHTS", "").strip()
+    if not raw:
+        return None
+    weights: dict[str, float] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        group, _, val = part.partition("=")
+        weights[group.strip()] = float(val.strip())
+    return weights
+
+
 def _aws_s3_store() -> ObjectStore:
     from .backends.aws import S3ObjectStore
 
@@ -75,6 +92,7 @@ def _aws_pipeline() -> PipelineService:
         KmsKeyManager(key_id),
         DynamoIndexStore(files_table, frags_table, sha_index=sha_index),
         fragment_count=FRAGMENT_COUNT,
+        region_weights=_region_weights(),
     )
 
 

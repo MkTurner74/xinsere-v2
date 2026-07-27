@@ -1,0 +1,35 @@
+{
+  "requested_weights": {
+    "eu": 0.6,
+    "us-east": 0.25,
+    "us-west": 0.15
+  },
+  "round_trip_ok": true,
+  "file_id": "7b05f5c1b9f847e98b9240e9933a69a8",
+  "fragment_count": 16,
+  "by_region_group": {
+    "eu": {
+      "fragments": 10,
+      "pct": 62.5
+    },
+    "us-east": {
+      "fragments": 4,
+      "pct": 25.0
+    },
+    "us-west": {
+      "fragments": 2,
+      "pct": 12.5
+    }
+  },
+  "by_bucket": {
+    "xinsere-dev-frag-euw2-01": 4,
+    "xinsere-dev-frag-euw2-02": 3,
+    "xinsere-dev-frag-euw2-03": 3,
+    "xinsere-dev-frag-use1-01": 1,
+    "xinsere-dev-frag-use1-02": 1,
+    "xinsere-dev-frag-use2-01": 1,
+    "xinsere-dev-frag-use2-02": 1,
+    "xinsere-dev-frag-usw2-01": 1,
+    "xinsere-dev-frag-usw2-02": 1
+  }
+}

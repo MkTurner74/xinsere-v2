@@ -51,6 +51,19 @@ _SEGMENT_REGION = {
     "use1": "us-east-1", "use2": "us-east-2",
     "usw1": "us-west-1", "usw2": "us-west-2",
     "cac1": "ca-central-1",
+    "euw2": "eu-west-2",  # London -- added 2026-07-26 for EU/UK region-bias demo
+}
+
+# AWS region -> coarse region GROUP, for region-biased routing and reporting.
+# This is the "EU vs US" / "east coast vs west coast" grouping a caller actually
+# reasons about -- finer than a single region, coarser than raw AWS region
+# codes so a weights dict like {"eu": 0.5, "us-east": 0.3, "us-west": 0.2}
+# reads naturally without knowing which specific regions back each group.
+_REGION_GROUP = {
+    "us-east-1": "us-east", "us-east-2": "us-east",
+    "us-west-1": "us-west", "us-west-2": "us-west",
+    "ca-central-1": "canada",
+    "eu-west-2": "eu",
 }
 
 
@@ -134,6 +147,9 @@ class S3ObjectStore(ObjectStore):
 
     def delete(self, bucket: str, key: str) -> None:
         self._for(bucket).delete_object(Bucket=bucket, Key=key)
+
+    def region_group_for(self, bucket: str) -> str:
+        return _REGION_GROUP.get(self._region_for(bucket), "other")
 
 
 class DynamoIndexStore(IndexStore):
