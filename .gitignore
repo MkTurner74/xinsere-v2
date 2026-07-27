@@ -32,4 +32,9 @@ Thumbs.db
 tests/fixtures/
 tests/tmp/
 
+# Real corpus sample manifests -- contain real personal Dropbox file paths,
+# never commit even though the folder itself is approved for migration.
+scripts/route_audit/sample_*.json
+scripts/route_audit/*.log
+
 .vercel

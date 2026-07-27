@@ -106,10 +106,20 @@ class PipelineService:
         # Per-fragment work is I/O-bound: an S3 GET/PUT (often cross-region) plus a
         # KMS round-trip, both of which release the GIL. So pool width should track
         # the fragment count, NOT cpu_count — on serverless os.cpu_count() is 1-2,
-        # which serialized the fan-out into several sequential waves. fragment_count
-        # is bounded (<=16 by ALLOWED_FRAGMENT_COUNTS), so one thread per fragment
-        # is safe; keep an explicit ceiling as a guard.
-        self._workers = max_workers or min(fragment_count, 16)
+        # which serialized the fan-out into several sequential waves.
+        #
+        # Cap raised 16 -> 64 on 2026-07-26 after a real EC2 test (fragment_count=
+        # 1000, workers swept 16/64/128/256/512): 16->64 gave a real ~15-30%
+        # throughput gain; beyond 64 it flattens completely and per-call KMS/S3
+        # latency actually gets WORSE (KMS avg 8.4ms at 16 workers -> 67.8ms at
+        # 128) -- that's AWS's own request-rate throttling, not a Python/GIL
+        # limit, so there's no benefit to raising this further. NOTE: under
+        # today's ALLOWED_FRAGMENT_COUNTS (max 16), this cap is a no-op --
+        # min(fragment_count, 64) always just equals fragment_count. It matters
+        # once fragment counts go higher (the streaming rearchitecture's
+        # size-derived fragment counts), so it's set correctly in advance rather
+        # than left at the now-answered "would 16 be a limiter" question.
+        self._workers = max_workers or min(fragment_count, 64)
 
     # --- Store ---------------------------------------------------------------
 

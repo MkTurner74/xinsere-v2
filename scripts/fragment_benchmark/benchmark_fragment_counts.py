@@ -64,13 +64,15 @@ def build_backends():
            DynamoIndexStore(files_table, frags_table, sha_index=sha_index))
 
 
-def bench_one(object_store, key_manager, index_store, size: int, fragment_count: int) -> dict:
+def bench_one(object_store, key_manager, index_store, size: int, fragment_count: int,
+              max_workers: int | None = None) -> dict:
     # Benchmark-only override of the fragment-count validation -- production
     # code (config.py / everywhere else) is untouched. See module docstring.
     pipeline_module.ALLOWED_FRAGMENT_COUNTS = tuple(
         set(pipeline_module.ALLOWED_FRAGMENT_COUNTS) | {fragment_count})
     svc = pipeline_module.PipelineService(
-        object_store, key_manager, index_store, fragment_count=fragment_count)
+        object_store, key_manager, index_store, fragment_count=fragment_count,
+        max_workers=max_workers)  # None preserves today's min(fragment_count, 16) cap
 
     content = os.urandom(size)
     sha_before = hashlib.sha256(content).hexdigest()
@@ -102,25 +104,34 @@ def main() -> None:
     ap.add_argument("--sizes", default="10,100,500", help="Comma-separated MB sizes")
     ap.add_argument("--counts", default="7,16,32,64,128,256,1000",
                     help="Comma-separated fragment counts")
+    ap.add_argument("--workers", default="",
+                    help="Comma-separated max_workers overrides to test against EACH fragment "
+                         "count (e.g. '16,64,128,256') -- default (empty) uses today's actual "
+                         "production cap, min(fragment_count, 16). Added 2026-07-26 to test "
+                         "whether the 16-worker cap itself (not just small fragment size) is "
+                         "limiting throughput at high fragment counts.")
     ap.add_argument("--out", default="fragment_benchmark_results.json")
     args = ap.parse_args()
 
     sizes = [int(s) * 1024 * 1024 for s in args.sizes.split(",")]
     counts = [int(c) for c in args.counts.split(",")]
+    worker_overrides = [int(w) for w in args.workers.split(",") if w.strip()] or [None]
 
     object_store, key_manager, index_store = build_backends()
 
     results = []
-    print(f"{'size(MB)':>9} {'frags':>6} {'store s':>9} {'store MB/s':>11} "
+    print(f"{'size(MB)':>9} {'frags':>6} {'workers':>7} {'store s':>9} {'store MB/s':>11} "
           f"{'retr s':>8} {'retr MB/s':>10} {'kms(store)':>18} {'s3(store)':>18} "
           f"{'s3(retr)':>18} {'kms(retr)':>18} {'ok':>4}")
-    print("-" * 150)
+    print("-" * 158)
     for size in sizes:
         for count in counts:
-            r = bench_one(object_store, key_manager, index_store, size, count)
+          for workers in worker_overrides:
+            r = bench_one(object_store, key_manager, index_store, size, count, workers)
+            r["max_workers"] = workers if workers is not None else min(count, 16)
             results.append(r)
             st, rt = r["store_timings"], r["retrieve_timings"]
-            print(f"{size/1e6:>9.0f} {count:>6} {r['store_wall_s']:>9.2f} "
+            print(f"{size/1e6:>9.0f} {count:>6} {r['max_workers']:>7} {r['store_wall_s']:>9.2f} "
                   f"{r['store_mb_s']:>11.1f} {r['retrieve_wall_s']:>8.2f} "
                   f"{r['retrieve_mb_s']:>10.1f} "
                   f"{_agg_row(st['kms_generate']):>18} {_agg_row(st['s3_put']):>18} "
