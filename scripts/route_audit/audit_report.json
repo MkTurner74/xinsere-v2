@@ -1,0 +1,30 @@
+{
+  "files_attempted": 525,
+  "files_failed": 0,
+  "failures": [],
+  "total_fragments": 3675,
+  "requested_weights": {
+    "eu": 0.6,
+    "us-east": 0.25,
+    "us-west": 0.15
+  },
+  "observed_pct_by_region_group": {
+    "eu": 57.14,
+    "us-east": 28.57,
+    "us-west": 14.29
+  },
+  "observed_fragments_by_bucket": {
+    "xinsere-dev-frag-euw2-01": 697,
+    "xinsere-dev-frag-euw2-02": 707,
+    "xinsere-dev-frag-euw2-03": 696,
+    "xinsere-dev-frag-use1-02": 264,
+    "xinsere-dev-frag-use2-01": 268,
+    "xinsere-dev-frag-usw2-02": 131,
+    "xinsere-dev-frag-usw1-01": 134,
+    "xinsere-dev-frag-use1-01": 257,
+    "xinsere-dev-frag-usw2-01": 131,
+    "xinsere-dev-frag-usw1-02": 129,
+    "xinsere-dev-frag-use2-02": 261
+  },
+  "elapsed_s": 16643.8
+}
