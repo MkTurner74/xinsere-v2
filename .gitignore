@@ -36,5 +36,7 @@ tests/tmp/
 # never commit even though the folder itself is approved for migration.
 scripts/route_audit/sample_*.json
 scripts/route_audit/*.log
+scripts/overhead_benchmark/files.json
+scripts/overhead_benchmark/*.log
 
 .vercel
