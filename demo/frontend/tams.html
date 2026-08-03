@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xinsere — TAMS</title>
+<style>
+  :root{
+    --bg:#0A0713;--bg-2:#0F0B1E;--panel:rgba(255,255,255,0.035);--panel-2:rgba(146,119,255,0.06);
+    --edge:rgba(146,119,255,0.16);--edge-strong:rgba(146,119,255,0.34);
+    --violet-br:#8A6BFF;--violet:#5B3DF5;--word:#9277FF;
+    --mint:#4FE3C1;--coral:#FF8B7A;--amber:#F5C26B;
+    --text:#ECE9F8;--muted:#9A93B8;--faint:#6E6688;
+    --glow-a:rgba(124,91,255,0.18);--glow-b:rgba(46,33,112,0.4);
+    --input-bg:rgba(0,0,0,0.28);--track:rgba(255,255,255,0.12);
+    --radius:16px;
+    --font:"Poppins","Outfit","Plus Jakarta Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:"Cascadia Mono","SF Mono",ui-monospace,Consolas,"Roboto Mono",monospace;
+    color-scheme:dark;
+  }
+  :root[data-theme="light"]{
+    --bg:#F4F2FB;--bg-2:#FFFFFF;--panel:rgba(91,61,245,0.05);--panel-2:rgba(91,61,245,0.09);
+    --edge:rgba(91,61,245,0.18);--edge-strong:rgba(91,61,245,0.38);
+    --word:#5B3DF5;--mint:#0C9E81;--coral:#D94F3C;--amber:#A9761B;
+    --text:#1B1633;--muted:#565073;--faint:#8B85A8;
+    --glow-a:rgba(124,91,255,0.12);--glow-b:rgba(46,33,112,0.07);
+    --input-bg:rgba(91,61,245,0.06);--track:rgba(27,22,51,0.12);
+    color-scheme:light;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;min-height:100%;}
+  body{font-family:var(--font);color:var(--text);
+    background:radial-gradient(120% 90% at 88% -10%,var(--glow-a),transparent 55%),
+      radial-gradient(110% 90% at 5% 110%,var(--glow-b),transparent 55%),var(--bg);
+    -webkit-font-smoothing:antialiased;}
+  button,input,select{font:inherit;}
+  button{cursor:pointer;}
+  .hidden{display:none !important;}
+  a{color:var(--word);}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 80px;display:flex;flex-direction:column;gap:22px;}
+
+  header.top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .brand{font-size:1.35rem;font-weight:600;letter-spacing:-0.03em;
+    background:linear-gradient(90deg,var(--violet),var(--word));
+    -webkit-background-clip:text;background-clip:text;color:transparent;}
+  .tag{font-family:var(--mono);font-size:0.66rem;letter-spacing:0.16em;text-transform:uppercase;
+    color:var(--muted);border:1px solid var(--edge);border-radius:999px;padding:4px 10px;}
+  .top .sp{flex:1;}
+  .lnk{color:var(--muted);text-decoration:none;font-size:0.86rem;}
+  .lnk:hover{color:var(--text);}
+
+  h1{font-size:1.72rem;font-weight:600;letter-spacing:-0.03em;margin:0;text-wrap:balance;}
+  .lede{color:var(--muted);font-size:0.95rem;max-width:74ch;margin:0;line-height:1.6;}
+
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:var(--radius);padding:20px;}
+  .card h2{font-size:1.02rem;font-weight:600;margin:0 0 4px;letter-spacing:-0.01em;}
+  .card .sub{color:var(--muted);font-size:0.83rem;margin:0 0 16px;line-height:1.55;}
+
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));}
+  label{display:flex;flex-direction:column;gap:6px;font-size:0.76rem;color:var(--muted);
+    letter-spacing:0.04em;text-transform:uppercase;}
+  input,select{background:var(--input-bg);border:1px solid var(--edge);border-radius:10px;
+    padding:9px 11px;color:var(--text);text-transform:none;letter-spacing:0;font-size:0.9rem;width:100%;}
+  input:focus,select:focus{outline:2px solid var(--edge-strong);outline-offset:1px;}
+
+  .btn{background:linear-gradient(90deg,var(--violet),var(--violet-br));color:#fff;border:0;
+    border-radius:10px;padding:10px 18px;font-weight:600;font-size:0.9rem;}
+  .btn:disabled{opacity:0.5;cursor:not-allowed;}
+  .btn.ghost{background:transparent;border:1px solid var(--edge-strong);color:var(--text);}
+  .btn.sm{padding:6px 12px;font-size:0.8rem;}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+
+  table{width:100%;border-collapse:collapse;font-size:0.86rem;}
+  th{text-align:left;font-size:0.68rem;letter-spacing:0.13em;text-transform:uppercase;
+    color:var(--faint);font-weight:500;padding:0 10px 8px;}
+  td{padding:9px 10px;border-top:1px solid var(--edge);vertical-align:middle;}
+  td.mono,.mono{font-family:var(--mono);font-size:0.8rem;}
+  .num{font-variant-numeric:tabular-nums;text-align:right;}
+  .scroll{overflow-x:auto;}
+
+  .pill{display:inline-block;font-family:var(--mono);font-size:0.68rem;letter-spacing:0.08em;
+    text-transform:uppercase;padding:3px 8px;border-radius:999px;border:1px solid;}
+  .pill.video{color:var(--word);border-color:var(--edge-strong);}
+  .pill.audio{color:var(--mint);border-color:var(--mint);}
+  .pill.data{color:var(--amber);border-color:var(--amber);}
+  .pill.ok{color:var(--mint);border-color:var(--mint);}
+  .pill.no{color:var(--coral);border-color:var(--coral);}
+
+  .lanes{display:flex;flex-direction:column;gap:9px;}
+  .lane{display:grid;grid-template-columns:132px 1fr;gap:12px;align-items:center;}
+  .lane .nm{font-size:0.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .lane .nm small{display:block;color:var(--faint);font-family:var(--mono);font-size:0.66rem;}
+  .track{position:relative;height:30px;background:var(--track);border-radius:6px;overflow:hidden;}
+  .seg{position:absolute;top:3px;bottom:3px;border-radius:3px;background:var(--violet);
+    border:1px solid var(--violet-br);opacity:0.85;}
+  .lane.audio .seg{background:var(--mint);border-color:var(--mint);}
+  .lane.data .seg{background:var(--amber);border-color:var(--amber);}
+  .qwin{position:absolute;top:0;bottom:0;background:rgba(255,139,122,0.16);
+    border-left:2px solid var(--coral);border-right:2px solid var(--coral);pointer-events:none;}
+  .axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:0.66rem;
+    color:var(--faint);margin-left:144px;}
+
+  .stats{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));}
+  .stat{background:var(--panel-2);border:1px solid var(--edge);border-radius:12px;padding:12px 14px;}
+  .stat .k{font-size:0.64rem;letter-spacing:0.13em;text-transform:uppercase;color:var(--faint);}
+  .stat .v{font-size:1.28rem;font-weight:600;font-variant-numeric:tabular-nums;margin-top:3px;}
+  .stat .v small{font-size:0.72rem;font-weight:400;color:var(--muted);margin-left:2px;}
+
+  video{width:100%;max-height:420px;background:#000;border-radius:12px;display:block;}
+
+  .note{font-size:0.8rem;color:var(--muted);line-height:1.6;}
+  .msg{border-radius:10px;padding:10px 13px;font-size:0.86rem;border:1px solid;}
+  .msg.err{color:var(--coral);border-color:var(--coral);background:rgba(255,139,122,0.08);}
+  .msg.ok{color:var(--mint);border-color:var(--mint);background:rgba(79,227,193,0.08);}
+  .msg.work{color:var(--muted);border-color:var(--edge);}
+
+  .empty{color:var(--faint);font-size:0.86rem;padding:14px 2px;}
+  .foot{color:var(--faint);font-size:0.74rem;font-family:var(--mono);letter-spacing:0.08em;
+    text-transform:uppercase;border-top:1px solid var(--edge);padding-top:16px;}
+  @media (max-width:640px){
+    .lane{grid-template-columns:96px 1fr;}
+    .axis{margin-left:108px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <span class="brand">Xinsere</span>
+    <span class="tag">TAMS demo</span>
+    <span class="sp"></span>
+    <a class="lnk" href="/">← Files</a>
+  </header>
+
+  <div id="gate" class="card hidden">
+    <h2>Sign in first</h2>
+    <p class="sub">This demo stores and retrieves real segments through your account.</p>
+    <a class="btn" href="/">Go to sign in</a>
+  </div>
+
+  <main id="main" class="hidden" style="display:flex;flex-direction:column;gap:22px;">
+
+    <div>
+      <h1>Time-addressable media over Xinsere-protected segments</h1>
+      <p class="lede">TAMS keeps the timeline and the query. Xinsere holds, protects and releases
+      the bytes. Each segment below was shredded, per-fragment encrypted and scattered across
+      buckets on the way in — and every frame you play came back out through an authorization
+      check and a bit-perfect integrity verify.</p>
+    </div>
+
+    <!-- ingest ------------------------------------------------------------- -->
+    <section class="card">
+      <h2>1 · Ingest a flow</h2>
+      <p class="sub">Pulls real HLS segments and writes each one through the production pipeline.
+      Give two flows the same timeline to see them align — that's a TAMS Source.</p>
+      <div class="grid">
+        <label>Playlist URL (m3u8)
+          <input id="url" value="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">
+        </label>
+        <label>Flow label
+          <input id="label" value="CAM 1">
+        </label>
+        <label>Timeline (Source)
+          <input id="source" value="venue-a">
+        </label>
+        <label>Essence
+          <select id="essence">
+            <option value="video">video</option>
+            <option value="audio">audio</option>
+            <option value="data">data</option>
+          </select>
+        </label>
+        <label>Segments
+          <input id="count" type="number" min="1" max="24" value="6">
+        </label>
+      </div>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn" id="go">Ingest through Xinsere</button>
+        <span class="note" id="ingestNote">Sizeable segments take a moment — each one is a full store.</span>
+      </div>
+      <div id="ingestMsg" style="margin-top:12px;"></div>
+    </section>
+
+    <!-- timeline ----------------------------------------------------------- -->
+    <section class="card">
+      <h2>2 · The timeline</h2>
+      <p class="sub">Every flow is independent — nothing is muxed. Alignment is by shared TAI
+      timestamps, so one instant means the same instant in every lane.</p>
+      <div id="lanes"><div class="empty">No flows yet. Ingest one above.</div></div>
+      <div class="axis" id="axis"></div>
+      <div class="scroll" style="margin-top:18px;">
+        <table id="flowTable"></table>
+      </div>
+    </section>
+
+    <!-- query -------------------------------------------------------------- -->
+    <section class="card">
+      <h2>3 · Query a timerange</h2>
+      <p class="sub">The TAMS lookup: <span class="mono">&lt;flow_id, timerange&gt;</span> → Media
+      Objects. What comes back are Xinsere object handles, not storage keys. Nothing is decrypted
+      here — this is the index plane only.</p>
+      <div class="grid">
+        <label>Flow
+          <select id="qflow"></select>
+        </label>
+        <label>Timerange
+          <input id="qrange" class="mono" placeholder="[0:0_10:0)">
+        </label>
+        <label>Ask the contract as
+          <select id="qas">
+            <option value="owner">owner — holds access</option>
+            <option value="stranger">unauthorized party</option>
+          </select>
+        </label>
+      </div>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn" id="query">Run query</button>
+        <button class="btn ghost" id="whole">Whole flow</button>
+      </div>
+      <div id="queryMsg" style="margin-top:12px;"></div>
+      <div class="scroll" style="margin-top:14px;">
+        <table id="segTable"></table>
+      </div>
+    </section>
+
+    <!-- playback ----------------------------------------------------------- -->
+    <section class="card">
+      <h2>4 · Play the result</h2>
+      <p class="sub">Every segment the player fetches goes through the gate: verify, reassemble
+      across buckets, SHA-256, return. Switch to the unauthorized party and playback stops dead —
+      fail-closed returns nothing at all, not a degraded copy.</p>
+      <div class="row" style="margin-bottom:14px;">
+        <button class="btn" id="play">Play this timerange</button>
+        <button class="btn ghost" id="stop">Stop</button>
+        <span class="note" id="playNote"></span>
+      </div>
+      <video id="video" controls playsinline></video>
+      <div class="stats" id="playStats" style="margin-top:16px;"></div>
+      <p class="note" id="statNote" style="margin-top:10px;"></p>
+    </section>
+
+    <p class="foot">Xinsere × TAMS — demo build. Segment timings are live, measured server-side.</p>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const NS = 1e9;
+let FLOWS = [], SEGS = [], HLS = null;
+
+// Theme follows whatever the main app persisted, so the demo never looks alien.
+try {
+  const t = localStorage.getItem('xinsere-theme');
+  if (t) document.documentElement.setAttribute('data-theme', t);
+} catch (e) {}
+
+function msg(el, text, kind) {
+  el.innerHTML = text ? `<div class="msg ${kind || 'work'}">${text}</div>` : '';
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function bytes(n) {
+  if (!n) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+  return (n / 1048576).toFixed(2) + ' MB';
+}
+function shortTs(ns) {           // TAI ns -> a readable wall clock
+  const d = new Date((Number(ns) / NS - 37) * 1000);
+  return d.toISOString().substr(11, 12);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({ credentials: 'same-origin' }, opts || {}));
+  if (r.status === 401 || r.status === 403) {
+    if (path === '/api/me') { throw { unauth: true }; }
+  }
+  const ct = r.headers.get('content-type') || '';
+  const body = ct.includes('json') ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((body && body.detail) || r.statusText || 'Request failed');
+  return body;
+}
+
+// --- flows + lanes ----------------------------------------------------------
+
+async function loadFlows() {
+  const res = await api('/api/tams/flows');
+  FLOWS = res.flows || [];
+  renderLanes();
+  renderFlowTable();
+  const sel = $('qflow');
+  sel.innerHTML = FLOWS.map(f =>
+    `<option value="${esc(f.flow_id)}">${esc(f.label)} · ${esc(f.source_id)}</option>`).join('');
+}
+
+function timelineBounds() {
+  const withSegs = FLOWS.filter(f => f.start_ns != null);
+  if (!withSegs.length) return null;
+  return {
+    lo: Math.min(...withSegs.map(f => Number(f.start_ns))),
+    hi: Math.max(...withSegs.map(f => Number(f.end_ns)))
+  };
+}
+
+function renderLanes() {
+  const host = $('lanes'), axis = $('axis');
+  const b = timelineBounds();
+  if (!b || b.hi <= b.lo) {
+    host.innerHTML = '<div class="empty">No flows yet. Ingest one above.</div>';
+    axis.innerHTML = '';
+    return;
+  }
+  const span = b.hi - b.lo;
+  // Group by Source so lanes that share a timeline sit together.
+  const bySource = {};
+  FLOWS.forEach(f => { (bySource[f.source_id] = bySource[f.source_id] || []).push(f); });
+
+  let html = '';
+  Object.keys(bySource).sort().forEach(src => {
+    html += `<div class="note" style="margin:6px 0 2px;">Timeline <span class="mono">${esc(src)}</span></div>`;
+    bySource[src].forEach(f => {
+      const segs = (SEGS.flowId === f.flow_id) ? SEGS.list : null;
+      html += `<div class="lane ${esc(f.essence)}">
+        <div class="nm">${esc(f.label)}<small>${f.segment_count} seg</small></div>
+        <div class="track" data-flow="${esc(f.flow_id)}"></div></div>`;
+    });
+  });
+  host.innerHTML = html;
+
+  // Place segment blocks by real timestamps.
+  FLOWS.forEach(f => {
+    const track = host.querySelector(`.track[data-flow="${CSS.escape(f.flow_id)}"]`);
+    if (!track || f.start_ns == null) return;
+    const n = f.segment_count || 1;
+    const s = Number(f.start_ns), e = Number(f.end_ns), each = (e - s) / n;
+    for (let i = 0; i < n; i++) {
+      const a = s + i * each, z = a + each;
+      const d = document.createElement('div');
+      d.className = 'seg';
+      d.style.left = ((a - b.lo) / span * 100) + '%';
+      d.style.width = Math.max(0.6, (z - a) / span * 100 - 0.35) + '%';
+      track.appendChild(d);
+    }
+  });
+  drawQueryWindow();
+  axis.innerHTML = `<span>${shortTs(b.lo)}</span><span>TAI</span><span>${shortTs(b.hi)}</span>`;
+}
+
+function drawQueryWindow() {
+  const b = timelineBounds();
+  document.querySelectorAll('.qwin').forEach(n => n.remove());
+  if (!b) return;
+  const r = parseRange($('qrange').value);
+  if (!r) return;
+  const span = b.hi - b.lo;
+  document.querySelectorAll('.track').forEach(t => {
+    const d = document.createElement('div');
+    d.className = 'qwin';
+    d.style.left = Math.max(0, (r[0] - b.lo) / span * 100) + '%';
+    d.style.width = Math.max(0.5, Math.min(100, (r[1] - r[0]) / span * 100)) + '%';
+    t.appendChild(d);
+  });
+}
+
+function parseRange(text) {
+  const m = String(text || '').match(/(\d+):(\d+)[_\/](\d+):(\d+)/);
+  if (!m) return null;
+  return [Number(m[1]) * NS + Number(m[2]), Number(m[3]) * NS + Number(m[4])];
+}
+
+function renderFlowTable() {
+  const t = $('flowTable');
+  if (!FLOWS.length) { t.innerHTML = ''; return; }
+  t.innerHTML = `<thead><tr><th>Flow</th><th>Timeline</th><th>Essence</th>
+    <th class="num">Segments</th><th class="num">Stored</th><th>Extent</th><th></th></tr></thead>
+    <tbody>${FLOWS.map(f => `<tr>
+      <td>${esc(f.label)}<div class="mono" style="color:var(--faint);font-size:0.7rem;">${esc(f.flow_id)}</div></td>
+      <td class="mono">${esc(f.source_id)}</td>
+      <td><span class="pill ${esc(f.essence)}">${esc(f.essence)}</span></td>
+      <td class="num">${f.segment_count}</td>
+      <td class="num">${bytes(f.bytes)}</td>
+      <td class="mono" style="font-size:0.72rem;">${esc(f.timerange || '—')}</td>
+      <td><button class="btn ghost sm" data-del="${esc(f.flow_id)}">Erase</button></td>
+    </tr>`).join('')}</tbody>`;
+  t.querySelectorAll('[data-del]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Erase this flow and all its segments? This is cryptographic erasure.')) return;
+      btn.disabled = true;
+      try { await api('/api/tams/flows/' + btn.dataset.del, { method: 'DELETE' }); await loadFlows(); }
+      catch (e) { alert(e.message); btn.disabled = false; }
+    };
+  });
+}
+
+// --- ingest -----------------------------------------------------------------
+
+$('go').onclick = async () => {
+  const btn = $('go'); btn.disabled = true;
+  msg($('ingestMsg'), 'Fetching segments and storing each one through the pipeline…');
+  try {
+    const res = await api('/api/tams/ingest', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        url: $('url').value.trim(), label: $('label').value.trim(),
+        source_id: $('source').value.trim(), essence: $('essence').value,
+        segments: Number($('count').value) || 6
+      })
+    });
+    msg($('ingestMsg'),
+      `Stored <b>${res.segments}</b> segments (${bytes(res.bytes)}) as flow <span class="mono">${esc(res.label)}</span> — ` +
+      `<b>${res.store_ms_per_segment} ms</b> per segment through shred → encrypt → scatter. ` +
+      `Timerange <span class="mono">${esc(res.timerange)}</span>`, 'ok');
+    await loadFlows();
+    $('qflow').value = res.flow_id;
+    $('qrange').value = res.timerange;
+    drawQueryWindow();
+  } catch (e) {
+    msg($('ingestMsg'), esc(e.message || 'Ingest failed'), 'err');
+  }
+  btn.disabled = false;
+};
+
+// --- query ------------------------------------------------------------------
+
+async function runQuery(whole) {
+  const flow = $('qflow').value;
+  if (!flow) { msg($('queryMsg'), 'Ingest a flow first.', 'err'); return; }
+  const range = whole ? '' : $('qrange').value.trim();
+  const as = $('qas').value;
+  msg($('queryMsg'), 'Querying the index…');
+  try {
+    const q = new URLSearchParams({ as });
+    if (range) q.set('timerange', range);
+    const res = await api(`/api/tams/flows/${encodeURIComponent(flow)}/segments?` + q);
+    SEGS = { flowId: flow, list: res.segments, as };
+    msg($('queryMsg'),
+      `<b>${res.segment_count}</b> of ${res.of_total} segments matched ` +
+      `<span class="mono">${esc(res.queried)}</span> — index lookup <b>${res.index_ms} ms</b>. ` +
+      `These are object handles; no bytes have been decrypted.`, 'ok');
+    renderSegTable();
+    drawQueryWindow();
+  } catch (e) {
+    msg($('queryMsg'), esc(e.message || 'Query failed'), 'err');
+    SEGS = [];
+    $('segTable').innerHTML = '';
+  }
+}
+$('query').onclick = () => runQuery(false);
+$('whole').onclick = () => { $('qrange').value = ''; runQuery(true); };
+$('qrange').addEventListener('input', drawQueryWindow);
+
+function renderSegTable() {
+  const t = $('segTable'), list = SEGS.list || [];
+  if (!list.length) { t.innerHTML = '<div class="empty">No segments matched.</div>'; return; }
+  t.innerHTML = `<thead><tr><th>Timerange (TAI)</th><th>Media Object → Xinsere handle</th>
+    <th class="num">Fragments</th><th class="num">Size</th></tr></thead>
+    <tbody>${list.map(s => `<tr>
+      <td class="mono" style="font-size:0.74rem;">${esc(s.timerange)}</td>
+      <td class="mono" style="font-size:0.74rem;color:var(--word);">${esc(s.object_id)}</td>
+      <td class="num">${s.fragments || '—'}</td>
+      <td class="num">${bytes(s.size)}</td></tr>`).join('')}</tbody>`;
+}
+
+// --- playback ---------------------------------------------------------------
+
+const seen = [];
+function statTile(k, v, unit) {
+  return `<div class="stat"><div class="k">${k}</div><div class="v">${v}<small>${unit || ''}</small></div></div>`;
+}
+function renderStats() {
+  if (!seen.length) { $('playStats').innerHTML = ''; return; }
+  const avg = k => (seen.reduce((a, s) => a + (s[k] || 0), 0) / seen.length).toFixed(0);
+  const chain = seen.filter(s => s.cached === '0');
+  $('playStats').innerHTML =
+    statTile('Segments served', seen.length, '') +
+    statTile('Retrieve', avg('retrieve'), ' ms') +
+    statTile('Fetch + decrypt', avg('fetch'), ' ms') +
+    statTile('Integrity check', avg('sha'), ' ms') +
+    statTile('On-chain verify', chain.length ? (chain.reduce((a, s) => a + s.verify, 0) / chain.length).toFixed(0) : '0', ' ms');
+  $('statNote').innerHTML =
+    `Averages across ${seen.length} live segment retrievals. On-chain verify is charged once per ` +
+    `segment then cached for 60s — a positive verdict only; a denial is never cached, so revoking ` +
+    `access takes effect on the next request. Authorized by: <span class="mono">${esc(seen[seen.length-1].source)}</span>.`;
+}
+
+// hls.js fetches segments itself, so read the timing headers off its responses.
+function makeLoader() {
+  if (!window.Hls) return null;
+  class TimedLoader extends Hls.DefaultConfig.loader {
+    load(context, config, callbacks) {
+      const onSuccess = callbacks.onSuccess;
+      callbacks.onSuccess = (response, stats, ctx, networkDetails) => {
+        try {
+          const h = networkDetails && networkDetails.getResponseHeader ? networkDetails : null;
+          if (h && ctx.url.indexOf('/content') > -1) {
+            seen.push({
+              retrieve: Number(h.getResponseHeader('X-Xinsere-Retrieve-Ms')) || 0,
+              fetch: Number(h.getResponseHeader('X-Xinsere-Fetch-Decrypt-Ms')) || 0,
+              sha: Number(h.getResponseHeader('X-Xinsere-Verify-Sha-Ms')) || 0,
+              verify: Number(h.getResponseHeader('X-Xinsere-Verify-Ms')) || 0,
+              cached: h.getResponseHeader('X-Xinsere-Verify-Cached') || '0',
+              source: h.getResponseHeader('X-Xinsere-Auth-Source') || '—'
+            });
+            renderStats();
+          }
+        } catch (e) {}
+        onSuccess(response, stats, ctx, networkDetails);
+      };
+      super.load(context, config, callbacks);
+    }
+  }
+  return TimedLoader;
+}
+
+function stopPlayback() {
+  if (HLS) { HLS.destroy(); HLS = null; }
+  $('video').removeAttribute('src');
+  $('video').load();
+}
+$('stop').onclick = () => { stopPlayback(); $('playNote').textContent = 'Stopped.'; };
+
+$('play').onclick = () => {
+  const flow = $('qflow').value;
+  if (!flow) { $('playNote').textContent = 'Ingest a flow first.'; return; }
+  const as = $('qas').value;
+  const range = $('qrange').value.trim();
+  const q = new URLSearchParams({ as });
+  if (range) q.set('timerange', range);
+  const url = `/api/tams/flows/${encodeURIComponent(flow)}/playlist.m3u8?` + q;
+
+  seen.length = 0; renderStats();
+  stopPlayback();
+  const v = $('video');
+
+  if (as === 'stranger') {
+    $('playNote').innerHTML = '<span class="pill no">fail-closed</span> every segment should be refused';
+  } else {
+    $('playNote').innerHTML = '<span class="pill ok">authorized</span> each segment verified, reassembled, checked';
+  }
+
+  if (window.Hls && Hls.isSupported()) {
+    const L = makeLoader();
+    HLS = new Hls(L ? { loader: L } : {});
+    HLS.on(Hls.Events.ERROR, (_e, data) => {
+      if (data.fatal || (data.response && data.response.code === 403)) {
+        $('playNote').innerHTML = as === 'stranger'
+          ? '<span class="pill no">nothing returned</span> the contract refused every segment — no partial content, no placeholder'
+          : `<span class="pill no">playback error</span> ${esc(data.details || '')}`;
+        if (data.fatal) { HLS.destroy(); HLS = null; }
+      }
+    });
+    HLS.loadSource(url);
+    HLS.attachMedia(v);
+    HLS.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+  } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+    v.src = url;                                   // Safari plays HLS natively
+    v.play().catch(() => {});
+    $('statNote').textContent = 'Native HLS playback — per-segment timings are visible in the Network tab.';
+  } else {
+    $('playNote').textContent = 'This browser cannot play HLS.';
+  }
+};
+
+// --- boot -------------------------------------------------------------------
+
+(async function () {
+  try {
+    await api('/api/me');
+    $('main').classList.remove('hidden');
+    await loadFlows();
+  } catch (e) {
+    $('gate').classList.remove('hidden');
+  }
+})();
+</script>
+</body>
+</html>

@@ -176,6 +176,15 @@ def admin_page(request: Request) -> HTMLResponse:
         return HTMLResponse(f.read())
 
 
+@app.get("/tams", response_class=HTMLResponse)
+def tams_page() -> HTMLResponse:
+    """TAMS demo: time-addressable media over Xinsere-protected segments. The page
+    is a shell — it checks /api/me and shows a sign-in prompt; every data route
+    under /api/tams is server-gated regardless."""
+    with open(os.path.join(_HERE, "frontend", "tams.html"), "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
 @app.get("/api/warm")
 async def warm():
     """Pre-build the heavy singletons (S3/KMS/DynamoDB clients + the web3 signer)
@@ -1626,11 +1635,13 @@ import v1 as _v1            # noqa: E402
 import admin as _admin      # noqa: E402
 import account as _account  # noqa: E402
 import docs_site as _docs   # noqa: E402
+import tams as _tams        # noqa: E402
 
 app.include_router(_v1.router)
 app.include_router(_admin.router)
 app.include_router(_account.router)
 app.include_router(_docs.router)
+app.include_router(_tams.router)
 
 
 @app.exception_handler(HTTPException)

@@ -40,3 +40,4 @@ scripts/overhead_benchmark/files.json
 scripts/overhead_benchmark/*.log
 
 .vercel
+.env*
