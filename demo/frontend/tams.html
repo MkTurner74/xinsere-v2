@@ -366,72 +366,90 @@ $('qflow').addEventListener('change', loadSegmentPickers);
 $('qfrom').addEventListener('change', syncRange);
 $('qto').addEventListener('change', syncRange);
 
-function timelineBounds() {
-  const withSegs = FLOWS.filter(f => f.start_ns != null);
-  if (!withSegs.length) return null;
-  return {
-    lo: Math.min(...withSegs.map(f => Number(f.start_ns))),
-    hi: Math.max(...withSegs.map(f => Number(f.end_ns)))
-  };
+function bySource() {
+  const by = {};
+  FLOWS.forEach(f => { (by[f.source_id] = by[f.source_id] || []).push(f); });
+  return by;
 }
 
+function durLabel(ns) {
+  const s = ns / NS;
+  if (s < 90) return s.toFixed(1) + 's';
+  if (s < 5400) return (s / 60).toFixed(1) + ' min';
+  return (s / 3600).toFixed(1) + ' hr';
+}
+
+// Each Source is its OWN timeline, so it gets its own axis scaled to its own
+// extent. Sharing one global axis across Sources meant a flow ingested hours
+// later stretched the span and squashed everything else into a sliver.
 function renderLanes() {
-  const host = $('lanes'), axis = $('axis');
-  const b = timelineBounds();
-  if (!b || b.hi <= b.lo) {
+  const host = $('lanes');
+  $('axis').innerHTML = '';
+  const by = bySource(), keys = Object.keys(by).sort();
+  if (!keys.length) {
     host.innerHTML = '<div class="empty">No flows yet. Ingest one above.</div>';
-    axis.innerHTML = '';
     return;
   }
-  const span = b.hi - b.lo;
-  // Group by Source so lanes that share a timeline sit together.
-  const bySource = {};
-  FLOWS.forEach(f => { (bySource[f.source_id] = bySource[f.source_id] || []).push(f); });
 
   let html = '';
-  Object.keys(bySource).sort().forEach(src => {
-    html += `<div class="note" style="margin:6px 0 2px;">Timeline <span class="mono">${esc(src)}</span></div>`;
-    bySource[src].forEach(f => {
-      const segs = (SEGS.flowId === f.flow_id) ? SEGS.list : null;
+  keys.forEach(src => {
+    const withSegs = by[src].filter(f => f.start_ns != null);
+    const lo = withSegs.length ? Math.min(...withSegs.map(f => Number(f.start_ns))) : 0;
+    const hi = withSegs.length ? Math.max(...withSegs.map(f => Number(f.end_ns))) : 1;
+    html += `<div class="tl-group" data-lo="${lo}" data-hi="${hi}">
+      <div class="note" style="margin:10px 0 4px;">Timeline
+        <span class="mono">${esc(src)}</span> · ${withSegs.length} flow${withSegs.length === 1 ? '' : 's'}
+        · ${durLabel(hi - lo)}</div>`;
+    by[src].forEach(f => {
       html += `<div class="lane ${esc(f.essence)}">
         <div class="nm">${esc(f.label)}<small>${f.segment_count} seg</small></div>
         <div class="track" data-flow="${esc(f.flow_id)}"></div></div>`;
     });
+    html += `<div class="axis"><span>${shortTs(lo)}</span><span>TAI</span>
+      <span>${shortTs(hi)}</span></div></div>`;
   });
   host.innerHTML = html;
 
-  // Place segment blocks by real timestamps.
   FLOWS.forEach(f => {
     const track = host.querySelector(`.track[data-flow="${CSS.escape(f.flow_id)}"]`);
     if (!track || f.start_ns == null) return;
+    const g = track.closest('.tl-group');
+    const lo = Number(g.dataset.lo), span = Math.max(1, Number(g.dataset.hi) - lo);
     const n = f.segment_count || 1;
-    const s = Number(f.start_ns), e = Number(f.end_ns), each = (e - s) / n;
+    const s = Number(f.start_ns), each = (Number(f.end_ns) - s) / n;
     for (let i = 0; i < n; i++) {
-      const a = s + i * each, z = a + each;
+      const a = s + i * each;
+      const left = (a - lo) / span * 100;
+      const width = Math.max(0.6, (each / span) * 100 - 0.3);
       const d = document.createElement('div');
       d.className = 'seg';
-      d.style.left = ((a - b.lo) / span * 100) + '%';
-      d.style.width = Math.max(0.6, (z - a) / span * 100 - 0.35) + '%';
+      // Clamp so a block at the very end of the span can't be clipped away by
+      // the track's overflow — that is what made a real flow look empty.
+      d.style.left = Math.max(0, Math.min(100 - width, left)) + '%';
+      d.style.width = width + '%';
       track.appendChild(d);
     }
   });
   drawQueryWindow();
-  axis.innerHTML = `<span>${shortTs(b.lo)}</span><span>TAI</span><span>${shortTs(b.hi)}</span>`;
 }
 
 function drawQueryWindow() {
-  const b = timelineBounds();
   document.querySelectorAll('.qwin').forEach(n => n.remove());
-  if (!b) return;
   const r = parseRange($('qrange').value);
   if (!r) return;
-  const span = b.hi - b.lo;
-  document.querySelectorAll('.track').forEach(t => {
-    const d = document.createElement('div');
-    d.className = 'qwin';
-    d.style.left = Math.max(0, (r[0] - b.lo) / span * 100) + '%';
-    d.style.width = Math.max(0.5, Math.min(100, (r[1] - r[0]) / span * 100)) + '%';
-    t.appendChild(d);
+  document.querySelectorAll('.tl-group').forEach(g => {
+    const lo = Number(g.dataset.lo), span = Math.max(1, Number(g.dataset.hi) - lo);
+    // Only draw the window on the timeline it actually falls inside.
+    if (r[1] < lo || r[0] > Number(g.dataset.hi)) return;
+    const left = Math.max(0, (r[0] - lo) / span * 100);
+    const width = Math.max(0.8, Math.min(100 - left, (r[1] - r[0]) / span * 100));
+    g.querySelectorAll('.track').forEach(t => {
+      const d = document.createElement('div');
+      d.className = 'qwin';
+      d.style.left = left + '%';
+      d.style.width = width + '%';
+      t.appendChild(d);
+    });
   });
 }
 
@@ -482,7 +500,10 @@ $('go').onclick = async () => {
     msg($('ingestMsg'),
       `Stored <b>${res.segments}</b> segments (${bytes(res.bytes)}) as flow <span class="mono">${esc(res.label)}</span> — ` +
       `<b>${res.store_ms_per_segment} ms</b> per segment through shred → encrypt → scatter. ` +
-      `Timerange <span class="mono">${esc(res.timerange)}</span>`, 'ok');
+      (res.aligned_to_source
+        ? `Aligned to the existing <span class="mono">${esc(res.source_id)}</span> timeline, so it shares an origin with the other flows on it.`
+        : `This flow establishes the <span class="mono">${esc(res.source_id)}</span> timeline — later flows on it will share this origin.`),
+      'ok');
     await loadFlows(res.flow_id);
   } catch (e) {
     msg($('ingestMsg'), esc(e.message || 'Ingest failed'), 'err');

@@ -152,6 +152,61 @@ def test_media_playlist_is_not_treated_as_a_master():
     assert url == "https://h.example/v/index.m3u8" and text == MEDIA
 
 
+# --- shared timelines ---------------------------------------------------------
+
+def _flow_folder(fid, source_id, origin_ns):
+    import json
+    meta = tams.META_PREFIX + json.dumps({"source_id": source_id, "origin_ns": origin_ns})
+    return fid, [{"id": f"{fid}_m", "type": "file", "name": meta, "file_id": None,
+                  "size": None, "frags": None, "sha": None, "content_type": "application/json"}]
+
+
+def _wire_flows(monkeypatch, folders):
+    """folders: [(flow_id, source_id, origin_ns)] under a fake flows root."""
+    root_children = [{"id": fid, "type": "folder", "name": fid, "parent": "root",
+                      "owner": "u", "created_at": None, "file_id": None, "sha": None,
+                      "size": None, "frags": None, "content_type": None, "deleted_at": None}
+                     for fid, _src, _o in folders]
+    kids = {}
+    for fid, src, origin in folders:
+        _id, meta_nodes = _flow_folder(fid, src, origin)
+        kids[fid] = meta_nodes
+
+    def children(_token, parent):
+        return root_children if parent == "flows_root" else kids.get(parent, [])
+
+    monkeypatch.setattr(tams.supa, "children", children)
+
+
+def test_a_new_source_establishes_its_own_origin(monkeypatch):
+    _wire_flows(monkeypatch, [])
+    assert tams._source_origin("t", "flows_root", "venue-a") is None
+
+
+def test_later_flows_inherit_the_source_origin(monkeypatch):
+    """A Source IS a shared timeline. If each ingest started at its own wall
+    clock, two cameras nominally on one timeline would sit hours apart and the
+    multicam claim would be false."""
+    _wire_flows(monkeypatch, [("fld_1", "venue-a", 1000 * NS)])
+    assert tams._source_origin("t", "flows_root", "venue-a") == 1000 * NS
+
+
+def test_the_earliest_origin_wins(monkeypatch):
+    _wire_flows(monkeypatch, [("fld_1", "venue-a", 5000 * NS), ("fld_2", "venue-a", 1000 * NS)])
+    assert tams._source_origin("t", "flows_root", "venue-a") == 1000 * NS
+
+
+def test_a_different_source_is_a_different_timeline(monkeypatch):
+    _wire_flows(monkeypatch, [("fld_1", "venue-a", 1000 * NS)])
+    assert tams._source_origin("t", "flows_root", "venue-b") is None
+
+
+def test_a_flow_with_unreadable_metadata_is_skipped(monkeypatch):
+    _wire_flows(monkeypatch, [("fld_1", "venue-a", "not-a-number"),
+                              ("fld_2", "venue-a", 2000 * NS)])
+    assert tams._source_origin("t", "flows_root", "venue-a") == 2000 * NS
+
+
 # --- the access gate ----------------------------------------------------------
 
 class _Chain:

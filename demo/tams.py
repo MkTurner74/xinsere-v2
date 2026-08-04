@@ -174,6 +174,31 @@ def _flows_root(token: str, uid: str) -> str:
     return supa.insert_folder(token, FLOWS_FOLDER, root, uid)["id"]
 
 
+def _source_origin(token: str, flows_root: str, source_id: str) -> int | None:
+    """The timeline origin already established for this Source, if any.
+
+    A Source IS a shared timeline — "one instant means the same instant in every
+    lane" is the whole claim. If each ingest started at its own wall clock, two
+    cameras nominally on one timeline would sit hours apart and the multicam
+    story would be a lie told by the UI. So the first flow on a Source fixes the
+    origin and every later flow on it inherits that origin.
+
+    Returns None for a Source we haven't seen, which then starts at `now`."""
+    earliest: int | None = None
+    for f in supa.children(token, flows_root):
+        if f["type"] != "folder":
+            continue
+        meta = _flow_meta(supa.children(token, f["id"]))
+        if meta.get("source_id") != source_id:
+            continue
+        try:
+            origin = int(meta["origin_ns"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        earliest = origin if earliest is None else min(earliest, origin)
+    return earliest
+
+
 def _load_flow(token: str, uid: str, flow_id: str) -> tuple[dict, dict, list[dict]]:
     """(node, meta, segments) for a flow the caller owns. 404s otherwise."""
     node = supa.get_node(token, flow_id)
@@ -293,13 +318,6 @@ async def ingest(request: Request):
         want = DEFAULT_SEGMENTS
     want = max(1, min(want, MAX_SEGMENTS))
 
-    # Flows on a shared timeline start at a common origin, so a timestamp means
-    # the same instant in every lane -- that is the whole point of a Source.
-    try:
-        start_ns = int(body["start_tai_ns"])
-    except (KeyError, TypeError, ValueError):
-        start_ns = _now_tai_ns()
-
     try:
         playlist_url, text = _resolve_variant(url, _fetch_text(url))
         entries = _parse_media_playlist(playlist_url, text, want)
@@ -311,6 +329,18 @@ async def ingest(request: Request):
         raise HTTPException(status_code=400, detail="No segments found in that playlist")
 
     flows_root = _flows_root(token, uid)
+
+    # Flows on a shared timeline start at a common origin, so a timestamp means
+    # the same instant in every lane. An explicit start wins; otherwise inherit
+    # the Source's existing origin; otherwise this flow establishes it.
+    try:
+        start_ns = int(body["start_tai_ns"])
+        aligned_to_source = False
+    except (KeyError, TypeError, ValueError):
+        inherited = _source_origin(token, flows_root, source_id)
+        start_ns = inherited if inherited is not None else _now_tai_ns()
+        aligned_to_source = inherited is not None
+
     flow = supa.insert_folder(token, label, flows_root, uid)
     meta = {"source_id": source_id, "essence": essence, "label": label,
             "origin_ns": start_ns, "ingested_from": playlist_url,
@@ -359,6 +389,7 @@ async def ingest(request: Request):
         "flow_id": flow["id"], "label": label, "source_id": source_id,
         "essence": essence, "segments": len(stored), "bytes": total_bytes,
         "timerange": fmt_timerange(start_ns, cursor),
+        "aligned_to_source": aligned_to_source,
         "store_ms_total": round(store_ms, 1),
         "store_ms_per_segment": round(store_ms / len(stored), 1),
         "created": stored,
