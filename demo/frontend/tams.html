@@ -248,6 +248,8 @@
       <video id="video" controls playsinline></video>
       <div class="stats" id="playStats" style="margin-top:16px;"></div>
       <p class="note" id="statNote" style="margin-top:10px;"></p>
+      <p class="note" id="chainNote" style="margin-top:12px;padding-top:12px;
+        border-top:1px solid var(--edge);"></p>
     </section>
 
     <p class="foot">Xinsere × TAMS — demo build. Segment timings are live, measured server-side.</p>
@@ -534,7 +536,11 @@ async function runQuery(whole) {
       msg($('queryMsg'),
         `<b>${res.segment_count}</b> of ${res.of_total} segments matched ` +
         `<span class="mono">${esc(res.queried)}</span> — index lookup <b>${res.index_ms} ms</b>. ` +
-        `These are object handles; no bytes have been decrypted.`, 'ok');
+        `These are object handles; no bytes have been decrypted.` +
+        (as === 'stranger'
+          ? `<br><br>Note the split: the <b>index plane still answers</b> an unauthorized party, ` +
+            `because it holds no media — only handles. The <b>media plane refuses</b>. Press Play.`
+          : ''), 'ok');
     }
     renderSegTable();
     drawQueryWindow();
@@ -544,6 +550,17 @@ async function runQuery(whole) {
     $('segTable').innerHTML = '';
   }
 }
+// Switching party must never leave authorized playback on screen under a
+// selector that says "unauthorized" — that misread as the gate doing nothing.
+$('qas').addEventListener('change', () => {
+  stopPlayback();
+  seen.length = 0;
+  renderStats();
+  $('playNote').innerHTML = '';
+  $('statNote').textContent = '';
+  if ($('qflow').value) runQuery(!$('qrange').value.trim());
+});
+
 $('query').onclick = () => runQuery(false);
 $('whole').onclick = () => {
   if (PICK.length) { $('qfrom').value = '0'; $('qto').value = String(PICK.length - 1); syncRange(); }
@@ -621,7 +638,7 @@ function stopPlayback() {
 }
 $('stop').onclick = () => { stopPlayback(); $('playNote').textContent = 'Stopped.'; };
 
-$('play').onclick = () => {
+$('play').onclick = async () => {
   const flow = $('qflow').value;
   if (!flow) { $('playNote').textContent = 'Ingest a flow first.'; return; }
   const as = $('qas').value;
@@ -633,20 +650,30 @@ $('play').onclick = () => {
   seen.length = 0; renderStats();
   stopPlayback();
   const v = $('video');
+  $('playNote').innerHTML = 'Asking the contract…';
 
-  if (as === 'stranger') {
-    $('playNote').innerHTML = '<span class="pill no">fail-closed</span> every segment should be refused';
-  } else {
-    $('playNote').innerHTML = '<span class="pill ok">authorized</span> each segment verified, reassembled, checked';
+  // Fetch the playlist ourselves first. The server gates the playlist, not just
+  // each segment, so a refusal lands here — immediate and identical in every
+  // browser, instead of a scatter of 403s the player retries around.
+  try {
+    await api(url);
+  } catch (e) {
+    $('playNote').innerHTML =
+      `<span class="pill no">nothing returned</span> ${esc(e.message)}`;
+    $('statNote').textContent = '';
+    return;
   }
+
+  $('playNote').innerHTML =
+    '<span class="pill ok">authorized</span> each segment verified, reassembled, checked';
 
   if (window.Hls && Hls.isSupported()) {
     const L = makeLoader();
     HLS = new Hls(L ? { loader: L } : {});
     HLS.on(Hls.Events.ERROR, (_e, data) => {
       if (data.fatal || (data.response && data.response.code === 403)) {
-        $('playNote').innerHTML = as === 'stranger'
-          ? '<span class="pill no">nothing returned</span> the contract refused every segment — no partial content, no placeholder'
+        $('playNote').innerHTML = (data.response && data.response.code === 403)
+          ? '<span class="pill no">nothing returned</span> the contract refused — no partial content, no placeholder'
           : `<span class="pill no">playback error</span> ${esc(data.details || '')}`;
         if (data.fatal) { HLS.destroy(); HLS = null; }
       }
@@ -665,11 +692,26 @@ $('play').onclick = () => {
 
 // --- boot -------------------------------------------------------------------
 
+async function loadChainInfo() {
+  try {
+    const c = await api('/api/tams/chain');
+    const short = c.contract.slice(0, 10) + '…' + c.contract.slice(-8);
+    $('chainNote').innerHTML =
+      `Every retrieval above is decided by <b>${esc(c.name)}</b> at ` +
+      `<a class="mono" href="${esc(c.explorer)}" target="_blank" rel="noopener">${esc(short)}</a> ` +
+      `on ${esc(c.network)} — the same contract, readable by anyone. ` +
+      `<a href="${esc(c.read_contract)}" target="_blank" rel="noopener">Call verify() yourself ↗</a>`;
+  } catch (e) {
+    $('chainNote').textContent = '';
+  }
+}
+
 (async function () {
   try {
     await api('/api/me');
     $('main').classList.remove('hidden');
     await loadFlows();
+    await loadChainInfo();
   } catch (e) {
     $('gate').classList.remove('hidden');
   }

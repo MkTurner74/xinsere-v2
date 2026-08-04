@@ -36,7 +36,7 @@ from fastapi.responses import PlainTextResponse, Response
 
 import supa
 from authn import session as _session
-from chain import CHAIN
+from chain import CHAIN, CONTRACT
 from store import get_pipeline, XinsereIntegrityError
 
 router = APIRouter(prefix="/api/tams", tags=["tams"])
@@ -398,6 +398,20 @@ async def ingest(request: Request):
 
 # --- the time index -----------------------------------------------------------
 
+@router.get("/chain")
+def chain_info(request: Request):
+    """The contract every retrieval is decided by. All public on-chain data —
+    the address already appears in every grant transaction."""
+    _session(request)
+    return {
+        "contract": CONTRACT,
+        "name": "XinserePermissions",
+        "network": "Polygon Amoy (testnet)",
+        "explorer": f"https://amoy.polygonscan.com/address/{CONTRACT}",
+        "read_contract": f"https://amoy.polygonscan.com/address/{CONTRACT}#readContract",
+    }
+
+
 @router.get("/flows")
 def list_flows(request: Request):
     """Every flow, with its timeline extent — the data behind the lane view."""
@@ -483,7 +497,18 @@ def flow_playlist(flow_id: str, request: Request, timerange: str | None = None):
     if not segs:
         raise HTTPException(status_code=404, detail="No segments in that timerange")
 
-    who, _party = _party_for(request, uid)
+    # Gate the PLAYLIST, not just each segment. A denied caller is refused here,
+    # so no segment is ever requested — the failure is immediate and unambiguous
+    # instead of arriving as a scatter of 403s the player retries around.
+    who, party = _party_for(request, uid)
+    allowed, _ms, _cached, _source = _verify(
+        segs[0]["object_id"], party, is_owner=(who == "owner" and _node["owner"] == uid))
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail="No grant for this party — the playlist itself is refused, "
+                   "so not a single segment is ever requested")
+
     longest = max((x["end_ns"] - x["start_ns"]) / NS for x in segs)
     lines = ["#EXTM3U", "#EXT-X-VERSION:3", f"#EXT-X-TARGETDURATION:{int(longest) + 1}",
              "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD"]
