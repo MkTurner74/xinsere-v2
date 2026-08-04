@@ -205,8 +205,11 @@
         <label>Flow
           <select id="qflow"></select>
         </label>
-        <label>Timerange
-          <input id="qrange" class="mono" placeholder="[0:0_10:0)">
+        <label>From segment
+          <select id="qfrom"></select>
+        </label>
+        <label>To segment
+          <select id="qto"></select>
         </label>
         <label>Ask the contract as
           <select id="qas">
@@ -215,6 +218,12 @@
           </select>
         </label>
       </div>
+      <label style="margin-top:14px;">Timerange — derived from the pickers, editable
+        <input id="qrange" class="mono" placeholder="[0:0_10:0)">
+      </label>
+      <p class="note" style="margin:8px 0 0;">Timestamps are absolute TAI
+        <span class="mono">&lt;seconds&gt;:&lt;nanoseconds&gt;</span>, so they are long — use the
+        pickers rather than typing them.</p>
       <div class="row" style="margin-top:14px;">
         <button class="btn" id="query">Run query</button>
         <button class="btn ghost" id="whole">Whole flow</button>
@@ -282,21 +291,80 @@ async function api(path, opts) {
   }
   const ct = r.headers.get('content-type') || '';
   const body = ct.includes('json') ? await r.json() : await r.text();
-  if (!r.ok) throw new Error((body && body.detail) || r.statusText || 'Request failed');
+  if (!r.ok) {
+    // The app's exception handler returns {"error": ...}; FastAPI's own returns
+    // {"detail": ...}. Read both, or every failure reads as "Request failed".
+    const detail = (body && (body.error || body.detail)) ||
+                   (typeof body === 'string' && body) || '';
+    throw new Error(detail || `Request failed (${r.status})`);
+  }
   return body;
 }
 
 // --- flows + lanes ----------------------------------------------------------
 
-async function loadFlows() {
+async function loadFlows(keepFlow) {
   const res = await api('/api/tams/flows');
   FLOWS = res.flows || [];
   renderLanes();
   renderFlowTable();
   const sel = $('qflow');
+  const want = keepFlow || sel.value;
   sel.innerHTML = FLOWS.map(f =>
     `<option value="${esc(f.flow_id)}">${esc(f.label)} · ${esc(f.source_id)}</option>`).join('');
+  if (want && FLOWS.some(f => f.flow_id === want)) sel.value = want;
+  await loadSegmentPickers();
 }
+
+// The pickers exist because TAI timestamps are absolute epoch nanoseconds —
+// `1786143622:0`, not `0:0`. Nobody can hand-type a valid range under demo
+// conditions, and an empty box on page load gives no clue what's valid.
+let PICK = [];
+
+function relTime(ns, origin) {
+  const s = (Number(ns) - origin) / NS;
+  const m = Math.floor(s / 60), rest = s - m * 60;
+  return `${String(m).padStart(2, '0')}:${rest.toFixed(1).padStart(4, '0')}`;
+}
+
+async function loadSegmentPickers() {
+  const flow = $('qflow').value;
+  const from = $('qfrom'), to = $('qto');
+  if (!flow) { PICK = []; from.innerHTML = to.innerHTML = ''; return; }
+  try {
+    const res = await api(`/api/tams/flows/${encodeURIComponent(flow)}/segments`);
+    PICK = res.segments || [];
+  } catch (e) {
+    PICK = [];
+  }
+  if (!PICK.length) {
+    from.innerHTML = to.innerHTML = '<option value="">no segments</option>';
+    $('qrange').value = '';
+    return;
+  }
+  const origin = Number(PICK[0].start_ns);
+  const opts = PICK.map((s, i) =>
+    `<option value="${i}">#${i + 1} · ${relTime(s.start_ns, origin)} → ${relTime(s.end_ns, origin)}</option>`
+  ).join('');
+  from.innerHTML = opts;
+  to.innerHTML = opts;
+  from.value = '0';
+  to.value = String(PICK.length - 1);
+  syncRange();
+}
+
+function syncRange() {
+  if (!PICK.length) return;
+  let a = Number($('qfrom').value || 0), b = Number($('qto').value || 0);
+  if (a > b) { b = a; $('qto').value = String(b); }   // keep the range well-ordered
+  const fmt = ns => `${Math.floor(Number(ns) / NS)}:${Number(ns) % NS}`;
+  $('qrange').value = `[${fmt(PICK[a].start_ns)}_${fmt(PICK[b].end_ns)})`;
+  drawQueryWindow();
+}
+
+$('qflow').addEventListener('change', loadSegmentPickers);
+$('qfrom').addEventListener('change', syncRange);
+$('qto').addEventListener('change', syncRange);
 
 function timelineBounds() {
   const withSegs = FLOWS.filter(f => f.start_ns != null);
@@ -368,7 +436,7 @@ function drawQueryWindow() {
 }
 
 function parseRange(text) {
-  const m = String(text || '').match(/(\d+):(\d+)[_\/](\d+):(\d+)/);
+  const m = String(text || '').match(/(\d+):(\d+)\s*[_\/ ]\s*(\d+):(\d+)/);
   if (!m) return null;
   return [Number(m[1]) * NS + Number(m[2]), Number(m[3]) * NS + Number(m[4])];
 }
@@ -415,10 +483,7 @@ $('go').onclick = async () => {
       `Stored <b>${res.segments}</b> segments (${bytes(res.bytes)}) as flow <span class="mono">${esc(res.label)}</span> — ` +
       `<b>${res.store_ms_per_segment} ms</b> per segment through shred → encrypt → scatter. ` +
       `Timerange <span class="mono">${esc(res.timerange)}</span>`, 'ok');
-    await loadFlows();
-    $('qflow').value = res.flow_id;
-    $('qrange').value = res.timerange;
-    drawQueryWindow();
+    await loadFlows(res.flow_id);
   } catch (e) {
     msg($('ingestMsg'), esc(e.message || 'Ingest failed'), 'err');
   }
@@ -438,10 +503,18 @@ async function runQuery(whole) {
     if (range) q.set('timerange', range);
     const res = await api(`/api/tams/flows/${encodeURIComponent(flow)}/segments?` + q);
     SEGS = { flowId: flow, list: res.segments, as };
-    msg($('queryMsg'),
-      `<b>${res.segment_count}</b> of ${res.of_total} segments matched ` +
-      `<span class="mono">${esc(res.queried)}</span> — index lookup <b>${res.index_ms} ms</b>. ` +
-      `These are object handles; no bytes have been decrypted.`, 'ok');
+    if (res.segment_count === 0) {
+      const f = FLOWS.find(x => x.flow_id === flow);
+      msg($('queryMsg'),
+        `Nothing matched <span class="mono">${esc(res.queried)}</span>. This flow covers ` +
+        `<span class="mono">${esc((f && f.timerange) || 'an unknown range')}</span> — ` +
+        `use the pickers to land inside it.`, 'err');
+    } else {
+      msg($('queryMsg'),
+        `<b>${res.segment_count}</b> of ${res.of_total} segments matched ` +
+        `<span class="mono">${esc(res.queried)}</span> — index lookup <b>${res.index_ms} ms</b>. ` +
+        `These are object handles; no bytes have been decrypted.`, 'ok');
+    }
     renderSegTable();
     drawQueryWindow();
   } catch (e) {
@@ -451,7 +524,10 @@ async function runQuery(whole) {
   }
 }
 $('query').onclick = () => runQuery(false);
-$('whole').onclick = () => { $('qrange').value = ''; runQuery(true); };
+$('whole').onclick = () => {
+  if (PICK.length) { $('qfrom').value = '0'; $('qto').value = String(PICK.length - 1); syncRange(); }
+  runQuery(true);
+};
 $('qrange').addEventListener('input', drawQueryWindow);
 
 function renderSegTable() {

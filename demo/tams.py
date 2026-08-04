@@ -98,23 +98,28 @@ def fmt_timerange(start_ns: int, end_ns: int) -> str:
 
 
 def parse_timerange(text: str) -> tuple[int, int]:
-    """Accept `[a_b)`, `a_b`, or `a/b`. Returns (start_ns, end_ns) half-open.
+    """Accept `[a_b)`, `a_b`, `a/b` or `a b`. Returns (start_ns, end_ns) half-open.
 
-    Raises ValueError with a message the UI can show verbatim."""
+    Liberal in what it accepts — a space is what people actually type — but every
+    error message names the offending value and shows a working example, because
+    these surface verbatim in the UI."""
     raw = (text or "").strip()
     if not raw:
-        raise ValueError("empty timerange")
-    body = raw.lstrip("[(").rstrip("])")
-    sep = "_" if "_" in body else ("/" if "/" in body else None)
+        raise ValueError("Pick a from/to segment, or type a range like [0:0_10:0)")
+    body = raw.lstrip("[(").rstrip("])").strip()
+    sep = next((s for s in ("_", "/", " ") if s in body), None)
     if sep is None:
-        raise ValueError("timerange needs two timestamps, e.g. [0:0_10:0)")
+        raise ValueError(
+            f"'{raw}' has only one timestamp — a range needs two, e.g. [0:0_10:0)")
     left, _, right = body.partition(sep)
     try:
         start, end = parse_ts(left), parse_ts(right)
     except ValueError:
-        raise ValueError("timestamps must look like <seconds>:<nanoseconds>")
+        raise ValueError(
+            f"'{raw}' isn't a timerange — timestamps look like <seconds>:<nanoseconds>, "
+            "e.g. [0:0_10:0). Note these are absolute TAI, so real values are large.")
     if end < start:
-        raise ValueError("end precedes start")
+        raise ValueError(f"'{raw}' ends before it starts")
     return start, end
 
 

@@ -23,9 +23,22 @@ def test_timestamp_roundtrip():
 
 def test_timerange_accepts_the_shapes_callers_actually_send():
     assert tams.fmt_timerange(0, 10 * NS) == "[0:0_10:0)"
-    for text in ("[0:0_10:0)", "0:0_10:0", "(0:0_10:0]"):
+    # A space is what people type when they can't find the underscore, and an
+    # absolute TAI range is long enough that they will retype it. Accept it.
+    for text in ("[0:0_10:0)", "0:0_10:0", "(0:0_10:0]", "0:0 10:0", "[0:0 10:0)"):
         assert tams.parse_timerange(text) == (0, 10 * NS)
     assert tams.parse_timerange("2:0/4:0") == (2 * NS, 4 * NS)
+
+
+def test_timerange_errors_name_the_offending_value():
+    """These strings surface verbatim in the UI, so they have to be actionable —
+    'Request failed' is what we are fixing."""
+    with pytest.raises(ValueError, match="only one timestamp"):
+        tams.parse_timerange("0:0")
+    with pytest.raises(ValueError, match="ends before it starts"):
+        tams.parse_timerange("[10:0_2:0)")
+    with pytest.raises(ValueError, match="Pick a from/to segment"):
+        tams.parse_timerange("")
 
 
 @pytest.mark.parametrize("bad", ["", "0:0", "abc_def", "[10:0_2:0)"])
