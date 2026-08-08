@@ -18,7 +18,15 @@ import os
 from .backends.base import ObjectStore
 from .pipeline import PipelineService
 
-FRAGMENT_COUNT = int(os.environ.get("XINSERE_FRAGMENT_COUNT", "7"))
+def configured_fragment_count() -> int | None:
+    """XINSERE_FRAGMENT_COUNT — unset or "auto" (the default since 2026-08-08)
+    derives the count from each file's size; a number pins every file to that
+    count. The pin is the rollback lever: setting it to 7 restores the old
+    fixed-7 behaviour with an env change and no deploy of new code."""
+    raw = os.environ.get("XINSERE_FRAGMENT_COUNT", "").strip().lower()
+    if not raw or raw == "auto":
+        return None
+    return int(raw)
 
 
 def _region_weights() -> dict[str, float] | None:
@@ -91,7 +99,7 @@ def _aws_pipeline() -> PipelineService:
         _build_object_store(),
         KmsKeyManager(key_id),
         DynamoIndexStore(files_table, frags_table, sha_index=sha_index),
-        fragment_count=FRAGMENT_COUNT,
+        fragment_count=configured_fragment_count(),
         region_weights=_region_weights(),
     )
 
@@ -103,7 +111,7 @@ def _local_pipeline() -> PipelineService:
         LocalObjectStore(bucket_count=8),
         LocalKeyManager(master_key=os.urandom(32)),
         LocalIndexStore(),
-        fragment_count=FRAGMENT_COUNT,
+        fragment_count=configured_fragment_count(),
     )
 
 

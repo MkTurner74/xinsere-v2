@@ -3,9 +3,14 @@
 Answers: independent of memory/OOM limits (see `scripts/ec2_ingest/`), does
 fragment count materially change `store()`/`retrieve()` throughput? Reuses
 the existing timing instrumentation on `StoreResult`/`RetrieveResult` — no
-new instrumentation, just a harness that sweeps `fragment_count` past
-today's `ALLOWED_FRAGMENT_COUNTS` cap (benchmark-only monkeypatch; production
+new instrumentation, just a harness that sweeps `fragment_count` past the
+production `MAX_FRAGMENT_COUNT` ceiling (benchmark-only monkeypatch; production
 validation in `config.py` is untouched).
+
+**This benchmark is what set the shipping policy.** Its data replaced the old
+fixed `ALLOWED_FRAGMENT_COUNTS` whitelist (3,5,7,11,16) with the size-derived
+curve in `fragmenter.plan_fragment_count` on 2026-08-08 — re-run it before
+changing `MIN_FRAGMENT_BYTES` or `TARGET_FRAGMENT_BYTES`.
 
 **Must run from inside AWS** (EC2/Fargate) — from a home network the
 ~9.5x network-path gap already measured 2026-07-26 would swamp the signal.

@@ -25,8 +25,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .backends.base import FileRecord, FragmentRecord, IndexStore, KeyManager, ObjectStore
 from .config import (
-    ALLOWED_FRAGMENT_COUNTS,
-    DEFAULT_FRAGMENT_COUNT,
+    MAX_FRAGMENT_COUNT,
+    MIN_FRAGMENT_COUNT,
     NONCE_BYTES,
     ROUTE_MODULAR,
 )
@@ -34,6 +34,23 @@ from .errors import XinsereIntegrityError, XinsereNotFoundError
 from . import fragmenter
 
 _log = logging.getLogger("xinsere.pipeline")
+
+
+WORKER_CAP = 64
+
+
+def validate_fragment_count(n: int) -> int:
+    """Range check for a caller-supplied count. Replaces the old fixed
+    ALLOWED_FRAGMENT_COUNTS whitelist (3,5,7,11,16), which couldn't express the
+    size-derived counts a large file needs."""
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise ValueError(f"fragment_count must be an int, got {n!r}")
+    if not MIN_FRAGMENT_COUNT <= n <= MAX_FRAGMENT_COUNT:
+        raise ValueError(
+            f"fragment_count must be between {MIN_FRAGMENT_COUNT} and "
+            f"{MAX_FRAGMENT_COUNT}, got {n}"
+        )
+    return n
 
 
 @dataclass
@@ -46,6 +63,11 @@ class StoreResult:
     # 2026-07-24 so write-side throughput (KMS/S3/AES-GCM attribution) can be
     # profiled with the same rigor as reads across compute/storage benchmarks.
     timings: dict = field(default_factory=dict)
+    # How fragment_count was arrived at: "auto" (derived from file size),
+    # "pinned" (this service was constructed with a fixed count), or "request"
+    # (the caller passed one to store()). Surfaced so a demo or an API response
+    # can say which, rather than leaving 3-vs-7 looking arbitrary.
+    sizing: str = "auto"
 
 
 @dataclass
@@ -84,15 +106,17 @@ class PipelineService:
         key_manager: KeyManager,
         index_store: IndexStore,
         *,
-        fragment_count: int = DEFAULT_FRAGMENT_COUNT,
+        fragment_count: int | None = None,
         route_mode: str = ROUTE_MODULAR,
         max_workers: int | None = None,
         region_weights: dict[str, float] | None = None,
     ) -> None:
-        if fragment_count not in ALLOWED_FRAGMENT_COUNTS:
-            raise ValueError(
-                f"fragment_count must be one of {ALLOWED_FRAGMENT_COUNTS}, got {fragment_count}"
-            )
+        # fragment_count=None (the default) means SIZE-DERIVED per file, via
+        # fragmenter.plan_fragment_count. Passing an int pins every file this
+        # service stores to that count -- the escape hatch for a caller that
+        # needs a specific N (benchmarks, a tenant policy, a rollback).
+        if fragment_count is not None:
+            validate_fragment_count(fragment_count)
         self._objects = object_store
         self._keys = key_manager
         self._index = index_store
@@ -113,13 +137,25 @@ class PipelineService:
         # throughput gain; beyond 64 it flattens completely and per-call KMS/S3
         # latency actually gets WORSE (KMS avg 8.4ms at 16 workers -> 67.8ms at
         # 128) -- that's AWS's own request-rate throttling, not a Python/GIL
-        # limit, so there's no benefit to raising this further. NOTE: under
-        # today's ALLOWED_FRAGMENT_COUNTS (max 16), this cap is a no-op --
-        # min(fragment_count, 64) always just equals fragment_count. It matters
-        # once fragment counts go higher (the streaming rearchitecture's
-        # size-derived fragment counts), so it's set correctly in advance rather
-        # than left at the now-answered "would 16 be a limiter" question.
-        self._workers = max_workers or min(fragment_count, 64)
+        # limit, so there's no benefit to raising this further.
+        #
+        # Sized PER CALL rather than once here, because the count now varies by
+        # file: a service that stored a 10KB file (3 fragments) must still fan a
+        # 1GiB file (64) out 64 ways, and must still retrieve an old 7-fragment
+        # file 7 ways. An explicit max_workers still overrides everything.
+        self._max_workers = max_workers
+
+    def _workers_for(self, n: int) -> int:
+        return self._max_workers or max(1, min(n, WORKER_CAP))
+
+    def _count_for(self, size: int, requested: int | None) -> tuple[int, str]:
+        """Resolve the fragment count for one store(): explicit request, else this
+        service's pin, else derived from the file's size."""
+        if requested is not None:
+            return validate_fragment_count(requested), "request"
+        if self._n is not None:
+            return self._n, "pinned"
+        return fragmenter.plan_fragment_count(size), "auto"
 
     # --- Store ---------------------------------------------------------------
 
@@ -129,15 +165,22 @@ class PipelineService:
         content_type: str,
         *,
         label: str | None = None,
+        fragment_count: int | None = None,
     ) -> StoreResult:
         """Fragment, encrypt, scatter, and index a file. Metadata (filename,
         path, type inference) is never persisted — only the opaque file_id,
-        the whole-file SHA-256, and the caller's optional label."""
+        the whole-file SHA-256, and the caller's optional label.
+
+        `fragment_count` pins this one file to a specific N (3..64). Leave it
+        None and the count is derived from the file's size — see
+        fragmenter.plan_fragment_count for the curve and the data behind it."""
         t_all = time.perf_counter()
         file_id = uuid.uuid4().hex
         file_sha = _sha256_hex(content)
+        n, sizing = self._count_for(len(content), fragment_count)
+        workers = self._workers_for(n)
 
-        fragments = fragmenter.split(content, self._n)
+        fragments = fragmenter.split(content, n)
         buckets = self._objects.buckets()
         jitter = int.from_bytes(os.urandom(2), "big")  # per-file routing jitter
 
@@ -152,10 +195,10 @@ class PipelineService:
         # Encrypt + scatter every fragment concurrently; .result() order matches
         # submit order, so records stay in sequence. Any worker error propagates.
         t0 = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [
                 pool.submit(self._encrypt_and_store, file_id, seq, frag, buckets, jitter,
-                            region_buckets)
+                            n, region_buckets)
                 for seq, frag in enumerate(fragments)
             ]
             results = [f.result() for f in futures]
@@ -172,7 +215,7 @@ class PipelineService:
                 file_id=file_id,
                 file_sha256=file_sha,
                 content_type=content_type,
-                fragment_count=self._n,
+                fragment_count=n,
                 size=len(content),
                 created_at=_now_iso(),
                 label=label,
@@ -184,17 +227,19 @@ class PipelineService:
             "total_ms": _ms(t_all),
             "fanout_ms": fanout_ms,   # wall-clock of the parallel encrypt+PUT fan-out
             "index_ms": index_ms,
-            "fragments": self._n,
-            "workers": self._workers,
+            "fragments": n,
+            "sizing": sizing,
+            "fragment_bytes": -(-len(content) // n) if n else 0,
+            "workers": workers,
             "bytes": len(content),
             "kms_generate": _agg(frag_timings, "kms_ms"),
             "aes_gcm": _agg(frag_timings, "aes_ms"),
             "s3_put": _agg(frag_timings, "s3_ms"),
         }
         _log.info("store %s %s", file_id, timings)
-        return StoreResult(file_id, file_sha, self._n, _now_iso(), timings)
+        return StoreResult(file_id, file_sha, n, _now_iso(), timings, sizing)
 
-    def _encrypt_and_store(self, file_id, seq, frag, buckets, jitter,
+    def _encrypt_and_store(self, file_id, seq, frag, buckets, jitter, n,
                             region_buckets=None) -> tuple[FragmentRecord, dict]:
         """Worker: fresh key -> AES-256-GCM encrypt -> write to a bucket.
 
@@ -214,7 +259,7 @@ class PipelineService:
         fragment_id = f"{uuid.uuid4().hex}_{seq}"  # UUID + seq only; no file link
         if region_buckets is not None:
             bucket, _group = fragmenter.route_region_weighted(
-                seq, self._n, region_buckets, self._region_weights, jitter=jitter)
+                seq, n, region_buckets, self._region_weights, jitter=jitter)
         else:
             bucket = fragmenter.route(seq, buckets, mode=self._mode, jitter=jitter)
         self._objects.put(bucket, fragment_id, ciphertext)
@@ -250,7 +295,8 @@ class PipelineService:
         # Read + decrypt every fragment concurrently; map() preserves order and
         # re-raises any worker error (missing fragment, tamper) to the caller.
         t0 = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+        workers = self._workers_for(len(frags))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             results = list(pool.map(self._read_and_decrypt, frags))
         fetch_ms = _ms(t0)
         plaintext_fragments = [r[0] for r in results]
@@ -272,7 +318,7 @@ class PipelineService:
             "join_ms": join_ms,
             "verify_sha_ms": verify_ms,
             "fragments": file_rec.fragment_count,
-            "workers": self._workers,
+            "workers": workers,
             "bytes": len(content),
             # per-fragment breakdown across the fan-out (max = critical path):
             "s3_get": _agg(frag_timings, "s3_ms"),
@@ -313,7 +359,7 @@ class PipelineService:
             }
 
         # Presign + KMS-unwrap all fragments concurrently (I/O-bound, like retrieve).
-        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+        with ThreadPoolExecutor(max_workers=self._workers_for(len(frags))) as pool:
             plan_frags = list(pool.map(_one, frags))
 
         return {

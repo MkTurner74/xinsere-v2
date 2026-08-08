@@ -137,12 +137,13 @@ empty flow folder is removed.
 
 ## 6. Known gaps — deliberately not faked
 
-1. **Segments run at the deployed `XINSERE_FRAGMENT_COUNT` (7), not a tuned count.** The
-   2026-07-26 benchmark says segments want a *lower* count than files, because latency tracks
-   per-fragment round trips rather than bytes: 10 MB at N=7 retrieves in 291 ms, while N=1000
-   costs 3.26 s. Pinning N per flow needs a per-call `fragment_count` on `PipelineService.store()`
-   — pipeline work, not demo work, and Phase 1 in the development plan. The UI reports the real
-   count used rather than claiming a tuned one.
+1. ~~**Segments run at the deployed `XINSERE_FRAGMENT_COUNT` (7), not a tuned count.**~~
+   **CLOSED 2026-08-08.** Fragment count is now derived from each object's size
+   (`fragmenter.plan_fragment_count`), so a 2s segment scatters 3 ways instead of 7 — which is
+   what the 2026-07-26 benchmark asked for, since segment latency tracks per-fragment round trips
+   rather than bytes (10 MB at N=7 retrieves in 291 ms, N=1000 costs 3.26 s). No per-flow pin was
+   needed; `store(fragment_count=N)` exists if one ever is. The UI still reports the real count
+   used, and the ingest summary now states it explicitly.
 2. **Segments are not granted on-chain at ingest**, so the owner path normally resolves via
    `owner-fallback`. Making this a genuine `amoy-contract` path means one **batched, windowed**
    grant per flow (`grantBatchWindowed` + a Merkle proof over the segment set) — never one

@@ -14,10 +14,12 @@ a home network reproduces the ~9.5x network-path gap already measured
 
 Reuses the existing store()/retrieve() timing instrumentation (StoreResult/
 RetrieveResult.timings, added this session) -- no new instrumentation needed,
-just a harness that sweeps the fragment_count knob past today's
-ALLOWED_FRAGMENT_COUNTS cap (3,5,7,11,16) for benchmarking purposes only
-(monkeypatches the pipeline module's bound name -- production validation in
-config.py is untouched).
+just a harness that sweeps the fragment_count knob past the production
+MAX_FRAGMENT_COUNT ceiling (64) for benchmarking purposes only (monkeypatches
+the pipeline module's bound name -- production validation in config.py is
+untouched). Pre-2026-08-08 this bypassed a fixed ALLOWED_FRAGMENT_COUNTS
+whitelist instead; the data it produced is what replaced that whitelist with
+the size-derived policy in fragmenter.plan_fragment_count.
 
 Usage (env: XINSERE_BACKEND=aws, XINSERE_S3_BUCKETS, AWS_REGION already set,
 same as any other script in this repo):
@@ -68,11 +70,11 @@ def bench_one(object_store, key_manager, index_store, size: int, fragment_count:
               max_workers: int | None = None) -> dict:
     # Benchmark-only override of the fragment-count validation -- production
     # code (config.py / everywhere else) is untouched. See module docstring.
-    pipeline_module.ALLOWED_FRAGMENT_COUNTS = tuple(
-        set(pipeline_module.ALLOWED_FRAGMENT_COUNTS) | {fragment_count})
+    pipeline_module.MAX_FRAGMENT_COUNT = max(
+        pipeline_module.MAX_FRAGMENT_COUNT, fragment_count)
     svc = pipeline_module.PipelineService(
         object_store, key_manager, index_store, fragment_count=fragment_count,
-        max_workers=max_workers)  # None preserves today's min(fragment_count, 16) cap
+        max_workers=max_workers)  # None preserves the min(fragment_count, 64) cap
 
     content = os.urandom(size)
     sha_before = hashlib.sha256(content).hexdigest()
@@ -128,7 +130,9 @@ def main() -> None:
         for count in counts:
           for workers in worker_overrides:
             r = bench_one(object_store, key_manager, index_store, size, count, workers)
-            r["max_workers"] = workers if workers is not None else min(count, 16)
+            # Report the pool the pipeline actually used, not a re-derivation of
+            # its cap -- that copy went stale once the cap moved 16 -> 64.
+            r["max_workers"] = r["store_timings"]["workers"]
             results.append(r)
             st, rt = r["store_timings"], r["retrieve_timings"]
             print(f"{size/1e6:>9.0f} {count:>6} {r['max_workers']:>7} {r['store_wall_s']:>9.2f} "

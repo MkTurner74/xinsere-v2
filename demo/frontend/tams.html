@@ -501,7 +501,8 @@ $('go').onclick = async () => {
     });
     msg($('ingestMsg'),
       `Stored <b>${res.segments}</b> segments (${bytes(res.bytes)}) as flow <span class="mono">${esc(res.label)}</span> — ` +
-      `<b>${res.store_ms_per_segment} ms</b> per segment through shred → encrypt → scatter. ` +
+      `<b>${res.store_ms_per_segment} ms</b> per segment through shred → encrypt → scatter, ` +
+      `<b>${(res.fragments_per_segment || []).join('/') || '—'}</b> fragments each (sized to the segment, not a fixed 7). ` +
       (res.aligned_to_source
         ? `Aligned to the existing <span class="mono">${esc(res.source_id)}</span> timeline, so it shares an origin with the other flows on it.`
         : `This flow establishes the <span class="mono">${esc(res.source_id)}</span> timeline — later flows on it will share this origin.`),

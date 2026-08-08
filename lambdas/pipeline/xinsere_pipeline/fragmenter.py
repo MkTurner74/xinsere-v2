@@ -6,7 +6,50 @@ a readable slice of the original.
 """
 from __future__ import annotations
 
-from .config import ROUTE_HYBRID, ROUTE_MODULAR
+from .config import (
+    DEFAULT_FRAGMENT_COUNT,
+    MAX_FRAGMENT_COUNT,
+    MIN_FRAGMENT_BYTES,
+    MIN_FRAGMENT_COUNT,
+    ROUTE_HYBRID,
+    ROUTE_MODULAR,
+    TARGET_FRAGMENT_BYTES,
+)
+
+
+def _ceil_div(a: int, b: int) -> int:
+    return -(-a // b)
+
+
+def plan_fragment_count(size: int) -> int:
+    """How many fragments a file of `size` bytes should be split into.
+
+    Replaces the flat 7-for-everything default. Two independent drivers, and the
+    larger wins, so the curve is monotonic in file size:
+
+    * the LARGE driver, `size / TARGET_FRAGMENT_BYTES`, only bites above 112 MiB
+      and keeps big files near the 16 MiB throughput plateau instead of handing
+      one worker a multi-gigabyte fragment;
+    * the SMALL driver, `size / MIN_FRAGMENT_BYTES` held at DEFAULT_FRAGMENT_COUNT,
+      ramps a small file up to 7 rather than starting there -- a 2s media segment
+      or a 10KB text file paid 7 KMS calls + 7 S3 PUTs to scatter a few hundred
+      bytes each, which is latency and cost with no scatter benefit.
+
+    Then clamp to [MIN_FRAGMENT_COUNT, MAX_FRAGMENT_COUNT]. The resulting curve:
+
+        10 KB -> 3      7 MiB -> 7      500 MiB -> 32
+         2 MiB -> 3     20 MiB -> 7        1 GiB -> 64
+         4 MiB -> 4    100 MiB -> 7         7 GB -> 64 (112 MiB each)
+
+    Retrieval reads the count off the file's own index record, so files written
+    under any policy -- including every file already stored at 7 -- keep working
+    unchanged. Nothing here is a migration."""
+    if size < 0:
+        raise ValueError("size cannot be negative")
+    large = _ceil_div(size, TARGET_FRAGMENT_BYTES)
+    small = min(DEFAULT_FRAGMENT_COUNT, _ceil_div(size, MIN_FRAGMENT_BYTES))
+    n = max(large, small)
+    return max(MIN_FRAGMENT_COUNT, min(n, MAX_FRAGMENT_COUNT))
 
 
 def split(data: bytes, n: int) -> list[bytes]:

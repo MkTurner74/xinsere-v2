@@ -52,8 +52,11 @@ metadata stripping), distribution, and lifecycle. Current status: **18/18 pass.*
 from xinsere_pipeline import PipelineService
 from xinsere_pipeline.backends.local import LocalObjectStore, LocalKeyManager, LocalIndexStore
 
-svc = PipelineService(LocalObjectStore(), LocalKeyManager(), LocalIndexStore(), fragment_count=7)
+svc = PipelineService(LocalObjectStore(), LocalKeyManager(), LocalIndexStore())
 res = svc.store(content_bytes, "application/pdf", label="optional")
+# fragment_count is derived from the file's size (3..64) — see
+# fragmenter.plan_fragment_count. Pass fragment_count=N to store() to pin one
+# file, or to PipelineService(...) to pin every file this service writes.
 out = svc.retrieve(res.file_id)          # -> RetrieveResult(content, content_type, file_sha256)
 ```
 

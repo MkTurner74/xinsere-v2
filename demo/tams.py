@@ -59,14 +59,13 @@ DEFAULT_SEGMENTS = 6
 MAX_SEGMENT_BYTES = 32 * 1024 * 1024
 FETCH_TIMEOUT = 20
 
-# NOTE on fragment count. Segments here go through the deployed pipeline at its
-# configured XINSERE_FRAGMENT_COUNT (7 in production). The 2026-07-26 benchmark
-# says segments really want a LOWER count than files -- latency tracks
-# per-fragment round trips, not bytes, so N=3 sits nearer the ~250-300ms floor
-# while N=1000 costs 3.26s. Pinning N per flow needs a per-call fragment_count
-# on PipelineService.store(), which is a pipeline change, not a demo change --
-# it's Phase 1 work in the development plan. The demo therefore reports the real
-# fragment count it used rather than claiming a tuned one.
+# NOTE on fragment count. Segments go through the same PipelineService.store()
+# as any other object and take its size-derived count (2026-08-08). A 2s segment
+# lands under the 1 MiB minimum-fragment size, so it now scatters 3 ways rather
+# than 7 -- which is what the 2026-07-26 benchmark asked for, since segment
+# latency tracks per-fragment round trips, not bytes. No per-flow pin is needed;
+# store(fragment_count=N) exists if one ever is. The demo reports the real count
+# it used, so a segment showing 3 and a large file showing more is expected.
 
 # Positive verify verdicts are cached per (file, party) for the life of this
 # warm instance. This IS the fail-closed cache from the development plan: a
@@ -377,7 +376,7 @@ async def ingest(request: Request):
                                 frags=res.fragment_count, content_type=ctype)
         stored.append({"node_id": node["id"], "object_id": res.file_id,
                        "timerange": fmt_timerange(cursor, end_ns),
-                       "size": len(content)})
+                       "size": len(content), "fragments": res.fragment_count})
         total_bytes += len(content)
         cursor = end_ns
 
@@ -392,6 +391,10 @@ async def ingest(request: Request):
         "aligned_to_source": aligned_to_source,
         "store_ms_total": round(store_ms, 1),
         "store_ms_per_segment": round(store_ms / len(stored), 1),
+        # Size-derived, so it reports what the pipeline actually chose rather
+        # than a constant. Segments are small enough to sit on the floor of 3;
+        # a mixed-size flow would legitimately show a range.
+        "fragments_per_segment": sorted({s["fragments"] for s in stored}),
         "created": stored,
     }
 

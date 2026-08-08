@@ -46,8 +46,13 @@ def section(title: str) -> None:
     print(f"\n{title}")
 
 
-def make_service(fragment_count: int = 7, route_mode: str = "modular", bucket_count: int = 8):
-    """Fresh pipeline + its local backends (returned so tests can inspect them)."""
+def make_service(fragment_count: int | None = 7, route_mode: str = "modular",
+                 bucket_count: int = 8):
+    """Fresh pipeline + its local backends (returned so tests can inspect them).
+
+    Defaults to a PINNED count of 7 so the pre-2026-08-08 tests keep asserting
+    against a fixed fan-out; pass fragment_count=None to exercise size-derived
+    sizing (group H)."""
     store = LocalObjectStore(bucket_count=bucket_count)
     keys = LocalKeyManager()
     index = LocalIndexStore()
@@ -447,6 +452,122 @@ def group_g() -> None:
           long_plan.tier != "lambda", f"got {long_plan.tier}, cost=${long_plan.est_cost_usd:.2f}")
 
 
+# --- H. Size-derived fragment count (added 2026-08-08) ----------------------
+
+def group_h() -> None:
+    section("H. Size-derived fragment count")
+
+    MiB = 1024 * 1024
+
+    # H1 — the curve itself. These are the numbers the policy was chosen for
+    # (2026-07-26 benchmark: throughput tracks fragment SIZE): tiny files sit on
+    # the floor of 3, a file ramps to 7 by 7 MiB and HOLDS there through the
+    # whole mid range, and only past 112 MiB does the 16 MiB target push it up.
+    curve = [
+        (0, 3), (10_000, 3), (2 * MiB, 3), (3 * MiB, 3),
+        (4 * MiB, 4), (6 * MiB, 6), (7 * MiB, 7),
+        (20 * MiB, 7), (100 * MiB, 7), (112 * MiB, 7),
+        (113 * MiB, 8), (500 * MiB, 32), (1024 * MiB, 64),
+        (7 * 1000 * MiB, 64),          # capped at the worker ceiling
+    ]
+    bad = [(s, fragmenter.plan_fragment_count(s), want)
+           for s, want in curve if fragmenter.plan_fragment_count(s) != want]
+    check("H1 size -> fragment-count curve matches the benchmark policy",
+          not bad, f"mismatches: {bad}" if bad else f"{len(curve)} sizes")
+
+    # H2 — monotonic and always in range. A non-monotonic curve would mean a
+    # slightly larger file getting FEWER fragments, which is indefensible to a
+    # customer looking at two files side by side.
+    counts = [fragmenter.plan_fragment_count(s)
+              for s in range(0, 200 * MiB, 997_003)]   # coprime-ish stride
+    monotonic = all(b >= a for a, b in zip(counts, counts[1:]))
+    in_range = all(3 <= c <= 64 for c in counts)
+    check("H2 curve is monotonic in file size and stays within [3, 64]",
+          monotonic and in_range, f"{len(counts)} sizes sampled")
+
+    # H3 — no fragment under the 1 MiB knee until the floor of 3 forces it.
+    # Below 3 MiB the floor wins and fragments are legitimately smaller; above
+    # it, the ramp must keep every fragment at or over MIN_FRAGMENT_BYTES.
+    offenders = []
+    for s in (3 * MiB, 5 * MiB, 7 * MiB, 30 * MiB, 300 * MiB, 2000 * MiB):
+        per = s / fragmenter.plan_fragment_count(s)
+        if per < MiB:
+            offenders.append((s, per))
+    check("H3 no fragment falls under the 1 MiB throughput knee", not offenders,
+          f"offenders: {offenders}" if offenders else "6 sizes")
+
+    # H4 — auto sizing actually reaches store(), and round-trips. An unpinned
+    # service must pick per file: same service, two sizes, two counts.
+    svc, _s, _k, index = make_service(fragment_count=None)
+    small = os.urandom(20_000)
+    big = os.urandom(9 * MiB)
+    r_small = svc.store(small, "application/octet-stream")
+    r_big = svc.store(big, "application/octet-stream")
+    check("H4 one unpinned service sizes each file independently",
+          r_small.fragment_count == 3 and r_big.fragment_count == 7
+          and r_small.sizing == "auto",
+          f"small={r_small.fragment_count} big={r_big.fragment_count}")
+    check("H5 both auto-sized files round-trip byte-identical",
+          svc.retrieve(r_small.file_id).content == small
+          and svc.retrieve(r_big.file_id).content == big)
+    check("H6 index records the count actually used",
+          len(index.get_fragments(r_small.file_id)) == 3
+          and len(index.get_fragments(r_big.file_id)) == 7)
+
+    # H7 — per-call override beats auto, and a pinned service beats both.
+    svc, _s, _k, index = make_service(fragment_count=None)
+    r = svc.store(os.urandom(20_000), "application/octet-stream", fragment_count=11)
+    check("H7 store(fragment_count=) overrides the size-derived count",
+          r.fragment_count == 11 and r.sizing == "request"
+          and len(index.get_fragments(r.file_id)) == 11, f"n={r.fragment_count}")
+
+    svc_pinned, *_ = make_service(fragment_count=5)
+    r_pin = svc_pinned.store(os.urandom(20 * MiB), "application/octet-stream")
+    check("H8 a pinned service ignores size (the rollback lever still works)",
+          r_pin.fragment_count == 5 and r_pin.sizing == "pinned", f"n={r_pin.fragment_count}")
+    r_pin_over = svc_pinned.store(os.urandom(1000), "application/octet-stream",
+                                  fragment_count=16)
+    check("H9 an explicit request still overrides a pinned service",
+          r_pin_over.fragment_count == 16 and r_pin_over.sizing == "request")
+
+    # H10 — out-of-range counts are refused at both entry points. The old fixed
+    # whitelist is gone, so the range check is the only thing standing between a
+    # caller and a 1-fragment "scattered" file.
+    rejected = []
+    for bad_n in (0, 1, 2, 65, 1000, -7):
+        try:
+            svc.store(b"x", "application/octet-stream", fragment_count=bad_n)
+        except ValueError:
+            rejected.append(bad_n)
+    ctor_rejected = False
+    try:
+        make_service(fragment_count=2)
+    except ValueError:
+        ctor_rejected = True
+    check("H10 counts outside [3, 64] are refused by store() and the constructor",
+          len(rejected) == 6 and ctor_rejected, f"rejected {rejected}")
+
+    # H11 — the read path follows the FILE's count, not the service's. This is
+    # what keeps every file already stored at 7 readable now that new files are
+    # sized differently, and it's why the worker pool moved per-call.
+    svc_a, store_a, keys_a, index_a = make_service(fragment_count=16)
+    content = os.urandom(64_000)
+    r16 = svc_a.store(content, "application/octet-stream")
+    svc_b = PipelineService(store_a, keys_a, index_a, fragment_count=3)  # different policy
+    out = svc_b.retrieve(r16.file_id)
+    check("H11 a file stored under one count reads back under another policy",
+          out.content == content and out.timings["fragments"] == 16
+          and out.timings["workers"] == 16,
+          f"workers={out.timings['workers']}")
+
+    # H12 — the fan-out is never wider than the file needs, and never narrower.
+    svc, *_ = make_service(fragment_count=None)
+    t_small = svc.store(os.urandom(20_000), "application/octet-stream").timings
+    check("H12 worker pool tracks the per-file count",
+          t_small["workers"] == 3 and t_small["fragments"] == 3
+          and t_small["sizing"] == "auto", str(t_small["workers"]))
+
+
 def main() -> int:
     print("=" * 64)
     print("Xinsere file-fragment pipeline — test matrix (local backends)")
@@ -458,6 +579,7 @@ def main() -> int:
     group_e()
     group_f()
     group_g()
+    group_h()
     print("\n" + "=" * 64)
     print(f"RESULT: {_passed} passed, {_failed} failed")
     print("=" * 64)

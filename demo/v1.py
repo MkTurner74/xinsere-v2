@@ -28,9 +28,36 @@ import supa
 from chain import CHAIN
 from store import (get_pipeline, XinsereIntegrityError, presign_put, staged_size,
                    read_staged, delete_staged, MAX_INLINE_BYTES, MAX_STAGED_BYTES)
+from xinsere_pipeline.config import MAX_FRAGMENT_COUNT, MIN_FRAGMENT_COUNT
+from xinsere_pipeline.factory import configured_fragment_count
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 _log = logging.getLogger("xinsere.v1")
+
+_FRAGMENTS_DESC = (
+    f"Optional: pin this file to a specific number of encrypted fragments "
+    f"({MIN_FRAGMENT_COUNT}-{MAX_FRAGMENT_COUNT}). Omit it and Xinsere derives the "
+    f"count from the file's size, which is what you want unless you have a "
+    f"reason not to — low counts cut per-fragment round trips on small objects, "
+    f"high counts keep large files near the throughput plateau."
+)
+
+
+def _requested_fragments(value: str) -> int | None:
+    """Parse the optional fragment_count form field. Rejected as 400 rather than
+    passed through, so a bad value never reaches the pipeline as a 500."""
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="fragment_count must be an integer")
+    if not MIN_FRAGMENT_COUNT <= n <= MAX_FRAGMENT_COUNT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"fragment_count must be between {MIN_FRAGMENT_COUNT} and {MAX_FRAGMENT_COUNT}")
+    return n
 
 
 # --- auth ---------------------------------------------------------------------
@@ -141,7 +168,14 @@ def ping(ctx: dict = Depends(api_key_auth)):
     two-step staged upload (POST /v1/uploads then POST /v1/files/finalize)."""
     return {"ok": True, "organization": ctx["org_name"], "slug": ctx["org_slug"],
             "party_id": ctx["service_user"], "scopes": ctx["scopes"],
-            "max_inline_bytes": MAX_INLINE_BYTES, "max_staged_bytes": MAX_STAGED_BYTES}
+            "max_inline_bytes": MAX_INLINE_BYTES, "max_staged_bytes": MAX_STAGED_BYTES,
+            # Fragment count is size-derived per file unless this deployment
+            # pins one; these are the bounds a client may pin within on
+            # POST /v1/files and /v1/files/finalize.
+            "fragment_count": {
+                "mode": "pinned" if configured_fragment_count() else "auto",
+                "pinned": configured_fragment_count(),
+                "min": MIN_FRAGMENT_COUNT, "max": MAX_FRAGMENT_COUNT}}
 
 
 @router.get("/parties", summary="Resolve a counterparty org's party_id by slug")
@@ -188,12 +222,17 @@ def list_files(ctx: dict = Depends(api_key_auth),
 @router.post("/files", response_model=FileRecord, summary="Store a file (inline body)")
 async def store_file(ctx: dict = Depends(api_key_auth),
                      file: UploadFile = File(..., description="The bytes to secure"),
-                     path: str = Form("", description="Optional folder path, e.g. 'productions/rai'")):
+                     path: str = Form("", description="Optional folder path, e.g. 'productions/rai'"),
+                     fragment_count: str = Form("", description=_FRAGMENTS_DESC)):
     """Fragments, encrypts (AES-256-GCM, per-fragment KMS-wrapped keys) and
     scatters the file. This inline path reads the whole body into memory, so it is
     capped at `max_inline_bytes` (see GET /v1/ping). For larger files use the
-    two-step staged upload (`POST /v1/uploads` then `POST /v1/files/finalize`)."""
+    two-step staged upload (`POST /v1/uploads` then `POST /v1/files/finalize`).
+
+    The fragment count is size-derived by default; `fragment_count` overrides it
+    for this one file. The count actually used comes back as `fragments`."""
     need(ctx, "files:write")
+    frag_n = _requested_fragments(fragment_count)  # reject before spending quota
     content = await file.read()
     if len(content) > MAX_INLINE_BYTES:
         raise HTTPException(status_code=413,
@@ -205,7 +244,7 @@ async def store_file(ctx: dict = Depends(api_key_auth),
     name = file.filename or "file"
     ctype = file.content_type or "application/octet-stream"
     quotas.record_and_enforce_ingest(ctx, len(content))  # per-org daily ingest ceiling
-    res = get_pipeline().store(content, ctype, label=name)
+    res = get_pipeline().store(content, ctype, label=name, fragment_count=frag_n)
     node = supa.insert_file(_svc(), name, target, uid, file_id=res.file_id,
                             sha256=res.file_sha256, size=len(content),
                             frags=res.fragment_count, content_type=ctype)
@@ -224,8 +263,12 @@ def start_upload(ctx: dict = Depends(api_key_auth)):
 @router.post("/files/finalize", response_model=FileRecord, summary="Finalize a staged upload")
 def finalize_upload(ctx: dict = Depends(api_key_auth),
                     key: str = Form(...), name: str = Form(...),
-                    path: str = Form(""), content_type: str = Form("application/octet-stream")):
+                    path: str = Form(""), content_type: str = Form("application/octet-stream"),
+                    fragment_count: str = Form("", description=_FRAGMENTS_DESC)):
+    """Completes a staged upload. As with `POST /v1/files`, the fragment count is
+    derived from the file's size unless `fragment_count` pins it."""
     need(ctx, "files:write")
+    frag_n = _requested_fragments(fragment_count)  # reject before spending quota
     uid = ctx["service_user"]
     if not key.startswith(f"staging/{uid}/"):
         raise HTTPException(status_code=403, detail="Not your staged upload")
@@ -241,7 +284,7 @@ def finalize_upload(ctx: dict = Depends(api_key_auth),
     target = supa.ensure_path(_svc(), path, root, uid) if path else root
     content = read_staged(key)
     quotas.record_and_enforce_ingest(ctx, len(content))  # per-org daily ingest ceiling
-    res = get_pipeline().store(content, content_type, label=name)
+    res = get_pipeline().store(content, content_type, label=name, fragment_count=frag_n)
     node = supa.insert_file(_svc(), name, target, uid, file_id=res.file_id,
                             sha256=res.file_sha256, size=len(content),
                             frags=res.fragment_count, content_type=content_type)

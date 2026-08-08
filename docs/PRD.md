@@ -119,15 +119,20 @@ path is now **client-side reassembly** — plaintext never exists on the server.
    folder, incl. move-into-a-name-clash); ~~drag-to-move~~ **DONE 2026-07-20**
    (owned items → folder tiles/rows + breadcrumb ancestors; multi-select drags
    together; OS-file upload drop preserved); keyboard set + aria-live (remaining).
-   **Ideas parked 2026-07-07:** (a) replace the (always-7) fragment count in the
-   row Security column with a **cloud/region distribution indicator** — badges
-   for which providers/regions a file's fragments live in (real debug value once
-   multi-cloud lands + a strong scatter-story visual); (b) **adaptive fragment
-   count for tiny files** — a 0-byte / sub-threshold file still splits into 7
-   (valid: trailing fragments encrypt to an auth-tag token) which is correct but
-   wasteful (7 KMS keys + 7 objects for zero scatter benefit); keep 7 for
-   uniformity, or add a minimum-fragment-size / size-based count (ties to the
-   patent's size-based routing). Deferred — uniformity is fine for the demo.
+   **Ideas parked 2026-07-07:** (a) replace the (no longer always-7) fragment
+   count in the row Security column with a **cloud/region distribution indicator**
+   — badges for which providers/regions a file's fragments live in (real debug
+   value once multi-cloud lands + a strong scatter-story visual); (b) ~~**adaptive
+   fragment count for tiny files**~~ **DONE 2026-08-08** — the minimum-fragment-size
+   option was taken. Count is derived from file size in
+   `fragmenter.plan_fragment_count`: floor 3, ramp to 7 by 7 MiB against a 1 MiB
+   minimum fragment size, hold at 7 through the mid range, then scale on a 16 MiB
+   target to a ceiling of 64 (the worker cap). A sub-megabyte file now costs 3 KMS
+   keys + 3 objects instead of 7; a 500 MB master scatters 32 ways instead of 7.
+   `store(fragment_count=N)`, a constructor pin, and `XINSERE_FRAGMENT_COUNT=<n>`
+   all override it. Delivers the patent's size-based routing intent, and the read
+   path takes each file's own count from its index record, so nothing already
+   stored needs migrating.
    (c) ~~New-folder perceived perf~~ DONE 2026-07-07 (optimistic insert).
 
 ### Planned capability: sharing permission model + Trash (decided 2026-07-07)
